@@ -28,6 +28,12 @@ go.work.sum
 # env file
 .env
 
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+backend/*.db-journal
+backend/hotmouse
+
 # Editor/IDE
 # .idea/
 # .vscode/
