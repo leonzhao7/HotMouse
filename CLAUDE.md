@@ -8,7 +8,7 @@ HotMouse 是一个 Go 决策支持 API（Iris + GORM + SQLite），前端位于 
 - `docs/API.md` — **接口的唯一事实来源**，改后端必须同步改这里
 - `frontend/` — Vite + React 19 + TypeScript + Tailwind 4 前端
 - `github-showcase/` — GitHub 风格设计包，前端风格的来源
-- `start.sh` — 启动后端，默认端口 8865
+- `start.sh` — 同时启动前后端，后端默认 8865，前端默认 8864
 
 ## 约束
 
@@ -29,13 +29,16 @@ HotMouse 是一个 Go 决策支持 API（Iris + GORM + SQLite），前端位于 
 ## 常用命令
 
 ```sh
+# 前后端一起（推荐）
+./start.sh                     # 后端 :8865，前端 :8864
+./start.sh 9000 3000           # 自定义端口
+
 # 后端
-./start.sh                     # 启动，:8865
 cd backend && go test ./... && go vet ./... && go build ./...
 
 # 前端
 cd frontend && npm install
-npm run dev                    # :5173
+npm run dev                    # :8864
 npm run typecheck
 npm run style:check
 npm run build

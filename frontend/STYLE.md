@@ -8,23 +8,26 @@
 ```sh
 cd frontend
 npm install
-npm run dev        # 开发服务器，默认 http://localhost:5173
+npm run dev        # 开发服务器，默认 http://localhost:8864
 npm run style:check # 风格约束检查（CI 必须通过）
-npm run build      # 类型检查 + 生产构建
+npm run build      # 风格检查 + 类型检查 + 生产构建
 ```
 
-后端需另行启动（默认 `:8865`）：
+开发时一般直接在仓库根目录用 `start.sh` 同时拉起前后端：
 
 ```sh
-./start.sh            # 仓库根目录，默认 8865
-./start.sh 9000       # 换端口
+./start.sh            # 后端 :8865，前端 :8864
+./start.sh 9000       # 后端 :9000，前端 :8864
+./start.sh 9000 3000  # 后端 :9000，前端 :3000
 ```
 
-后端端口非 8865 时，前端用 `HOTMOUSE_API_URL` 指定：
+只单独跑前端时，用 `FRONTEND_PORT` 指定端口，用 `HOTMOUSE_API_URL` 指定后端地址：
 
 ```sh
-HOTMOUSE_API_URL=http://127.0.0.1:9000 npm run dev
+FRONTEND_PORT=3000 HOTMOUSE_API_URL=http://127.0.0.1:9000 npm run dev
 ```
+
+端口被占用时直接启动失败，不重试也不自动换端口。
 
 ## 风格来源与复用
 
