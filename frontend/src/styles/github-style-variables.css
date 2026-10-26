@@ -1,0 +1,20 @@
+/* GitHub 风格 (GitHub Style) — 变量层
+ * 来源: github-showcase/github-style-style-pack/github-style-variables.css
+ * 变更: 移除 shadcn 主题的 @apply 语法 (Tailwind 4 中 @apply 不能作用于
+ *       未定义的 border-border)，改为在 index.css 中通过 @theme 映射变量。
+ * 作用域: 仅浅色主题。GitHub 风格包中的 dark 变量与本项目锁定的
+ *       浅色层级 (#ffffff / #f6f8fa / #1f2328) 冲突，故不启用。
+ */
+
+:root {
+  --gh-blue: #0969da;
+  --gh-green: #1f883d;
+  --gh-yellow: #9a6700;
+  --gh-red: #cf222e;
+  --gh-fg: #1f2328;
+  --gh-fg-muted: #656d76;
+  --gh-bg: #ffffff;
+  --gh-bg-subtle: #f6f8fa;
+  --gh-border: #d0d7de;
+  --gh-nav-bg: #24292f;
+}

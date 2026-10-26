@@ -1,0 +1,52 @@
+@import 'tailwindcss';
+
+@import './styles/github-style-variables.css';
+@import './styles/github-style-globals.css';
+
+/* Tailwind 4 主题层: 把 GitHub 风格的设计令牌暴露为语义化工具类。
+ * 组件一律使用这些语义类 (bg-canvas / text-fg-muted / border-border ...)，
+ * 不在 JSX 里硬写十六进制色值。 */
+@theme {
+  --color-canvas: #ffffff;
+  --color-canvas-subtle: #f6f8fa;
+  --color-fg: #1f2328;
+  --color-fg-muted: #656d76;
+  --color-fg-subtle: #8b949e;
+  --color-border: #d0d7de;
+  --color-nav: #24292f;
+  --color-nav-hover: #32383f;
+
+  --color-accent: #0969da;
+  --color-success: #1f883d;
+  --color-warning: #9a6700;
+  --color-danger: #cf222e;
+  --color-info: #1d7f98;
+
+  --radius-md: 6px;
+  --radius-sm: 2px;
+
+  --shadow-xs: 0 1px 0 rgba(27, 31, 36, 0.04);
+  --shadow-sm: 0 1px 3px rgba(27, 31, 36, 0.12);
+  --shadow-md: 0 3px 6px rgba(140, 149, 159, 0.15);
+
+  --font-mono:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+}
+
+@layer base {
+  html {
+    background-color: var(--color-canvas);
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+  }
+
+  * {
+    border-color: var(--color-border);
+  }
+}

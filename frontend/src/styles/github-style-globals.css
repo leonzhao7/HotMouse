@@ -1,0 +1,89 @@
+/* GitHub 风格 (GitHub Style) — 全局样式
+ * 来源: github-showcase/github-style-style-pack/github-style-globals.css
+ * 变更(受 github-style.md 的 Don't 规则约束):
+ *   - 删除 .github-style-card::before 的渐变遮罩 (禁止渐变)
+ *   - 删除 .github-style-gradient / .github-style-gradient-text (禁止渐变)
+ *   - 删除 .github-style-frosted (禁止 blur)
+ *   - 删除 .github-style-accent-corner (非语义化装饰)
+ *   - 动画仅保留 opacity 淡入，去掉 translateY 位移
+ */
+
+:root {
+  --gh-blue: #0969da;
+  --gh-green: #1f883d;
+  --gh-yellow: #9a6700;
+  --gh-red: #cf222e;
+  --gh-fg: #1f2328;
+  --gh-fg-muted: #656d76;
+  --gh-fg-subtle: #8b949e;
+  --gh-bg: #ffffff;
+  --gh-bg-subtle: #f6f8fa;
+  --gh-border: #d0d7de;
+  --gh-nav-bg: #24292f;
+  --gh-focus-ring: rgba(9, 105, 218, 0.3);
+}
+
+/* 基础文字样式 */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  color: var(--gh-fg);
+  line-height: 1.5;
+  font-size: 14px;
+}
+
+/* 代码块 */
+.gh-code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 85%;
+  background: var(--gh-bg-subtle);
+  border-radius: 6px;
+  padding: 0.2em 0.4em;
+}
+
+/* 仓库名称链接 */
+.gh-repo-link {
+  color: var(--gh-blue);
+  font-weight: 600;
+  text-decoration: none;
+}
+.gh-repo-link:hover {
+  text-decoration: underline;
+}
+
+/* 标签/徽章 */
+.gh-label {
+  display: inline-block;
+  padding: 0 7px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  border: 1px solid transparent;
+  border-radius: 2em;
+}
+
+/* 分隔线 */
+.gh-divider {
+  border: none;
+  border-top: 1px solid var(--gh-border);
+  margin: 1rem 0;
+}
+
+@keyframes github-style-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.github-style-animate-in {
+  animation: github-style-fade-in 0.15s ease-out both;
+}
+
+/* 焦点可见性: 焦点态必须提供清晰的 ring，不能只改变边框颜色 */
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--gh-blue);
+  outline-offset: 2px;
+  border-radius: 6px;
+}

@@ -1,0 +1,112 @@
+/* GitHub Style 全局样式 */
+
+:root {
+  --gh-blue: #0969da;
+  --gh-green: #1f883d;
+  --gh-yellow: #9a6700;
+  --gh-red: #cf222e;
+  --gh-fg: #1f2328;
+  --gh-fg-muted: #656d76;
+  --gh-bg: #ffffff;
+  --gh-bg-subtle: #f6f8fa;
+  --gh-border: #d0d7de;
+  --gh-nav-bg: #24292f;
+}
+
+/* 基础文字样式 */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  color: var(--gh-fg);
+  line-height: 1.5;
+  font-size: 14px;
+}
+
+/* 代码块 */
+.gh-code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 85%;
+  background: var(--gh-bg-subtle);
+  border-radius: 6px;
+  padding: 0.2em 0.4em;
+}
+
+/* 仓库名称链接 */
+.gh-repo-link {
+  color: var(--gh-blue);
+  font-weight: 600;
+  text-decoration: none;
+}
+.gh-repo-link:hover {
+  text-decoration: underline;
+}
+
+/* 标签/徽章 */
+.gh-label {
+  display: inline-block;
+  padding: 0 7px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  border: 1px solid transparent;
+  border-radius: 2em;
+}
+
+/* 分隔线 */
+.gh-divider {
+  border: none;
+  border-top: 1px solid var(--gh-border);
+  margin: 1rem 0;
+}
+@keyframes github-style-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes github-style-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.github-style-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.github-style-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  background: linear-gradient(135deg, rgba(9, 105, 218, 0.05), transparent);
+  pointer-events: none;
+}
+
+.github-style-card:hover::before {
+  opacity: 1;
+}
+
+.github-style-gradient {
+  background: linear-gradient(135deg, #0969da, #1f883d);
+}
+
+.github-style-gradient-text {
+  background: linear-gradient(135deg, #0969da, #1f883d);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.github-style-frosted {
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  background: rgba(9, 105, 218, 0.08);
+}
+
+.github-style-accent-corner {
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 2rem), calc(100% - 2rem) 100%, 0 100%);
+}
+
+.github-style-animate-in {
+  animation: github-style-fade-in 0.5s ease-out both;
+}
