@@ -3,9 +3,13 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"hotmouse/backend/internal/domain"
 )
 
 func TestProjectRoutesCreateAndAppendOnlyOperations(t *testing.T) {
@@ -101,6 +105,41 @@ func TestProjectRoutesCreateAndAppendOnlyOperations(t *testing.T) {
 	if unsupportedRoute.Code != http.StatusNotFound {
 		t.Fatalf("unexpected project detail route status = %d", unsupportedRoute.Code)
 	}
+}
+
+func TestExportProjectReturnsDownloadableGraphJSON(t *testing.T) {
+	app := newTestApp(t)
+	graph := createHTTPGraph(t, app)
+	stepPath := fmt.Sprintf("/project/%d/step", graph.ID)
+	stepBody := fmt.Sprintf(`{"from_node_id":%d,"to_node_id":%d,"description":"supports goal"}`, graph.Facts[0].ID, graph.Goal.ID)
+	stepResponse := serveJSON(t, app, http.MethodPost, stepPath, stepBody)
+	if stepResponse.Code != http.StatusCreated {
+		t.Fatalf("create step status = %d, body = %s", stepResponse.Code, stepResponse.Body.String())
+	}
+	var step domain.Step
+	if err := json.Unmarshal(stepResponse.Body.Bytes(), &step); err != nil {
+		t.Fatalf("decode created step: %v", err)
+	}
+
+	path := fmt.Sprintf("/project/%d/export", graph.ID)
+	response := serveJSON(t, app, http.MethodGet, path, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("export status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("Content-Disposition"); got != fmt.Sprintf("attachment; filename=\"project-%d.json\"", graph.ID) {
+		t.Fatalf("content disposition = %q", got)
+	}
+	if got := response.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Fatalf("content type = %q", got)
+	}
+	var exported domain.Graph
+	if err := json.Unmarshal(response.Body.Bytes(), &exported); err != nil {
+		t.Fatalf("decode exported graph: %v", err)
+	}
+	if exported.ID != graph.ID || exported.Goal.ID != graph.Goal.ID || len(exported.Facts) != len(graph.Facts) || len(exported.Steps) != 1 || exported.Steps[0].ID != step.ID {
+		t.Fatalf("unexpected exported graph: %+v", exported)
+	}
+	assertHTTPError(t, serveJSON(t, app, http.MethodGet, "/project/999/export", ""), http.StatusNotFound, "not_found")
 }
 
 func serveJSON(t *testing.T, handler http.Handler, method, path, body string) *httptest.ResponseRecorder {

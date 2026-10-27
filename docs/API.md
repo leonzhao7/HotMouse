@@ -7,6 +7,7 @@ It exposes only the following route patterns:
 | --- | --- | --- |
 | `GET` | `/project` | List projects |
 | `POST` | `/project` | Create a project with its goal and facts |
+| `GET` | `/project/{id}/export` | Download the project graph as JSON |
 | `GET` | `/project/{id}/goal` | Read the project's immutable goal node |
 | `POST` | `/project/{id}/goal` | Complete a project after a step reaches its goal |
 | `GET` | `/project/{id}/fact` | List fact nodes |
@@ -18,7 +19,8 @@ It exposes only the following route patterns:
 
 Graph data has no update or delete endpoints. `/settings` is the only mutable
 resource. Project details are available from `GET /project`; goal, facts, and
-steps are read from their project subresources.
+steps are read from their project subresources. Export a complete graph using
+`GET /project/{id}/export`.
 
 ## Create a project
 
@@ -82,6 +84,12 @@ an empty list is `[]`, not `null`. Node objects contain `id`, `project_id`,
 `kind`, `content`, and `created_at`. Step objects contain `id`, `project_id`,
 `from_node_id`, `to_node_id`, `description` (omitted when empty), and
 `created_at`.
+
+`GET /project/{id}/export` returns the same project graph shape as project
+creation (`id`, project metadata, `goal`, `facts`, and `steps`) as a formatted
+JSON attachment named `project-{id}.json`. Facts and steps are sorted by ID;
+an empty list is `[]`. Unknown project IDs return `404` with the standard JSON
+error envelope.
 
 ## LLM settings
 

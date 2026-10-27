@@ -90,6 +90,29 @@ func (service *Service) GetGoal(ctx context.Context, projectID uint) (domain.Nod
 	return goal, mapNotFound(err)
 }
 
+func (service *Service) ExportProject(ctx context.Context, projectID uint) (domain.Graph, error) {
+	graph := domain.Graph{
+		Facts: make([]domain.Node, 0),
+		Steps: make([]domain.Step, 0),
+	}
+	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&graph.Project, projectID).Error; err != nil {
+			return mapNotFound(err)
+		}
+		if err := tx.Where("project_id = ? AND kind = ?", projectID, domain.NodeKindGoal).First(&graph.Goal).Error; err != nil {
+			return mapNotFound(err)
+		}
+		if err := tx.Where("project_id = ? AND kind = ?", projectID, domain.NodeKindFact).Order("id ASC").Find(&graph.Facts).Error; err != nil {
+			return err
+		}
+		return tx.Where("project_id = ?", projectID).Order("id ASC").Find(&graph.Steps).Error
+	})
+	if err != nil {
+		return domain.Graph{}, err
+	}
+	return graph, nil
+}
+
 func (service *Service) ListFacts(ctx context.Context, projectID uint) ([]domain.Node, error) {
 	if err := service.ensureProject(ctx, projectID); err != nil {
 		return nil, err

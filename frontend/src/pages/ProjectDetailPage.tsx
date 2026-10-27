@@ -174,6 +174,9 @@ export function ProjectDetailPage() {
           <Link to="/">
             <Button>返回列表</Button>
           </Link>
+          <Button onClick={() => api.downloadProject(projectId)} variant="outline">
+            导出 JSON
+          </Button>
           {isCompleted ? (
             <Button disabled variant="secondary">
               <IconLock className="h-4 w-4" />

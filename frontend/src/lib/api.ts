@@ -73,6 +73,10 @@ export const api = {
   createProject: (input: CreateProjectInput) =>
     request<Graph>('/project', { method: 'POST', body: JSON.stringify(input) }),
 
+  downloadProject: (projectId: number) => {
+    window.location.assign(`${BASE}/project/${projectId}/export`)
+  },
+
   getGoal: (projectId: number) => request<GraphNode>(`/project/${projectId}/goal`),
 
   completeProject: (projectId: number) =>

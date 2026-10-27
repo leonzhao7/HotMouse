@@ -155,11 +155,12 @@ func TestHTTPOnlyAllowedRoutesAndAppendMethods(test *testing.T) {
 	app := newTestApp(test)
 	graph := createHTTPGraph(test, app)
 	allowed := map[string]bool{
-		"/project":                  true,
-		"/project/{id:uint64}/goal": true,
-		"/project/{id:uint64}/fact": true,
-		"/project/{id:uint64}/step": true,
-		"/settings":                 true,
+		"/project":                    true,
+		"/project/{id:uint64}/export": true,
+		"/project/{id:uint64}/goal":   true,
+		"/project/{id:uint64}/fact":   true,
+		"/project/{id:uint64}/step":   true,
+		"/settings":                   true,
 	}
 	methodPaths := 0
 	for _, route := range app.GetRoutes() {
@@ -176,10 +177,10 @@ func TestHTTPOnlyAllowedRoutesAndAppendMethods(test *testing.T) {
 			test.Fatalf("unexpected route: %s %s", route.Method, route.Path)
 		}
 	}
-	if methodPaths != 10 {
-		test.Fatalf("registered %d method/path pairs, want 10", methodPaths)
+	if methodPaths != 11 {
+		test.Fatalf("registered %d method/path pairs, want 11", methodPaths)
 	}
-	paths := []string{"/project", fmt.Sprintf("/project/%d/fact", graph.ID), fmt.Sprintf("/project/%d/step", graph.ID), fmt.Sprintf("/project/%d/goal", graph.ID)}
+	paths := []string{"/project", fmt.Sprintf("/project/%d/export", graph.ID), fmt.Sprintf("/project/%d/fact", graph.ID), fmt.Sprintf("/project/%d/step", graph.ID), fmt.Sprintf("/project/%d/goal", graph.ID)}
 	for _, path := range paths {
 		for _, method := range []string{http.MethodPut, http.MethodPatch, http.MethodDelete} {
 			assertHTTPError(test, serveJSON(test, app, method, path, `{}`), http.StatusMethodNotAllowed, "method_not_allowed")

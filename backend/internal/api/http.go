@@ -23,6 +23,7 @@ func NewApp(service *Service) *iris.Application {
 
 	app.Get("/project", handler.listProjects)
 	app.Post("/project", handler.createProject)
+	app.Get("/project/{id:uint64}/export", handler.exportProject)
 	app.Get("/project/{id:uint64}/goal", handler.getGoal)
 	app.Post("/project/{id:uint64}/goal", handler.completeProject)
 	app.Get("/project/{id:uint64}/fact", handler.listFacts)
@@ -70,6 +71,28 @@ func (handler *Handler) createProject(ctx iris.Context) {
 	}
 	ctx.StatusCode(http.StatusCreated)
 	ctx.JSON(project)
+}
+
+func (handler *Handler) exportProject(ctx iris.Context) {
+	projectID, ok := readProjectID(ctx)
+	if !ok {
+		return
+	}
+	graph, err := handler.service.ExportProject(ctx.Request().Context(), projectID)
+	if err != nil {
+		writeError(ctx, err)
+		return
+	}
+	content, err := json.MarshalIndent(graph, "", "  ")
+	if err != nil {
+		writeError(ctx, err)
+		return
+	}
+	ctx.ContentType("application/json")
+	ctx.Header("Content-Disposition", "attachment; filename=\"project-"+strconv.FormatUint(uint64(projectID), 10)+".json\"")
+	if _, err := ctx.Write(content); err != nil {
+		ctx.Application().Logger().Errorf("write project export: %v", err)
+	}
 }
 
 func (handler *Handler) getGoal(ctx iris.Context) {

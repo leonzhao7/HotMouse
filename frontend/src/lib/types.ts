@@ -30,7 +30,7 @@ export interface Step {
   created_at: string
 }
 
-/** POST /project 的响应体 (domain.Graph)。 */
+/** POST /project 和 GET /project/{id}/export 的图谱结构。 */
 export interface Graph {
   id: number
   name: string
