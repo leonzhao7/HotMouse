@@ -62,6 +62,19 @@ export interface Settings {
   api_key: string
   model: string
   max_tokens: number
+  worker_llm_url: string
+  worker_api_key: string
+  worker_model: string
+  worker_max_tokens: number
+  worker_command: string
+  dispatch_llm_url: string
+  dispatch_api_key: string
+  dispatch_model: string
+  dispatch_max_tokens: number
+  max_iterations: number
+  worker_prompt: string
+  dispatch_plan_prompt: string
+  dispatch_summary_prompt: string
   updated_at?: string
 }
 
@@ -70,6 +83,19 @@ export interface UpdateSettingsInput {
   api_key: string
   model: string
   max_tokens: number
+  worker_llm_url: string
+  worker_api_key: string
+  worker_model: string
+  worker_max_tokens: number
+  worker_command: string
+  dispatch_llm_url: string
+  dispatch_api_key: string
+  dispatch_model: string
+  dispatch_max_tokens: number
+  max_iterations: number
+  worker_prompt: string
+  dispatch_plan_prompt: string
+  dispatch_summary_prompt: string
 }
 
 /** 后端错误码, 见 docs/API.md 的 "Validation and errors"。 */

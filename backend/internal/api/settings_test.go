@@ -22,6 +22,45 @@ func TestGetSettingsReturnsEmptyDefaults(t *testing.T) {
 	if settings.UpdatedAt != nil {
 		t.Fatalf("default settings should have no updated_at: %+v", settings)
 	}
+	if settings.MaxIterations != domain.DefaultMaxIterations || settings.WorkerPrompt != domain.DefaultWorkerPrompt || settings.DispatchPlanPrompt != domain.DefaultPlanPrompt || settings.DispatchSummaryPrompt != domain.DefaultSummaryPrompt {
+		t.Fatalf("settings defaults are incomplete: %+v", settings)
+	}
+	if settings.WorkerCommand != "" {
+		t.Fatalf("default worker command = %q", settings.WorkerCommand)
+	}
+}
+
+func TestUpdateSettingsStoresWorkerDispatchAndPromptConfiguration(t *testing.T) {
+	service := newTestService(t)
+	saved, err := service.UpdateSettings(context.Background(), UpdateSettingsInput{
+		LLMURL: "https://worker.example/v1", APIKey: "worker-key", Model: "worker", MaxTokens: 500,
+		WorkerLLMURL: "https://worker.example/v1", WorkerAPIKey: "worker-key", WorkerModel: "worker", WorkerMaxTokens: 500,
+		DispatchLLMURL: "https://dispatch.example/v1", DispatchAPIKey: "dispatch-key", DispatchModel: "dispatch", DispatchMaxTokens: 900,
+		MaxIterations: 3, WorkerPrompt: "do {{action}}", DispatchPlanPrompt: "plan {{graph_json}}", DispatchSummaryPrompt: "summarize {{worker_output}}",
+		WorkerCommand: "my-worker --prompt {{prompt}}",
+	})
+	if err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+	if got := saved.ForWorker(); got.LLMURL != "https://worker.example/v1" || got.APIKey != "worker-key" || got.Model != "worker" || got.MaxTokens != 500 {
+		t.Fatalf("worker profile = %+v", got)
+	}
+	if got := saved.ForDispatch(); got.LLMURL != "https://dispatch.example/v1" || got.APIKey != "dispatch-key" || got.Model != "dispatch" || got.MaxTokens != 900 {
+		t.Fatalf("dispatch profile = %+v", got)
+	}
+	if saved.MaxIterations != 3 || saved.WorkerPrompt != "do {{action}}" || saved.DispatchPlanPrompt != "plan {{graph_json}}" || saved.DispatchSummaryPrompt != "summarize {{worker_output}}" {
+		t.Fatalf("custom runtime settings not preserved: %+v", saved)
+	}
+	if saved.WorkerCommand != "my-worker --prompt {{prompt}}" {
+		t.Fatalf("worker command = %q", saved.WorkerCommand)
+	}
+	loaded, err := service.GetSettings(context.Background())
+	if err != nil {
+		t.Fatalf("reload settings: %v", err)
+	}
+	if loaded.DispatchModel != "dispatch" || loaded.MaxIterations != 3 || loaded.DispatchSummaryPrompt != "summarize {{worker_output}}" || loaded.WorkerCommand != "my-worker --prompt {{prompt}}" {
+		t.Fatalf("persisted settings = %+v", loaded)
+	}
 }
 
 func TestUpdateSettingsPersistsAndReplaces(t *testing.T) {
@@ -73,6 +112,14 @@ func TestUpdateSettingsRejectsInvalidInput(t *testing.T) {
 		"zero tokens":     {LLMURL: "https://api.example.com", Model: "model", MaxTokens: 0},
 		"negative tokens": {LLMURL: "https://api.example.com", Model: "model", MaxTokens: -1},
 		"too many tokens": {LLMURL: "https://api.example.com", Model: "model", MaxTokens: maxTokensLimit + 1},
+		"too many worker tokens": {
+			LLMURL: "https://api.example.com", Model: "model", MaxTokens: 1,
+			WorkerLLMURL: "https://worker.example", WorkerModel: "worker", WorkerMaxTokens: maxTokensLimit + 1,
+		},
+		"too many dispatch iterations": {
+			LLMURL: "https://api.example.com", Model: "model", MaxTokens: 1,
+			MaxIterations: maxIterationsLimit + 1,
+		},
 	}
 	for name, input := range cases {
 		t.Run(name, func(t *testing.T) {

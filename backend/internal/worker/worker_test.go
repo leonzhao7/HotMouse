@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -86,6 +88,67 @@ func TestRunRejectsIncompleteConfiguration(t *testing.T) {
 	err := Run(context.Background(), domain.Settings{}, "hello", io.Discard)
 	if !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("error = %v, want ErrInvalidConfiguration", err)
+	}
+}
+
+func TestRunConfiguredUsesCommandAndStdin(t *testing.T) {
+	t.Setenv("HOTMOUSE_TEST_WORKER_CHILD", "1")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("get test executable: %v", err)
+	}
+	commandLine := quoteCommandArgument(executable) + " -test.run=^TestWorkerCommandHelper$"
+	var output strings.Builder
+	err = RunConfigured(context.Background(), domain.Settings{
+		WorkerCommand: commandLine,
+	}, "hello from worker", &output)
+	if err != nil {
+		t.Fatalf("run configured worker: %v", err)
+	}
+	if output.String() != "hello from worker" {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestWorkerCommandHelper(test *testing.T) {
+	if os.Getenv("HOTMOUSE_TEST_WORKER_CHILD") != "1" {
+		return
+	}
+	if _, err := io.Copy(os.Stdout, os.Stdin); err != nil {
+		os.Exit(2)
+	}
+	os.Exit(0)
+}
+
+func quoteCommandArgument(value string) string {
+	return `"` + strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `"`, `\"`) + `"`
+}
+
+func TestRunConfiguredReplacesPromptPlaceholderWithoutShell(t *testing.T) {
+	args, err := commandArguments(`printf '%s' {{prompt}}`, "hello world")
+	if err != nil {
+		t.Fatalf("parse command: %v", err)
+	}
+	want := []string{"printf", "%s", "hello world"}
+	if fmt.Sprint(args) != fmt.Sprint(want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+}
+
+func TestRunConfiguredRejectsUnterminatedCommand(t *testing.T) {
+	if _, err := commandArguments(`worker "unterminated`, "prompt"); err == nil {
+		t.Fatal("accepted unterminated command")
+	}
+}
+
+func TestShellLikeSplitSupportsQuotedEmptyArguments(t *testing.T) {
+	got, err := shellLikeSplit(`worker "" 'text with spaces'`)
+	if err != nil {
+		t.Fatalf("split command: %v", err)
+	}
+	want := []string{"worker", "", "text with spaces"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("arguments = %#v, want %#v", got, want)
 	}
 }
 

@@ -100,26 +100,58 @@ error envelope.
 
 ## LLM settings
 
-`GET /settings` returns the singleton LLM configuration. Before anything has
-been saved it returns an empty configuration with `max_tokens` set to `0` and
-no `updated_at`.
+`GET /settings` returns the singleton configuration. Before anything has been
+saved it returns empty LLM connection fields, default prompt templates, a
+`max_iterations` value of `8`, and no `updated_at`.
 
-`PUT /settings` replaces all fields and returns the stored configuration:
+`PUT /settings` replaces all fields and returns the stored configuration. The
+legacy `llm_url`, `api_key`, `model`, and `max_tokens` fields remain aliases for
+the worker profile. Existing clients that send only those fields continue to
+work; dispatch then uses the same LLM profile.
 
 ```json
 {
   "llm_url": "https://api.openai.com/v1",
   "api_key": "secret",
   "model": "gpt-4o-mini",
-  "max_tokens": 1024
+  "max_tokens": 1024,
+  "worker_llm_url": "https://api.openai.com/v1",
+  "worker_api_key": "secret",
+  "worker_model": "gpt-4o-mini",
+  "worker_max_tokens": 1024,
+  "worker_command": "my-worker --prompt {{prompt}}",
+  "dispatch_llm_url": "https://api.openai.com/v1",
+  "dispatch_api_key": "secret",
+  "dispatch_model": "gpt-4o-mini",
+  "dispatch_max_tokens": 1024,
+  "max_iterations": 8,
+  "worker_prompt": "Project goal: {{goal}}\\nSelected fact: {{fact}}\\nPlanned action: {{action}}",
+  "dispatch_plan_prompt": "Choose an action using this graph: {{graph_json}}",
+  "dispatch_summary_prompt": "Summarize {{worker_output}} for graph {{graph_json}}"
 }
 ```
 
-`llm_url` and `model` are required after trimming whitespace. `api_key` may be
-empty for local endpoints that need no authentication. `max_tokens` must be an
-integer between `1` and `10000000`. The settings persist in the same SQLite
-database and are returned as stored, including `api_key` and `updated_at`;
-there is no masking. Only `GET` and `PUT` are registered on this path.
+The worker and dispatch LLM profiles each configure URL, API key, model, and
+maximum tokens independently. Empty dispatch URL/model/token fields inherit
+the worker values; an empty API key means no authentication when a dispatch
+profile is provided. If all dispatch profile fields are omitted, the complete
+worker profile is reused. Each max-token value must be between `1` and
+`10000000`. `max_iterations` must be between `1` and `100`.
+
+`worker_command` optionally starts an external Worker process for the actual
+planned action. The command is split into arguments without invoking a shell,
+so shell operators are not interpreted. `{{prompt}}` is replaced with the
+actual Worker prompt; the same prompt is also written to standard input. An
+empty command keeps the built-in OpenAI-compatible Worker. Dispatch planning
+and summarization always use the configured Dispatch LLM.
+
+The worker prompt supports `{{goal}}`, `{{fact}}`, `{{fact_id}}`, and
+`{{action}}`. The dispatch plan prompt supports `{{graph_json}}`. The dispatch
+summary prompt supports `{{graph_json}}`, `{{chosen_action_json}}`, and
+`{{worker_output}}`. Empty prompt values restore their built-in defaults.
+Settings persist in SQLite and are returned as stored, including API keys and
+`updated_at`; keys are not masked. Only `GET` and `PUT` are registered on this
+path.
 
 ## Validation and errors
 

@@ -36,9 +36,10 @@ Run checks from `backend` with `go test ./...`, `go test -race ./...`,
 
 ## Worker
 
-The worker starts an OpenAI-compatible streaming chat agent using the LLM
-settings stored in SQLite. Run it from `backend/` after configuring the
-settings through the API or frontend:
+The worker starts an OpenAI-compatible streaming chat agent using the worker
+LLM profile stored in SQLite. You can optionally configure `worker_command` in
+the settings page to run an external Worker command instead. Run it from
+`backend/` after configuring the settings through the API or frontend:
 
 ```sh
 go run ./cmd/hotmouse worker \
@@ -47,9 +48,12 @@ go run ./cmd/hotmouse worker \
 ```
 
 The prompt can also be supplied as one positional argument. The worker sends
-the prompt to `llm_url` (appending `/chat/completions` when needed), streams
-the agent response to the terminal, and atomically saves the completed output
-to `--output`. It uses `DATABASE_DSN` or defaults to `hotmouse.db`.
+the prompt to the configured worker endpoint (appending `/chat/completions`
+when needed), streams the agent response to the terminal, and atomically saves
+the completed output to `--output`. A configured external Worker command is
+started without a shell, receives the prompt on stdin, and can use
+`{{prompt}}` as an argument placeholder. It uses `DATABASE_DSN` or defaults
+to `hotmouse.db`.
 
 When the normal API process is running, it also starts a background dispatcher.
 Creating a project or appending a fact or step queues that project for

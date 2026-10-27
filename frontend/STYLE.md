@@ -119,4 +119,4 @@ src/
 - 错误响应固定为 `{ "error": { "code": ..., "message": ... } }`，由 `src/lib/api.ts` 统一转成 `ApiError`。
 - 项目完成后是终态，不能再追加事实或步骤；UI 需要禁用相关操作。
 - 完成项目要求至少有一条指向目标的步骤，否则后端返回 `409 goal_unreachable`。
-- `/settings` 是唯一的可修改资源，保存 LLM 的地址、密钥、模型和最大 token 数。
+- `/settings` 是唯一的可修改资源，保存 worker/dispatch 的 LLM 配置、Worker 启动命令、dispatch 迭代上限和三类提示词模板。

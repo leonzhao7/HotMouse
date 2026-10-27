@@ -33,17 +33,36 @@ func TestDispatchRunsWorkerSummarizesAndCompletesProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
+	_, err = service.UpdateSettings(context.Background(), api.UpdateSettingsInput{
+		LLMURL: "https://worker.example/v1", APIKey: "worker-key", Model: "worker-model", MaxTokens: 512,
+		WorkerLLMURL: "https://worker.example/v1", WorkerAPIKey: "worker-key", WorkerModel: "worker-model", WorkerMaxTokens: 512,
+		DispatchLLMURL: "https://dispatch.example/v1", DispatchAPIKey: "dispatch-key", DispatchModel: "dispatch-model", DispatchMaxTokens: 1024,
+		MaxIterations:         1,
+		DispatchPlanPrompt:    "PHASE:PLAN {{graph_json}}",
+		WorkerPrompt:          "goal={{goal}} fact={{fact}} id={{fact_id}} action={{action}}",
+		DispatchSummaryPrompt: "PHASE:SUMMARIZE {{worker_output}} {{chosen_action_json}}",
+		WorkerCommand:         "external-worker --prompt {{prompt}}",
+	})
+	if err != nil {
+		t.Fatalf("configure dispatcher: %v", err)
+	}
 
 	var calls int
-	agent := AgentFunc(func(_ context.Context, _ domain.Settings, prompt string, output io.Writer) error {
+	agent := AgentFunc(func(_ context.Context, settings domain.Settings, prompt string, output io.Writer) error {
 		calls++
 		switch {
 		case strings.Contains(prompt, "PHASE:PLAN"):
+			if settings.Model != "dispatch-model" || settings.WorkerCommand != "" || !strings.Contains(prompt, `"goal":{"id":`) {
+				t.Errorf("plan call config/prompt = %+v, %s", settings, prompt)
+			}
 			return writeString(output, fmt.Sprintf(`{"from_fact_id":%d,"action":"Run a user acceptance test","rationale":"The prototype is ready"}`, graph.Facts[0].ID))
 		case strings.Contains(prompt, "PHASE:SUMMARIZE"):
+			if settings.Model != "dispatch-model" || settings.WorkerCommand != "" || !strings.Contains(prompt, "The test passed") {
+				t.Errorf("summary call config/prompt = %+v, %s", settings, prompt)
+			}
 			return writeString(output, `{"facts":["Users approved the prototype"],"steps":[{"from_fact_index":1,"to_goal":true,"description":"Approval satisfies launch criteria"}],"goal_reached":true}`)
 		default:
-			if !strings.Contains(prompt, "Run a user acceptance test") {
+			if settings.Model != "worker-model" || settings.WorkerCommand != "external-worker --prompt {{prompt}}" || !strings.Contains(prompt, "goal=Launch the product") || !strings.Contains(prompt, "action=Run a user acceptance test") {
 				t.Errorf("worker prompt omitted selected action: %s", prompt)
 			}
 			return writeString(output, "The test passed and users approved the prototype.")
@@ -103,6 +122,50 @@ func TestDispatchRejectsUnknownPlannedFact(t *testing.T) {
 	}
 }
 
+func TestDispatchHonorsConfiguredIterationLimit(t *testing.T) {
+	db, err := storage.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name()))
+	if err != nil {
+		t.Fatalf("open test database: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get database connection: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	service := api.NewService(db)
+	graph, err := service.CreateProject(context.Background(), api.CreateProjectInput{
+		Name: "iteration limit", Goal: "finish", Facts: []string{"start"},
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	_, err = service.UpdateSettings(context.Background(), api.UpdateSettingsInput{
+		LLMURL: "https://example.com/v1", Model: "model", MaxTokens: 100, MaxIterations: 2,
+	})
+	if err != nil {
+		t.Fatalf("configure iteration limit: %v", err)
+	}
+	var calls, summaries int
+	agent := AgentFunc(func(_ context.Context, _ domain.Settings, prompt string, output io.Writer) error {
+		calls++
+		switch {
+		case strings.Contains(prompt, "PHASE:PLAN"):
+			return writeString(output, fmt.Sprintf(`{"from_fact_id":%d,"action":"continue","rationale":"progress"}`, graph.Facts[0].ID))
+		case strings.Contains(prompt, "PHASE:SUMMARIZE"):
+			summaries++
+			return writeString(output, fmt.Sprintf(`{"facts":["progress %d"],"steps":[],"goal_reached":false}`, summaries))
+		default:
+			return writeString(output, "worked")
+		}
+	})
+	if err := New(service, agent).dispatchProject(context.Background(), graph.ID); err != nil {
+		t.Fatalf("dispatch project: %v", err)
+	}
+	if calls != 6 || summaries != 2 {
+		t.Fatalf("dispatch made %d calls with %d summaries, want 6 and 2", calls, summaries)
+	}
+}
+
 func TestEnqueueDeduplicatesPendingProjects(t *testing.T) {
 	dispatcher := New(nil, nil)
 	dispatcher.Enqueue(4)
@@ -118,6 +181,16 @@ func TestEnqueueDeduplicatesPendingProjects(t *testing.T) {
 	}
 	if _, ok := dispatcher.pop(); ok {
 		t.Fatal("duplicate project remained in queue")
+	}
+}
+
+func TestRenderPromptDoesNotExpandVariablesInsideReplacements(t *testing.T) {
+	got := renderPrompt("value={{fact}} action={{action}}", "", map[string]string{
+		"fact":   "literal {{action}}",
+		"action": "run",
+	})
+	if got != "value=literal {{action}} action=run" {
+		t.Fatalf("rendered prompt = %q", got)
 	}
 }
 

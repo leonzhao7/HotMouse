@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"strings"
 
 	"hotmouse/backend/internal/domain"
@@ -44,6 +46,94 @@ type chatChunk struct {
 
 func Run(ctx context.Context, settings domain.Settings, prompt string, output io.Writer) error {
 	return runWithClient(ctx, settings, prompt, output, http.DefaultClient)
+}
+
+// RunConfigured uses an external worker command when configured. The command
+// is tokenized without invoking a shell; {{prompt}} is replaced with the
+// prompt, which is also provided on stdin for commands that read from stdin.
+func RunConfigured(ctx context.Context, settings domain.Settings, prompt string, output io.Writer) error {
+	if strings.TrimSpace(settings.WorkerCommand) == "" {
+		return Run(ctx, settings, prompt, output)
+	}
+	if strings.TrimSpace(prompt) == "" || output == nil {
+		return ErrInvalidConfiguration
+	}
+	args, err := commandArguments(settings.WorkerCommand, prompt)
+	if err != nil {
+		return fmt.Errorf("invalid worker command: %w", err)
+	}
+	command := exec.CommandContext(ctx, args[0], args[1:]...)
+	command.Stdin = strings.NewReader(prompt)
+	command.Stdout = output
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("run worker command: %w", err)
+	}
+	return nil
+}
+
+func commandArguments(command, prompt string) ([]string, error) {
+	parts, err := shellLikeSplit(command)
+	if err != nil {
+		return nil, err
+	}
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		return nil, errors.New("command is empty")
+	}
+	for index := range parts {
+		if strings.Contains(parts[index], "{{prompt}}") {
+			parts[index] = strings.ReplaceAll(parts[index], "{{prompt}}", prompt)
+		}
+	}
+	return parts, nil
+}
+
+func shellLikeSplit(value string) ([]string, error) {
+	var parts []string
+	var current strings.Builder
+	var quote rune
+	escaped := false
+	started := false
+	flush := func() {
+		if started {
+			parts = append(parts, current.String())
+			current.Reset()
+			started = false
+		}
+	}
+	for _, character := range value {
+		switch {
+		case escaped:
+			current.WriteRune(character)
+			started = true
+			escaped = false
+		case character == '\\' && quote != '\'':
+			started = true
+			escaped = true
+		case quote != 0:
+			if character == quote {
+				quote = 0
+			} else {
+				current.WriteRune(character)
+			}
+		case character == '\'' || character == '"':
+			started = true
+			quote = character
+		case character == ' ' || character == '\t' || character == '\n' || character == '\r':
+			flush()
+		default:
+			started = true
+			current.WriteRune(character)
+		}
+	}
+	if escaped {
+		return nil, errors.New("unterminated escape")
+	}
+	if quote != 0 {
+		return nil, errors.New("unterminated quote")
+	}
+	flush()
+	return parts, nil
 }
 
 func runWithClient(ctx context.Context, settings domain.Settings, prompt string, output io.Writer, client *http.Client) error {

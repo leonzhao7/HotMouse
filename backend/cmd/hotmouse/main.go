@@ -55,7 +55,7 @@ func runAPI() error {
 	defer sqlDB.Close()
 
 	service := api.NewService(db)
-	dispatcher := dispatch.New(service, dispatch.AgentFunc(worker.Run))
+	dispatcher := dispatch.New(service, dispatch.AgentFunc(worker.RunConfigured))
 	service.SetProjectChangedHandler(dispatcher.Enqueue)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -75,7 +75,7 @@ func runAPI() error {
 }
 
 func runWorker(args []string) error {
-	return runWorkerCommand(args, worker.Run)
+	return runWorkerCommand(args, worker.RunConfigured)
 }
 
 func runWorkerCommand(args []string, runAgent func(context.Context, domain.Settings, string, io.Writer) error) error {
@@ -114,6 +114,7 @@ func runWorkerCommand(args []string, runAgent func(context.Context, domain.Setti
 	if err != nil {
 		return fmt.Errorf("load LLM settings: %w", err)
 	}
+	settings = settings.ForWorker()
 
 	outputDirectory := filepath.Dir(*outputPath)
 	tempFile, err := os.CreateTemp(outputDirectory, "."+filepath.Base(*outputPath)+".tmp-*")

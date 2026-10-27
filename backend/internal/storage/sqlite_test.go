@@ -12,6 +12,19 @@ import (
 	"hotmouse/backend/internal/domain"
 )
 
+type legacySettings struct {
+	ID        uint   `gorm:"primaryKey;check:settings_singleton,id = 1"`
+	LLMURL    string `gorm:"not null;check:settings_llm_url_required,length(trim(llm_url)) > 0"`
+	APIKey    string `gorm:"not null"`
+	Model     string `gorm:"not null;check:settings_model_required,length(trim(model)) > 0"`
+	MaxTokens int    `gorm:"not null;check:settings_max_tokens,max_tokens BETWEEN 1 AND 10000000"`
+	UpdatedAt *time.Time
+}
+
+func (legacySettings) TableName() string {
+	return "settings"
+}
+
 func openTestDatabase(test *testing.T, dsn string) *gorm.DB {
 	test.Helper()
 	db, err := Open(dsn)
@@ -91,6 +104,41 @@ func TestDatabaseEnforcesAppendOnlyGraph(test *testing.T) {
 	var storedStep domain.Step
 	if err := db.First(&storedStep, step.ID).Error; err != nil || storedStep.ToNodeID != graph.Goal.ID {
 		test.Fatalf("step changed: %+v, %v", storedStep, err)
+	}
+}
+
+func TestOpenMigratesLegacySettings(test *testing.T) {
+	dsn := filepath.Join(test.TempDir(), "legacy.db")
+	legacyDB, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		test.Fatalf("open legacy database: %v", err)
+	}
+	if err := legacyDB.AutoMigrate(&legacySettings{}); err != nil {
+		test.Fatalf("create legacy settings table: %v", err)
+	}
+	if err := legacyDB.Create(&legacySettings{
+		ID: 1, LLMURL: "https://legacy.example/v1", APIKey: "legacy-key", Model: "legacy-model", MaxTokens: 700,
+	}).Error; err != nil {
+		test.Fatalf("insert legacy settings: %v", err)
+	}
+	legacySQL, err := legacyDB.DB()
+	if err != nil {
+		test.Fatalf("get legacy database connection: %v", err)
+	}
+	if err := legacySQL.Close(); err != nil {
+		test.Fatalf("close legacy database: %v", err)
+	}
+
+	db := openTestDatabase(test, dsn)
+	var settings domain.Settings
+	if err := db.First(&settings, "id = ?", 1).Error; err != nil {
+		test.Fatalf("read migrated settings: %v", err)
+	}
+	if settings.LLMURL != "https://legacy.example/v1" || settings.APIKey != "legacy-key" || settings.Model != "legacy-model" || settings.MaxTokens != 700 {
+		test.Fatalf("legacy values changed during migration: %+v", settings)
+	}
+	if settings.DispatchLLMURL != "" || settings.WorkerLLMURL != "" {
+		test.Fatalf("new profile fields should remain empty for compatibility fallback: %+v", settings)
 	}
 }
 
