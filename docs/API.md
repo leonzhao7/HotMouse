@@ -22,6 +22,13 @@ resource. Project details are available from `GET /project`; goal, facts, and
 steps are read from their project subresources. Export a complete graph using
 `GET /project/{id}/export`.
 
+The API process also runs a background dispatcher. Creating a project or
+appending a fact or step queues that project for LLM reasoning. The dispatcher
+selects a promising action, runs it through the local worker, summarizes the
+worker result into append-only facts and steps, and completes the project when
+the resulting graph reaches the goal. Dispatch work is serialized per
+project, and graph updates are committed transactionally.
+
 ## Create a project
 
 `POST /project` requires a name, one goal, and at least one fact. New projects

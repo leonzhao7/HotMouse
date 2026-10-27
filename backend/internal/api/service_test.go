@@ -44,6 +44,34 @@ func TestCreateProjectCreatesOpenGraphWithoutSteps(t *testing.T) {
 	}
 }
 
+func TestProjectMutationsNotifyDispatcher(t *testing.T) {
+	service := newTestService(t)
+	changes := make([]uint, 0)
+	service.SetProjectChangedHandler(func(projectID uint) {
+		changes = append(changes, projectID)
+	})
+	graph, err := service.CreateProject(context.Background(), CreateProjectInput{
+		Name: "dispatch", Goal: "finish", Facts: []string{"start"},
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	if _, err := service.AddFact(context.Background(), graph.ID, "new context"); err != nil {
+		t.Fatalf("add fact: %v", err)
+	}
+	if _, err := service.AddStep(context.Background(), graph.ID, graph.Facts[0].ID, graph.Goal.ID, "reach goal"); err != nil {
+		t.Fatalf("add step: %v", err)
+	}
+	if len(changes) != 3 {
+		t.Fatalf("change notifications = %v, want three notifications", changes)
+	}
+	for _, projectID := range changes {
+		if projectID != graph.ID {
+			t.Fatalf("notified project ID = %d, want %d", projectID, graph.ID)
+		}
+	}
+}
+
 func TestCompleteProjectRequiresGoalStep(t *testing.T) {
 	service := newTestService(t)
 	graph, err := service.CreateProject(context.Background(), CreateProjectInput{

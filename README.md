@@ -34,6 +34,31 @@ listener with `HTTP_ADDR` and the SQLite DSN with `DATABASE_DSN`.
 Run checks from `backend` with `go test ./...`, `go test -race ./...`,
 `go vet ./...`, and `go build ./...`.
 
+## Worker
+
+The worker starts an OpenAI-compatible streaming chat agent using the LLM
+settings stored in SQLite. Run it from `backend/` after configuring the
+settings through the API or frontend:
+
+```sh
+go run ./cmd/hotmouse worker \
+  --prompt "Summarize the current project graph" \
+  --output ./worker-output.txt
+```
+
+The prompt can also be supplied as one positional argument. The worker sends
+the prompt to `llm_url` (appending `/chat/completions` when needed), streams
+the agent response to the terminal, and atomically saves the completed output
+to `--output`. It uses `DATABASE_DSN` or defaults to `hotmouse.db`.
+
+When the normal API process is running, it also starts a background dispatcher.
+Creating a project or appending a fact or step queues that project for
+reasoning. The dispatcher selects a promising action with the configured LLM,
+runs it through the worker, summarizes the result into new facts and steps,
+and marks the project completed when the goal is supported by the resulting
+graph. Only one dispatch run is active per project, and each graph update is
+applied transactionally.
+
 ## Frontend
 
 The frontend lives in `frontend/` and is a Vite + React + TypeScript app
