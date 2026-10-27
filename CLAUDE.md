@@ -4,7 +4,7 @@ HotMouse 是一个 Go 决策支持 API（Iris + GORM + SQLite），前端位于 
 
 ## 目录
 
-- `backend/` — Go 服务，只提供 `/project*` 八个路由，不提供静态资源
+- `backend/` — Go 服务，提供 `/project*` 八个路由和 `/settings` 的读取/替换路由，不提供静态资源
 - `docs/API.md` — **接口的唯一事实来源**，改后端必须同步改这里
 - `frontend/` — Vite + React 19 + TypeScript + Tailwind 4 前端
 - `github-showcase/` — GitHub 风格设计包，前端风格的来源

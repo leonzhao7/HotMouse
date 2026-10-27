@@ -159,6 +159,7 @@ func TestHTTPOnlyAllowedRoutesAndAppendMethods(test *testing.T) {
 		"/project/{id:uint64}/goal": true,
 		"/project/{id:uint64}/fact": true,
 		"/project/{id:uint64}/step": true,
+		"/settings":                 true,
 	}
 	methodPaths := 0
 	for _, route := range app.GetRoutes() {
@@ -169,12 +170,14 @@ func TestHTTPOnlyAllowedRoutesAndAppendMethods(test *testing.T) {
 			continue
 		}
 		methodPaths++
-		if !allowed[route.Tmpl().Src] || (route.Method != http.MethodGet && route.Method != http.MethodPost) {
+		validMethod := route.Method == http.MethodGet || route.Method == http.MethodPost ||
+			(route.Tmpl().Src == "/settings" && route.Method == http.MethodPut)
+		if !allowed[route.Tmpl().Src] || !validMethod {
 			test.Fatalf("unexpected route: %s %s", route.Method, route.Path)
 		}
 	}
-	if methodPaths != 8 {
-		test.Fatalf("registered %d method/path pairs, want 8", methodPaths)
+	if methodPaths != 10 {
+		test.Fatalf("registered %d method/path pairs, want 10", methodPaths)
 	}
 	paths := []string{"/project", fmt.Sprintf("/project/%d/fact", graph.ID), fmt.Sprintf("/project/%d/step", graph.ID), fmt.Sprintf("/project/%d/goal", graph.ID)}
 	for _, path := range paths {
@@ -182,7 +185,10 @@ func TestHTTPOnlyAllowedRoutesAndAppendMethods(test *testing.T) {
 			assertHTTPError(test, serveJSON(test, app, method, path, `{}`), http.StatusMethodNotAllowed, "method_not_allowed")
 		}
 	}
-	for _, path := range []string{"/", "/health", "/api/project", "/project/1", "/project/1/complete", "/project/1/facts", "/project/1/fact/2", "/project/nope/goal", "/project/-1/goal"} {
+	for _, method := range []string{http.MethodPost, http.MethodPatch, http.MethodDelete} {
+		assertHTTPError(test, serveJSON(test, app, method, "/settings", `{}`), http.StatusMethodNotAllowed, "method_not_allowed")
+	}
+	for _, path := range []string{"/", "/health", "/api/project", "/settings/1", "/project/1", "/project/1/complete", "/project/1/facts", "/project/1/fact/2", "/project/nope/goal", "/project/-1/goal"} {
 		assertHTTPError(test, serveJSON(test, app, http.MethodGet, path, ""), http.StatusNotFound, "not_found")
 	}
 	for _, path := range []string{"/project/0/goal", "/project/9223372036854775808/goal"} {

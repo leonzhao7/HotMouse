@@ -100,7 +100,7 @@ src/
 
 ## 后端契约
 
-接口以 `docs/API.md` 为唯一事实来源。前端只使用这 8 个路由：
+接口以 `docs/API.md` 为唯一事实来源。前端只使用这 10 个路由：
 
 | Method | Route |
 | --- | --- |
@@ -112,8 +112,11 @@ src/
 | POST | `/project/{id}/fact` |
 | GET | `/project/{id}/step` |
 | POST | `/project/{id}/step` |
+| GET | `/settings` |
+| PUT | `/settings` |
 
 - 后端没有 CORS，前端开发时通过 Vite 代理把 `/api/*` 转发到后端（见 `vite.config.ts`）。
 - 错误响应固定为 `{ "error": { "code": ..., "message": ... } }`，由 `src/lib/api.ts` 统一转成 `ApiError`。
 - 项目完成后是终态，不能再追加事实或步骤；UI 需要禁用相关操作。
 - 完成项目要求至少有一条指向目标的步骤，否则后端返回 `409 goal_unreachable`。
+- `/settings` 是唯一的可修改资源，保存 LLM 的地址、密钥、模型和最大 token 数。

@@ -2,7 +2,8 @@
 
 HotMouse is a Go decision-support API. Each project stores an append-only,
 directed graph of facts and one goal, backed by SQLite through GORM and served
-with Iris.
+with Iris. It also stores the LLM endpoint settings in a singleton database
+row.
 
 See [backend API documentation](docs/API.md) for endpoints and graph rules.
 

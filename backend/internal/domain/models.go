@@ -40,3 +40,14 @@ type Graph struct {
 	Facts []Node `json:"facts"`
 	Steps []Step `json:"steps"`
 }
+
+// Settings is the singleton row (ID 1) holding LLM connection details.
+// The graph tables stay append-only; settings are the only mutable record.
+type Settings struct {
+	ID        uint       `json:"-" gorm:"primaryKey;check:settings_singleton,id = 1"`
+	LLMURL    string     `json:"llm_url" gorm:"not null;check:settings_llm_url_required,length(trim(llm_url)) > 0"`
+	APIKey    string     `json:"api_key" gorm:"not null"`
+	Model     string     `json:"model" gorm:"not null;check:settings_model_required,length(trim(model)) > 0"`
+	MaxTokens int        `json:"max_tokens" gorm:"not null;check:settings_max_tokens,max_tokens BETWEEN 1 AND 10000000"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}

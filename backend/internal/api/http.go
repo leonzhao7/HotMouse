@@ -29,6 +29,8 @@ func NewApp(service *Service) *iris.Application {
 	app.Post("/project/{id:uint64}/fact", handler.addFact)
 	app.Get("/project/{id:uint64}/step", handler.listSteps)
 	app.Post("/project/{id:uint64}/step", handler.addStep)
+	app.Get("/settings", handler.getSettings)
+	app.Put("/settings", handler.updateSettings)
 	app.OnErrorCode(http.StatusNotFound, func(ctx iris.Context) {
 		ctx.JSON(errorBody{Error: errorDetail{Code: "not_found", Message: "resource not found"}})
 	})
@@ -167,6 +169,28 @@ func (handler *Handler) addStep(ctx iris.Context) {
 	ctx.JSON(step)
 }
 
+func (handler *Handler) getSettings(ctx iris.Context) {
+	settings, err := handler.service.GetSettings(ctx.Request().Context())
+	if err != nil {
+		writeError(ctx, err)
+		return
+	}
+	ctx.JSON(settings)
+}
+
+func (handler *Handler) updateSettings(ctx iris.Context) {
+	var input UpdateSettingsInput
+	if !readJSON(ctx, &input, false) {
+		return
+	}
+	settings, err := handler.service.UpdateSettings(ctx.Request().Context(), input)
+	if err != nil {
+		writeError(ctx, err)
+		return
+	}
+	ctx.JSON(settings)
+}
+
 func readProjectID(ctx iris.Context) (uint, bool) {
 	parsed, err := strconv.ParseUint(ctx.Params().Get("id"), 10, strconv.IntSize-1)
 	if err != nil || parsed == 0 {
@@ -236,6 +260,8 @@ func writeError(ctx iris.Context, err error) {
 	switch {
 	case errors.Is(err, ErrInvalid):
 		status, code = http.StatusBadRequest, "invalid_graph"
+	case errors.Is(err, ErrInvalidSettings):
+		status, code = http.StatusBadRequest, "invalid_settings"
 	case errors.Is(err, ErrNotFound):
 		status, code = http.StatusNotFound, "not_found"
 	case errors.Is(err, ErrConflict):

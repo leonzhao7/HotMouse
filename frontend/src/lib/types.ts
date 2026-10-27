@@ -54,9 +54,26 @@ export interface AddStepInput {
   to_node_id: number
 }
 
+/** 全局单例的 LLM 配置 (GET/PUT /settings)。 */
+export interface Settings {
+  llm_url: string
+  api_key: string
+  model: string
+  max_tokens: number
+  updated_at?: string
+}
+
+export interface UpdateSettingsInput {
+  llm_url: string
+  api_key: string
+  model: string
+  max_tokens: number
+}
+
 /** 后端错误码, 见 docs/API.md 的 "Validation and errors"。 */
 export type ApiErrorCode =
   | 'invalid_graph'
+  | 'invalid_settings'
   | 'not_found'
   | 'duplicate_step'
   | 'goal_unreachable'

@@ -7,6 +7,7 @@ import { Layout } from '@/components/Layout'
 import { NewProjectPage } from '@/pages/NewProjectPage'
 import { ProjectDetailPage } from '@/pages/ProjectDetailPage'
 import { ProjectListPage } from '@/pages/ProjectListPage'
+import { SettingsPage } from '@/pages/SettingsPage'
 
 import './index.css'
 
@@ -19,6 +20,7 @@ const router = createBrowserRouter([
       { index: true, element: <ProjectListPage /> },
       { path: 'new', element: <NewProjectPage /> },
       { path: 'projects/:id', element: <ProjectDetailPage /> },
+      { path: 'settings', element: <SettingsPage /> },
     ],
   },
 ])

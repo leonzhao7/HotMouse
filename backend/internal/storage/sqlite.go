@@ -27,7 +27,7 @@ func Open(dsn string) (*gorm.DB, error) {
 	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetMaxIdleConns(1)
 	err = db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.AutoMigrate(&domain.Project{}, &domain.Node{}, &domain.Step{}); err != nil {
+		if err := tx.AutoMigrate(&domain.Project{}, &domain.Node{}, &domain.Step{}, &domain.Settings{}); err != nil {
 			return err
 		}
 		for _, statement := range graphConstraints {

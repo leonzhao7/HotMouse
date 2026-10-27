@@ -13,9 +13,12 @@ It exposes only the following route patterns:
 | `POST` | `/project/{id}/fact` | Append a fact node |
 | `GET` | `/project/{id}/step` | List directed steps |
 | `POST` | `/project/{id}/step` | Append a directed step |
+| `GET` | `/settings` | Read the LLM settings |
+| `PUT` | `/settings` | Replace the LLM settings |
 
-There are no update or delete endpoints. Project details are available from
-`GET /project`; goal, facts, and steps are read from their project subresources.
+Graph data has no update or delete endpoints. `/settings` is the only mutable
+resource. Project details are available from `GET /project`; goal, facts, and
+steps are read from their project subresources.
 
 ## Create a project
 
@@ -78,6 +81,29 @@ an empty list is `[]`, not `null`. Node objects contain `id`, `project_id`,
 `kind`, `content`, and `created_at`. Step objects contain `id`, `project_id`,
 `from_node_id`, `to_node_id`, and `created_at`.
 
+## LLM settings
+
+`GET /settings` returns the singleton LLM configuration. Before anything has
+been saved it returns an empty configuration with `max_tokens` set to `0` and
+no `updated_at`.
+
+`PUT /settings` replaces all fields and returns the stored configuration:
+
+```json
+{
+  "llm_url": "https://api.openai.com/v1",
+  "api_key": "secret",
+  "model": "gpt-4o-mini",
+  "max_tokens": 1024
+}
+```
+
+`llm_url` and `model` are required after trimming whitespace. `api_key` may be
+empty for local endpoints that need no authentication. `max_tokens` must be an
+integer between `1` and `10000000`. The settings persist in the same SQLite
+database and are returned as stored, including `api_key` and `updated_at`;
+there is no masking. Only `GET` and `PUT` are registered on this path.
+
 ## Validation and errors
 
 Send JSON bodies with `Content-Type: application/json`. Unknown fields,
@@ -85,8 +111,8 @@ malformed JSON, non-object JSON, and multiple JSON documents are rejected.
 Bodies are limited to 1 MiB (`413`); unsupported content types return `415`.
 The completion endpoint accepts either no body or an empty JSON object and
 never accepts replacement goal content. IDs must be positive integers within
-the platform's signed integer range. Unsupported update/delete methods return
-`405`; paths outside the four allowed patterns return `404`.
+the platform's signed integer range. Unsupported methods return `405`; paths
+outside the registered route patterns return `404`.
 
 Errors use this shape:
 
@@ -102,7 +128,8 @@ Errors use this shape:
 Graph validation uses `invalid_graph` (`400`), missing resources use
 `not_found` (`404`), duplicate node pairs use `duplicate_step` (`409`), and
 attempts to append to a completed project use `project_completed` (`409`).
-Unexpected storage failures return a generic `internal_error` (`500`).
+Settings validation uses `invalid_settings` (`400`). Unexpected storage
+failures return a generic `internal_error` (`500`).
 
 ## Storage guarantees
 
@@ -114,9 +141,12 @@ and the completion precondition. Nodes and steps cannot be updated or deleted,
 including through replacement/upsert SQL. Completing a project only updates
 its status and completion timestamp; it does not modify its graph.
 
-SQLite writes use immediate transactions and a five-second busy timeout. Data
-and constraints survive application restarts. There are no graph update or
-delete routes and no extra health, documentation, or frontend routes.
+SQLite writes use immediate transactions and a five-second busy timeout. LLM
+settings live in a singleton row and are the only mutable data; the graph
+tables keep their append-only triggers. Data and constraints survive
+application restarts. There are no graph update or delete routes, only the
+`/settings` replacement endpoint, and no extra health, documentation, or
+frontend routes.
 
 ## Run
 
@@ -145,4 +175,5 @@ Tests cover required creation fields, atomic rollback, appending facts,
 fact-to-fact and fact-to-goal edges, project isolation, both directions of pair
 uniqueness, self-step rejection, goal-origin rejection, completion validation
 and idempotence, SQL-level immutability, concurrent database connections,
-persistence across reopen, route restrictions, and JSON/error handling.
+persistence across reopen, settings defaults and replacement, settings
+validation, route restrictions, and JSON/error handling.

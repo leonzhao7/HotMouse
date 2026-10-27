@@ -5,6 +5,7 @@ import { IconRepo } from './icons'
 const NAV_ITEMS = [
   { to: '/', label: '项目', end: true },
   { to: '/new', label: '新建项目', end: false },
+  { to: '/settings', label: '设置', end: false },
 ]
 
 export function Layout() {

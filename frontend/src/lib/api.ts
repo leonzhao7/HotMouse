@@ -6,7 +6,9 @@ import type {
   Graph,
   GraphNode,
   Project,
+  Settings,
   Step,
+  UpdateSettingsInput,
 } from './types'
 
 /** 后端返回的结构化错误。 */
@@ -92,6 +94,14 @@ export const api = {
   addStep: (projectId: number, input: AddStepInput) =>
     request<Step>(`/project/${projectId}/step`, {
       method: 'POST',
+      body: JSON.stringify(input),
+    }),
+
+  getSettings: () => request<Settings>('/settings'),
+
+  updateSettings: (input: UpdateSettingsInput) =>
+    request<Settings>('/settings', {
+      method: 'PUT',
       body: JSON.stringify(input),
     }),
 }
