@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"hotmouse/backend/internal/domain"
@@ -168,7 +169,7 @@ func TestSQLitePersistsGraphAndConstraintsAcrossReopen(test *testing.T) {
 	path := filepath.Join(test.TempDir(), "hotmouse.db")
 	db := openTestDatabase(test, path)
 	graph := seedGraph(test, db, "persistent")
-	step := domain.Step{ProjectID: graph.ID, FromNodeID: graph.Facts[0].ID, ToNodeID: graph.Goal.ID}
+	step := domain.Step{ProjectID: graph.ID, FromNodeID: graph.Facts[0].ID, ToNodeID: graph.Goal.ID, Description: "persisted note"}
 	if err := db.Create(&step).Error; err != nil {
 		test.Fatal(err)
 	}
@@ -192,11 +193,48 @@ func TestSQLitePersistsGraphAndConstraintsAcrossReopen(test *testing.T) {
 		test.Fatalf("reopened nodes = %+v, %v", nodes, err)
 	}
 	var persisted domain.Step
-	if err := reopened.First(&persisted, step.ID).Error; err != nil || persisted.FromNodeID != step.FromNodeID || persisted.ToNodeID != step.ToNodeID {
+	if err := reopened.First(&persisted, step.ID).Error; err != nil || persisted.FromNodeID != step.FromNodeID || persisted.ToNodeID != step.ToNodeID || persisted.Description != step.Description {
 		test.Fatalf("reopened step = %+v, %v", persisted, err)
 	}
 	if err := reopened.Exec("UPDATE nodes SET content = 'changed' WHERE id = ?", graph.Goal.ID).Error; err == nil {
 		test.Fatal("append-only guard was lost on reopen")
+	}
+}
+
+func TestOpenMigratesLegacyStepsTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	legacy, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.Exec(`CREATE TABLE steps (
+		id integer PRIMARY KEY AUTOINCREMENT,
+		project_id integer NOT NULL,
+		from_node_id integer NOT NULL,
+		to_node_id integer NOT NULL,
+		created_at datetime
+	)`)
+	if err := legacy.Exec(`INSERT INTO steps(project_id, from_node_id, to_node_id, created_at) VALUES(1, 2, 3, ?)`, time.Now().UTC()).Error; err != nil {
+		t.Fatal(err)
+	}
+	legacySQL, err := legacy.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacySQL.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db := openTestDatabase(t, path)
+	var migrated domain.Step
+	if err := db.First(&migrated, 1).Error; err != nil {
+		t.Fatalf("read migrated step: %v", err)
+	}
+	if migrated.Description != "" {
+		t.Fatalf("legacy step description = %q, want empty", migrated.Description)
+	}
+	if err := db.Model(&migrated).Update("description", "after migration").Error; err == nil {
+		t.Fatal("description update bypassed the append-only trigger")
 	}
 }
 

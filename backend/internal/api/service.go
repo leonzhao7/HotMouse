@@ -126,12 +126,17 @@ func (service *Service) ListSteps(ctx context.Context, projectID uint) ([]domain
 	return steps, err
 }
 
-func (service *Service) AddStep(ctx context.Context, projectID, fromNodeID, toNodeID uint) (domain.Step, error) {
+func (service *Service) AddStep(ctx context.Context, projectID, fromNodeID, toNodeID uint, description string) (domain.Step, error) {
 	maxID := ^uint(0) >> 1
 	if fromNodeID == 0 || toNodeID == 0 || fromNodeID == toNodeID || fromNodeID > maxID || toNodeID > maxID {
 		return domain.Step{}, fmt.Errorf("%w: a step requires two distinct positive node IDs", ErrInvalid)
 	}
-	step := domain.Step{ProjectID: projectID, FromNodeID: fromNodeID, ToNodeID: toNodeID}
+	step := domain.Step{
+		ProjectID:   projectID,
+		FromNodeID:  fromNodeID,
+		ToNodeID:    toNodeID,
+		Description: strings.TrimSpace(description),
+	}
 	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := ensureOpenProject(tx, projectID); err != nil {
 			return err

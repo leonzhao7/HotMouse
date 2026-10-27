@@ -26,6 +26,7 @@ export interface Step {
   project_id: number
   from_node_id: number
   to_node_id: number
+  description?: string
   created_at: string
 }
 
@@ -52,6 +53,7 @@ export interface CreateProjectInput {
 export interface AddStepInput {
   from_node_id: number
   to_node_id: number
+  description?: string
 }
 
 /** 全局单例的 LLM 配置 (GET/PUT /settings)。 */

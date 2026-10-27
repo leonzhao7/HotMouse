@@ -32,6 +32,7 @@ export function ProjectDetailPage() {
   const [factContent, setFactContent] = useState('')
   const [fromNodeId, setFromNodeId] = useState<number | ''>('')
   const [toNodeId, setToNodeId] = useState<number | ''>('')
+  const [stepDescription, setStepDescription] = useState('')
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
@@ -114,9 +115,11 @@ export function ProjectDetailPage() {
       await api.addStep(projectId, {
         from_node_id: Number(fromNodeId),
         to_node_id: Number(toNodeId),
+        description: stepDescription.trim() || undefined,
       })
       setFromNodeId('')
       setToNodeId('')
+      setStepDescription('')
       return '已追加步骤。'
     })
   }
@@ -284,6 +287,9 @@ export function ProjectDetailPage() {
                       </span>
                       {to?.content ?? '未知节点'}
                     </p>
+                    {step.description ? (
+                      <p className="mt-1 text-sm text-fg-muted">{step.description}</p>
+                    ) : null}
                     <p className="mt-1 text-xs text-fg-subtle">
                       步骤 #{step.id} · {formatDateTime(step.created_at)}
                     </p>
@@ -346,6 +352,14 @@ export function ProjectDetailPage() {
                   </select>
                 </div>
               </div>
+              <TextArea
+                hint="可选，说明这一步做了什么或为什么这样连。"
+                label="步骤描述"
+                onChange={(event) => setStepDescription(event.target.value)}
+                placeholder="例如：用原型验证了核心流程"
+                rows={2}
+                value={stepDescription}
+              />
               <Button className="self-end" disabled={busy} type="submit" variant="primary">
                 <IconPlus className="h-4 w-4" />
                 追加步骤

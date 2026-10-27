@@ -52,16 +52,17 @@ Append a fact with `POST /project/{id}/fact`:
 Append a step with `POST /project/{id}/step`:
 
 ```json
-{"from_node_id": 2, "to_node_id": 3}
+{"from_node_id": 2, "to_node_id": 3, "description": "Optional note"}
 ```
 
-Use node IDs returned by project creation, fact creation, or the goal endpoint.
-The origin must be a fact in the same project; the destination may be a fact or
-the project's goal. Each unordered pair of distinct nodes can have only one
-directed step: after A → B exists, both a duplicate A → B and a reverse B → A
-are rejected. Self-steps and cross-project steps are also rejected. Longer
-directed cycles between facts are allowed; the graph is not required to be
-acyclic.
+`description` is optional; it is trimmed and stored as an empty string when
+omitted or blank. Use node IDs returned by project creation, fact creation, or
+the goal endpoint. The origin must be a fact in the same project; the
+destination may be a fact or the project's goal. Each unordered pair of
+distinct nodes can have only one directed step: after A → B exists, both a
+duplicate A → B and a reverse B → A are rejected. Self-steps and cross-project
+steps are also rejected. Longer directed cycles between facts are allowed; the
+graph is not required to be acyclic.
 
 Complete a project by sending `POST /project/{id}/goal` with an empty body. The
 operation returns `409 Conflict` until at least one existing step points to
@@ -79,7 +80,8 @@ return `409`. Responses use JSON.
 endpoint returns one node. Fact and step endpoints return arrays sorted by ID;
 an empty list is `[]`, not `null`. Node objects contain `id`, `project_id`,
 `kind`, `content`, and `created_at`. Step objects contain `id`, `project_id`,
-`from_node_id`, `to_node_id`, and `created_at`.
+`from_node_id`, `to_node_id`, `description` (omitted when empty), and
+`created_at`.
 
 ## LLM settings
 
@@ -172,8 +174,9 @@ go build ./...
 ```
 
 Tests cover required creation fields, atomic rollback, appending facts,
-fact-to-fact and fact-to-goal edges, project isolation, both directions of pair
-uniqueness, self-step rejection, goal-origin rejection, completion validation
-and idempotence, SQL-level immutability, concurrent database connections,
-persistence across reopen, settings defaults and replacement, settings
-validation, route restrictions, and JSON/error handling.
+fact-to-fact and fact-to-goal edges, step descriptions, project isolation, both
+directions of pair uniqueness, self-step rejection, goal-origin rejection,
+completion validation and idempotence, SQL-level immutability, concurrent
+database connections, legacy schema migration, persistence across reopen,
+settings defaults and replacement, settings validation, route restrictions,
+and JSON/error handling.

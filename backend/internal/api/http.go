@@ -154,13 +154,14 @@ func (handler *Handler) addStep(ctx iris.Context) {
 		return
 	}
 	var input struct {
-		FromNodeID uint `json:"from_node_id"`
-		ToNodeID   uint `json:"to_node_id"`
+		FromNodeID  uint   `json:"from_node_id"`
+		ToNodeID    uint   `json:"to_node_id"`
+		Description string `json:"description"`
 	}
 	if !readJSON(ctx, &input, false) {
 		return
 	}
-	step, err := handler.service.AddStep(ctx.Request().Context(), projectID, input.FromNodeID, input.ToNodeID)
+	step, err := handler.service.AddStep(ctx.Request().Context(), projectID, input.FromNodeID, input.ToNodeID, input.Description)
 	if err != nil {
 		writeError(ctx, err)
 		return

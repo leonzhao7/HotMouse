@@ -150,7 +150,7 @@ func TestStepEndpointValidation(test *testing.T) {
 	}
 	for _, entry := range cases {
 		test.Run(entry.name, func(test *testing.T) {
-			if _, err := service.AddStep(context.Background(), entry.projectID, entry.fromID, entry.toID); !errors.Is(err, entry.want) {
+			if _, err := service.AddStep(context.Background(), entry.projectID, entry.fromID, entry.toID, ""); !errors.Is(err, entry.want) {
 				test.Fatalf("add step error = %v; want %v", err, entry.want)
 			}
 		})
@@ -162,7 +162,7 @@ func TestStepEndpointValidation(test *testing.T) {
 	for index := range graph.Facts {
 		fromID := graph.Facts[index].ID
 		toID := graph.Facts[(index+1)%len(graph.Facts)].ID
-		if _, err := service.AddStep(context.Background(), graph.ID, fromID, toID); err != nil {
+		if _, err := service.AddStep(context.Background(), graph.ID, fromID, toID, ""); err != nil {
 			test.Fatalf("directed fact cycle should be allowed: %v", err)
 		}
 	}
@@ -173,10 +173,10 @@ func TestCompletionIsScopedAndIdempotent(test *testing.T) {
 	ctx := context.Background()
 	graph := createTestGraph(test, service, "graph")
 	other := createTestGraph(test, service, "other")
-	if _, err := service.AddStep(ctx, graph.ID, graph.Facts[0].ID, graph.Facts[1].ID); err != nil {
+	if _, err := service.AddStep(ctx, graph.ID, graph.Facts[0].ID, graph.Facts[1].ID, ""); err != nil {
 		test.Fatal(err)
 	}
-	if _, err := service.AddStep(ctx, other.ID, other.Facts[0].ID, other.Goal.ID); err != nil {
+	if _, err := service.AddStep(ctx, other.ID, other.Facts[0].ID, other.Goal.ID, ""); err != nil {
 		test.Fatal(err)
 	}
 	if _, err := service.CompleteProject(ctx, graph.ID); !errors.Is(err, ErrGoalUnreachable) {
@@ -186,7 +186,7 @@ func TestCompletionIsScopedAndIdempotent(test *testing.T) {
 	if err != nil || projects[0].Status != domain.ProjectOpen || projects[0].CompletedAt != nil {
 		test.Fatalf("failed completion changed project: %+v, %v", projects, err)
 	}
-	if _, err := service.AddStep(ctx, graph.ID, graph.Facts[1].ID, graph.Goal.ID); err != nil {
+	if _, err := service.AddStep(ctx, graph.ID, graph.Facts[1].ID, graph.Goal.ID, ""); err != nil {
 		test.Fatal(err)
 	}
 	first, err := service.CompleteProject(ctx, graph.ID)
@@ -233,7 +233,7 @@ func TestConcurrentStepPairAcrossConnections(test *testing.T) {
 			if index%2 != 0 {
 				fromID, toID = toID, fromID
 			}
-			_, err := services[index%len(services)].AddStep(context.Background(), graph.ID, fromID, toID)
+			_, err := services[index%len(services)].AddStep(context.Background(), graph.ID, fromID, toID, "")
 			results <- err
 		}(index)
 	}

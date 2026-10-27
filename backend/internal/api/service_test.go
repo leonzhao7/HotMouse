@@ -55,7 +55,7 @@ func TestCompleteProjectRequiresGoalStep(t *testing.T) {
 	if _, err := service.CompleteProject(context.Background(), graph.ID); !errors.Is(err, ErrGoalUnreachable) {
 		t.Fatalf("complete without goal edge error = %v, want ErrGoalUnreachable", err)
 	}
-	if _, err := service.AddStep(context.Background(), graph.ID, graph.Facts[0].ID, graph.Goal.ID); err != nil {
+	if _, err := service.AddStep(context.Background(), graph.ID, graph.Facts[0].ID, graph.Goal.ID, ""); err != nil {
 		t.Fatalf("add goal step: %v", err)
 	}
 	completed, err := service.CompleteProject(context.Background(), graph.ID)
@@ -68,7 +68,7 @@ func TestCompleteProjectRequiresGoalStep(t *testing.T) {
 	if _, err := service.AddFact(context.Background(), graph.ID, "late fact"); !errors.Is(err, ErrProjectClosed) {
 		t.Fatalf("add fact after completion error = %v, want ErrProjectClosed", err)
 	}
-	if _, err := service.AddStep(context.Background(), graph.ID, graph.Facts[0].ID, graph.Goal.ID); !errors.Is(err, ErrProjectClosed) {
+	if _, err := service.AddStep(context.Background(), graph.ID, graph.Facts[0].ID, graph.Goal.ID, ""); !errors.Is(err, ErrProjectClosed) {
 		t.Fatalf("add step after completion error = %v, want ErrProjectClosed", err)
 	}
 }
@@ -81,22 +81,22 @@ func TestAddStepEnforcesDirectionUniquenessAndProjectOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
-	if _, err := service.AddStep(context.Background(), graph.ID, graph.Goal.ID, graph.Facts[0].ID); !errors.Is(err, ErrInvalid) {
+	if _, err := service.AddStep(context.Background(), graph.ID, graph.Goal.ID, graph.Facts[0].ID, ""); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("goal as origin error = %v, want ErrInvalid", err)
 	}
-	if _, err := service.AddStep(context.Background(), graph.ID, graph.Facts[0].ID, graph.Goal.ID); err != nil {
+	if _, err := service.AddStep(context.Background(), graph.ID, graph.Facts[0].ID, graph.Goal.ID, ""); err != nil {
 		t.Fatalf("add goal edge: %v", err)
 	}
-	if _, err := service.AddStep(context.Background(), graph.ID, graph.Goal.ID, graph.Facts[0].ID); !errors.Is(err, ErrInvalid) {
+	if _, err := service.AddStep(context.Background(), graph.ID, graph.Goal.ID, graph.Facts[0].ID, ""); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("reverse goal edge error = %v, want ErrInvalid", err)
 	}
-	if _, err := service.AddStep(context.Background(), graph.ID, graph.Facts[0].ID, graph.Goal.ID); !errors.Is(err, ErrConflict) {
+	if _, err := service.AddStep(context.Background(), graph.ID, graph.Facts[0].ID, graph.Goal.ID, ""); !errors.Is(err, ErrConflict) {
 		t.Fatalf("duplicate edge error = %v, want ErrConflict", err)
 	}
-	if _, err := service.AddStep(context.Background(), graph.ID, graph.Facts[1].ID, graph.Facts[0].ID); err != nil {
+	if _, err := service.AddStep(context.Background(), graph.ID, graph.Facts[1].ID, graph.Facts[0].ID, ""); err != nil {
 		t.Fatalf("add fact reverse edge: %v", err)
 	}
-	if _, err := service.AddStep(context.Background(), graph.ID, graph.Facts[0].ID, graph.Facts[1].ID); !errors.Is(err, ErrConflict) {
+	if _, err := service.AddStep(context.Background(), graph.ID, graph.Facts[0].ID, graph.Facts[1].ID, ""); !errors.Is(err, ErrConflict) {
 		t.Fatalf("reverse duplicate edge error = %v, want ErrConflict", err)
 	}
 	other, err := service.CreateProject(context.Background(), CreateProjectInput{
@@ -105,7 +105,43 @@ func TestAddStepEnforcesDirectionUniquenessAndProjectOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create second project: %v", err)
 	}
-	if _, err := service.AddStep(context.Background(), graph.ID, graph.Facts[0].ID, other.Facts[0].ID); !errors.Is(err, ErrNotFound) {
+	if _, err := service.AddStep(context.Background(), graph.ID, graph.Facts[0].ID, other.Facts[0].ID, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-project edge error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestAddStepStoresTrimmedDescription(t *testing.T) {
+	service := newTestService(t)
+	graph, err := service.CreateProject(context.Background(), CreateProjectInput{
+		Name: "described", Goal: "goal", Facts: []string{"one", "two"},
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	step, err := service.AddStep(context.Background(), graph.ID, graph.Facts[0].ID, graph.Goal.ID, "  ship the prototype  ")
+	if err != nil {
+		t.Fatalf("add step with description: %v", err)
+	}
+	if step.Description != "ship the prototype" {
+		t.Fatalf("returned description = %q, want trimmed value", step.Description)
+	}
+	steps, err := service.ListSteps(context.Background(), graph.ID)
+	if err != nil || len(steps) != 1 {
+		t.Fatalf("list steps = %+v, err = %v", steps, err)
+	}
+	if steps[0].Description != "ship the prototype" {
+		t.Fatalf("stored description = %q, want trimmed value", steps[0].Description)
+	}
+
+	blank, err := service.AddStep(context.Background(), graph.ID, graph.Facts[1].ID, graph.Goal.ID, "   ")
+	if err != nil {
+		t.Fatalf("add step with blank description: %v", err)
+	}
+	if blank.Description != "" {
+		t.Fatalf("blank description = %q, want empty", blank.Description)
+	}
+	steps, err = service.ListSteps(context.Background(), graph.ID)
+	if err != nil || len(steps) != 2 || steps[1].Description != "" {
+		t.Fatalf("blank description was not stored as empty: %+v, %v", steps, err)
 	}
 }

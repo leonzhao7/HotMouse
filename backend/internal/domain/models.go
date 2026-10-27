@@ -27,11 +27,12 @@ type Node struct {
 }
 
 type Step struct {
-	ID         uint      `json:"id" gorm:"primaryKey"`
-	ProjectID  uint      `json:"project_id" gorm:"not null;index"`
-	FromNodeID uint      `json:"from_node_id" gorm:"not null;check:step_distinct_nodes,from_node_id <> to_node_id"`
-	ToNodeID   uint      `json:"to_node_id" gorm:"not null;index"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID          uint      `json:"id" gorm:"primaryKey"`
+	ProjectID   uint      `json:"project_id" gorm:"not null;index"`
+	FromNodeID  uint      `json:"from_node_id" gorm:"not null;check:step_distinct_nodes,from_node_id <> to_node_id"`
+	ToNodeID    uint      `json:"to_node_id" gorm:"not null;index"`
+	Description string    `json:"description,omitempty" gorm:"not null;default:'';type:text"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type Graph struct {
