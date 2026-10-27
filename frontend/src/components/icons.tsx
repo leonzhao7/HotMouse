@@ -66,7 +66,7 @@ export function IconLink(props: IconProps) {
 export function IconArrowRight(props: IconProps) {
   return (
     <Icon {...props}>
-      <path d="M8.22 2.22a.75.75 0 0 1 0 1.06L5.06 6.5h8.19a.75.75 0 0 1 0 1.5H5.06l3.16 3.22a.75.75 0 1 1-1.06 1.06l-4.5-4.5a.75.75 0 0 1 0-1.06l4.5-4.5a.75.75 0 0 1 1.06 0Z" fill="currentColor" />
+      <path d="M8.22 2.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 1 1-1.06-1.06L11.44 8H2.75a.75.75 0 0 1 0-1.5h8.69L8.22 3.28a.75.75 0 0 1 0-1.06Z" fill="currentColor" />
     </Icon>
   )
 }
