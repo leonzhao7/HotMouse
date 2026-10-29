@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 
 import { Alert } from '@/components/Alert'
 import { Badge } from '@/components/Badge'
@@ -16,10 +16,12 @@ export function LLMLogsPage() {
   const [logs, setLogs] = useState<LLMLog[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
+  const [pageInput, setPageInput] = useState('1')
 
   const load = useCallback(async () => {
     setError(null)
     setCurrentPage(1)
+    setPageInput('1')
     try {
       setLogs(await api.listLLMLogs())
     } catch (cause) {
@@ -38,6 +40,22 @@ export function LLMLogsPage() {
 
   const pageCount = Math.max(1, Math.ceil(logs.length / PAGE_SIZE))
   const visibleLogs = logs.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+
+  const goToPage = (page: number) => {
+    const nextPage = Math.min(pageCount, Math.max(1, page))
+    setCurrentPage(nextPage)
+    setPageInput(String(nextPage))
+  }
+
+  const handlePageJump = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const page = Number.parseInt(pageInput, 10)
+    if (Number.isNaN(page)) {
+      setPageInput(String(currentPage))
+      return
+    }
+    goToPage(page)
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -119,18 +137,37 @@ export function LLMLogsPage() {
             <div className="flex items-center gap-2">
               <Button
                 disabled={currentPage === 1}
-                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                onClick={() => goToPage(currentPage - 1)}
                 size="sm"
               >
                 上一页
               </Button>
               <Button
                 disabled={currentPage === pageCount}
-                onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))}
+                onClick={() => goToPage(currentPage + 1)}
                 size="sm"
               >
                 下一页
               </Button>
+              <form className="flex items-center gap-1" onSubmit={handlePageJump}>
+                <label className="sr-only" htmlFor="llm-log-page-input">
+                  跳转到页面
+                </label>
+                <input
+                  aria-label="跳转到页面"
+                  className="w-14 rounded-md border border-border bg-canvas-subtle px-2 py-1 text-center text-xs text-nav focus:bg-canvas focus:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                  id="llm-log-page-input"
+                  inputMode="numeric"
+                  max={pageCount}
+                  min={1}
+                  onChange={(event) => setPageInput(event.target.value)}
+                  type="number"
+                  value={pageInput}
+                />
+                <Button size="sm" type="submit">
+                  跳转
+                </Button>
+              </form>
             </div>
           </div>
         </Card>
