@@ -10,12 +10,16 @@ import { ApiError, api } from '@/lib/api'
 import { formatDateTime } from '@/lib/format'
 import type { LLMLog } from '@/lib/types'
 
+const PAGE_SIZE = 10
+
 export function LLMLogsPage() {
   const [logs, setLogs] = useState<LLMLog[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [currentPage, setCurrentPage] = useState(1)
 
   const load = useCallback(async () => {
     setError(null)
+    setCurrentPage(1)
     try {
       setLogs(await api.listLLMLogs())
     } catch (cause) {
@@ -31,6 +35,9 @@ export function LLMLogsPage() {
   if (logs === null) {
     return <PageLoading />
   }
+
+  const pageCount = Math.max(1, Math.ceil(logs.length / PAGE_SIZE))
+  const visibleLogs = logs.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
 
   return (
     <div className="flex flex-col gap-4">
@@ -66,7 +73,7 @@ export function LLMLogsPage() {
                 </tr>
               </thead>
               <tbody>
-                {logs.map((log) => (
+                {visibleLogs.map((log) => (
                   <tr className="align-top" key={log.id}>
                     <td className="whitespace-nowrap border-b border-border px-3 py-3 text-xs text-fg-muted">
                       {formatDateTime(log.started_at)}
@@ -104,6 +111,27 @@ export function LLMLogsPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-3 py-3 text-xs text-fg-muted">
+            <span>
+              第 {currentPage} / {pageCount} 页，共 {logs.length} 条
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                disabled={currentPage === 1}
+                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                size="sm"
+              >
+                上一页
+              </Button>
+              <Button
+                disabled={currentPage === pageCount}
+                onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))}
+                size="sm"
+              >
+                下一页
+              </Button>
+            </div>
           </div>
         </Card>
       )}
