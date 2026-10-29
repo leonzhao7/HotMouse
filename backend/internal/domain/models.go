@@ -62,6 +62,26 @@ type Graph struct {
 	Steps []Step `json:"steps"`
 }
 
+// LLMLog stores one complete Dispatch LLM interaction. Request and response
+// fields intentionally live on the same row so the log view can show one call
+// per row. Authentication credentials are never stored here.
+type LLMLog struct {
+	ID               uint      `json:"id" gorm:"primaryKey"`
+	StartedAt        time.Time `json:"started_at" gorm:"index"`
+	CompletedAt      time.Time `json:"completed_at"`
+	Operation        string    `json:"operation" gorm:"not null;default:''"`
+	URL              string    `json:"url" gorm:"not null"`
+	Model            string    `json:"model" gorm:"not null"`
+	MaxTokens        int       `json:"max_tokens" gorm:"not null"`
+	Prompt           string    `json:"prompt" gorm:"not null;type:text"`
+	Response         string    `json:"response" gorm:"not null;type:text"`
+	StatusCode       int       `json:"status_code" gorm:"not null"`
+	PromptTokens     int       `json:"prompt_tokens" gorm:"not null"`
+	CompletionTokens int       `json:"completion_tokens" gorm:"not null"`
+	TotalTokens      int       `json:"total_tokens" gorm:"not null"`
+	Error            string    `json:"error,omitempty" gorm:"not null;default:'';type:text"`
+}
+
 // Settings is the singleton row (ID 1) holding LLM connection details.
 // The graph tables stay append-only; settings are the only mutable record.
 type Settings struct {

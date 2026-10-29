@@ -8,6 +8,7 @@ import { NewProjectPage } from '@/pages/NewProjectPage'
 import { ProjectDetailPage } from '@/pages/ProjectDetailPage'
 import { ProjectListPage } from '@/pages/ProjectListPage'
 import { SettingsPage } from '@/pages/SettingsPage'
+import { LLMLogsPage } from '@/pages/LLMLogsPage'
 
 import './index.css'
 
@@ -21,6 +22,7 @@ const router = createBrowserRouter([
       { path: 'new', element: <NewProjectPage /> },
       { path: 'projects/:id', element: <ProjectDetailPage /> },
       { path: 'settings', element: <SettingsPage /> },
+      { path: 'logs', element: <LLMLogsPage /> },
     ],
   },
 ])

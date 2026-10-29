@@ -98,6 +98,23 @@ export interface UpdateSettingsInput {
   dispatch_summary_prompt: string
 }
 
+export interface LLMLog {
+  id: number
+  started_at: string
+  completed_at: string
+  operation: string
+  url: string
+  model: string
+  max_tokens: number
+  prompt: string
+  response: string
+  status_code: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  error?: string
+}
+
 /** 后端错误码, 见 docs/API.md 的 "Validation and errors"。 */
 export type ApiErrorCode =
   | 'invalid_graph'

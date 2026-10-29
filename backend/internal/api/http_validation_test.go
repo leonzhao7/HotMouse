@@ -161,6 +161,7 @@ func TestHTTPOnlyAllowedRoutesAndAppendMethods(test *testing.T) {
 		"/project/{id:uint64}/fact":   true,
 		"/project/{id:uint64}/step":   true,
 		"/settings":                   true,
+		"/llm-log":                    true,
 	}
 	methodPaths := 0
 	for _, route := range app.GetRoutes() {
@@ -177,8 +178,8 @@ func TestHTTPOnlyAllowedRoutesAndAppendMethods(test *testing.T) {
 			test.Fatalf("unexpected route: %s %s", route.Method, route.Path)
 		}
 	}
-	if methodPaths != 11 {
-		test.Fatalf("registered %d method/path pairs, want 11", methodPaths)
+	if methodPaths != 12 {
+		test.Fatalf("registered %d method/path pairs, want 12", methodPaths)
 	}
 	paths := []string{"/project", fmt.Sprintf("/project/%d/export", graph.ID), fmt.Sprintf("/project/%d/fact", graph.ID), fmt.Sprintf("/project/%d/step", graph.ID), fmt.Sprintf("/project/%d/goal", graph.ID)}
 	for _, path := range paths {

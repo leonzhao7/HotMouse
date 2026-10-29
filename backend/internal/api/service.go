@@ -117,6 +117,12 @@ func (service *Service) ListProjects(ctx context.Context) ([]domain.Project, err
 	return projects, err
 }
 
+func (service *Service) ListLLMLogs(ctx context.Context) ([]domain.LLMLog, error) {
+	logs := make([]domain.LLMLog, 0)
+	err := service.db.WithContext(ctx).Order("id DESC").Limit(200).Find(&logs).Error
+	return logs, err
+}
+
 func (service *Service) GetGoal(ctx context.Context, projectID uint) (domain.Node, error) {
 	var goal domain.Node
 	err := service.db.WithContext(ctx).Where("project_id = ? AND kind = ?", projectID, domain.NodeKindGoal).First(&goal).Error

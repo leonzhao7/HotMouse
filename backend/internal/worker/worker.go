@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"hotmouse/backend/internal/domain"
+	llmlog "hotmouse/backend/internal/logging"
 )
 
 const maxEventLineSize = 4 << 20
@@ -22,10 +23,15 @@ const maxEventLineSize = 4 << 20
 var ErrInvalidConfiguration = errors.New("LLM settings are incomplete")
 
 type chatRequest struct {
-	Model     string        `json:"model"`
-	Messages  []chatMessage `json:"messages"`
-	MaxTokens int           `json:"max_tokens"`
-	Stream    bool          `json:"stream"`
+	Model         string         `json:"model"`
+	Messages      []chatMessage  `json:"messages"`
+	MaxTokens     int            `json:"max_tokens"`
+	Stream        bool           `json:"stream"`
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+}
+
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type chatMessage struct {
@@ -42,6 +48,7 @@ type chatChunk struct {
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error"`
+	Usage *llmlog.TokenUsage `json:"usage"`
 }
 
 func Run(ctx context.Context, settings domain.Settings, prompt string, output io.Writer) error {
@@ -149,10 +156,11 @@ func runWithClient(ctx context.Context, settings domain.Settings, prompt string,
 	}
 
 	body, err := json.Marshal(chatRequest{
-		Model:     settings.Model,
-		Messages:  []chatMessage{{Role: "user", Content: prompt}},
-		MaxTokens: settings.MaxTokens,
-		Stream:    true,
+		Model:         settings.Model,
+		Messages:      []chatMessage{{Role: "user", Content: prompt}},
+		MaxTokens:     settings.MaxTokens,
+		Stream:        true,
+		StreamOptions: streamOptionsFor(ctx),
 	})
 	if err != nil {
 		return fmt.Errorf("encode LLM request: %w", err)
@@ -166,20 +174,62 @@ func runWithClient(ctx context.Context, settings domain.Settings, prompt string,
 	if settings.APIKey != "" {
 		request.Header.Set("Authorization", "Bearer "+settings.APIKey)
 	}
+	llmLogger := llmlog.FromContext(ctx)
+	var llmCall *llmlog.Call
+	llmResponse := llmlog.LLMResponse{URL: endpoint, Model: settings.Model}
+	if llmLogger != nil {
+		llmCall = llmLogger.Start(ctx, llmlog.LLMRequest{
+			Operation: llmlog.OperationFromContext(ctx),
+			URL:       endpoint,
+			Model:     settings.Model,
+			MaxTokens: settings.MaxTokens,
+			Prompt:    prompt,
+		})
+		defer func() { llmCall.Finish(llmResponse) }()
+	}
 
 	response, err := client.Do(request)
 	if err != nil {
+		llmResponse.Error = err.Error()
 		return fmt.Errorf("request LLM: %w", err)
 	}
 	defer response.Body.Close()
+	llmResponse.StatusCode = response.StatusCode
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		message, readErr := io.ReadAll(io.LimitReader(response.Body, 64<<10))
 		if readErr != nil {
+			llmResponse.Error = readErr.Error()
 			return fmt.Errorf("LLM returned HTTP %d; reading error response: %w", response.StatusCode, readErr)
 		}
+		llmResponse.Error = strings.TrimSpace(string(message))
 		return fmt.Errorf("LLM returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(message)))
 	}
-	return consumeEvents(response.Body, output)
+
+	responseContent := new(strings.Builder)
+	responseOutput := io.Writer(output)
+	if llmLogger != nil {
+		responseOutput = io.MultiWriter(responseContent, output)
+	}
+	usage, err := consumeEventsWithUsage(response.Body, responseOutput)
+	if llmLogger != nil {
+		llmResponse.Content = responseContent.String()
+		if usage != nil {
+			llmResponse.PromptTokens = usage.PromptTokens
+			llmResponse.CompletionTokens = usage.CompletionTokens
+			llmResponse.TotalTokens = usage.TotalTokens
+		}
+		if err != nil {
+			llmResponse.Error = err.Error()
+		}
+	}
+	return err
+}
+
+func streamOptionsFor(ctx context.Context) *streamOptions {
+	if llmlog.FromContext(ctx) == nil {
+		return nil
+	}
+	return &streamOptions{IncludeUsage: true}
 }
 
 func chatCompletionsURL(base string) (string, error) {
@@ -197,16 +247,25 @@ func chatCompletionsURL(base string) (string, error) {
 }
 
 func consumeEvents(source io.Reader, output io.Writer) error {
+	_, err := consumeEventsWithUsage(source, output)
+	return err
+}
+
+func consumeEventsWithUsage(source io.Reader, output io.Writer) (*llmlog.TokenUsage, error) {
 	scanner := bufio.NewScanner(source)
 	scanner.Buffer(make([]byte, 64<<10), maxEventLineSize)
 	var data []string
+	var usage *llmlog.TokenUsage
 	for scanner.Scan() {
 		line := strings.TrimSuffix(scanner.Text(), "\r")
 		if line == "" {
-			done, err := writeEvent(data, output)
+			done, eventUsage, err := writeEventWithUsage(data, output)
+			if eventUsage != nil {
+				usage = eventUsage
+			}
 			data = data[:0]
 			if err != nil || done {
-				return err
+				return usage, err
 			}
 			continue
 		}
@@ -222,34 +281,42 @@ func consumeEvents(source io.Reader, output io.Writer) error {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read LLM stream: %w", err)
+		return usage, fmt.Errorf("read LLM stream: %w", err)
 	}
-	_, err := writeEvent(data, output)
-	return err
+	_, eventUsage, err := writeEventWithUsage(data, output)
+	if eventUsage != nil {
+		usage = eventUsage
+	}
+	return usage, err
 }
 
 func writeEvent(data []string, output io.Writer) (bool, error) {
+	done, _, err := writeEventWithUsage(data, output)
+	return done, err
+}
+
+func writeEventWithUsage(data []string, output io.Writer) (bool, *llmlog.TokenUsage, error) {
 	if len(data) == 0 {
-		return false, nil
+		return false, nil, nil
 	}
 	payload := strings.Join(data, "\n")
 	if payload == "[DONE]" {
-		return true, nil
+		return true, nil, nil
 	}
 	var chunk chatChunk
 	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-		return false, fmt.Errorf("decode LLM stream event: %w", err)
+		return false, nil, fmt.Errorf("decode LLM stream event: %w", err)
 	}
 	if chunk.Error != nil {
-		return false, fmt.Errorf("LLM stream error: %s", chunk.Error.Message)
+		return false, chunk.Usage, fmt.Errorf("LLM stream error: %s", chunk.Error.Message)
 	}
 	for _, choice := range chunk.Choices {
 		if choice.Delta.Content == "" {
 			continue
 		}
 		if _, err := io.WriteString(output, choice.Delta.Content); err != nil {
-			return false, fmt.Errorf("write LLM output: %w", err)
+			return false, chunk.Usage, fmt.Errorf("write LLM output: %w", err)
 		}
 	}
-	return false, nil
+	return false, chunk.Usage, nil
 }

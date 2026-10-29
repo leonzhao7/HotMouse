@@ -5,6 +5,7 @@ import { IconRepo } from './icons'
 const NAV_ITEMS = [
   { to: '/', label: '项目', end: true },
   { to: '/settings', label: '设置', end: false },
+  { to: '/logs', label: 'LLM 日志', end: false },
 ]
 
 export function Layout() {

@@ -13,6 +13,7 @@ import (
 
 	"hotmouse/backend/internal/api"
 	"hotmouse/backend/internal/domain"
+	llmlog "hotmouse/backend/internal/logging"
 )
 
 const (
@@ -36,8 +37,9 @@ func (agent AgentFunc) Run(ctx context.Context, settings domain.Settings, prompt
 }
 
 type Dispatcher struct {
-	store Store
-	agent Agent
+	store     Store
+	agent     Agent
+	llmLogger *llmlog.Logger
 
 	mu      sync.Mutex
 	queue   []uint
@@ -58,11 +60,16 @@ type summary struct {
 }
 
 func New(store Store, agent Agent) *Dispatcher {
+	return NewWithLogger(store, agent, nil)
+}
+
+func NewWithLogger(store Store, agent Agent, llmLogger *llmlog.Logger) *Dispatcher {
 	return &Dispatcher{
-		store:   store,
-		agent:   agent,
-		pending: make(map[uint]struct{}),
-		wake:    make(chan struct{}, 1),
+		store:     store,
+		agent:     agent,
+		llmLogger: llmLogger,
+		pending:   make(map[uint]struct{}),
+		wake:      make(chan struct{}, 1),
 	}
 }
 
@@ -195,7 +202,7 @@ func (dispatcher *Dispatcher) planNextStep(ctx context.Context, settings domain.
 	prompt := renderPrompt(settings.DispatchPlanPrompt, domain.DefaultPlanPrompt, map[string]string{
 		"graph_json": string(graphJSON),
 	})
-	content, err := dispatcher.runAgent(ctx, settings.ForDispatch(), prompt)
+	content, err := dispatcher.runDispatchAgent(ctx, settings.ForDispatch(), prompt, "plan")
 	if err != nil {
 		return plan{}, err
 	}
@@ -220,7 +227,7 @@ func (dispatcher *Dispatcher) summarize(ctx context.Context, settings domain.Set
 		"chosen_action_json": mustJSON(selected),
 		"worker_output":      workerOutput,
 	})
-	content, err := dispatcher.runAgent(ctx, settings.ForDispatch(), prompt)
+	content, err := dispatcher.runDispatchAgent(ctx, settings.ForDispatch(), prompt, "summary")
 	if err != nil {
 		return summary{}, err
 	}
@@ -251,6 +258,15 @@ func (dispatcher *Dispatcher) runAgent(ctx context.Context, settings domain.Sett
 		return "", err
 	}
 	return output.String(), nil
+}
+
+func (dispatcher *Dispatcher) runDispatchAgent(ctx context.Context, settings domain.Settings, prompt, operation string) (string, error) {
+	if dispatcher.llmLogger == nil {
+		return dispatcher.runAgent(ctx, settings, prompt)
+	}
+	ctx = llmlog.WithLLMLogger(ctx, dispatcher.llmLogger)
+	ctx = llmlog.WithOperation(ctx, operation)
+	return dispatcher.runAgent(ctx, settings, prompt)
 }
 
 func decodeObject(content string, target any) error {

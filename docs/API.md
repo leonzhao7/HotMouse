@@ -16,6 +16,7 @@ It exposes only the following route patterns:
 | `POST` | `/project/{id}/step` | Append a directed step |
 | `GET` | `/settings` | Read the LLM settings |
 | `PUT` | `/settings` | Replace the LLM settings |
+| `GET` | `/llm-log` | List the latest persisted Dispatch LLM interactions |
 
 Graph data has no update or delete endpoints. `/settings` is the only mutable
 resource. Project details are available from `GET /project`; goal, facts, and
@@ -153,6 +154,15 @@ Settings persist in SQLite and are returned as stored, including API keys and
 `updated_at`; keys are not masked. Only `GET` and `PUT` are registered on this
 path.
 
+## LLM logs
+
+`GET /llm-log` returns the latest 200 persisted Dispatch LLM interactions. Each
+item contains the request and response on one row, including the operation,
+URL, model, configured maximum tokens, prompt, response content, HTTP status,
+actual prompt/completion/total token counts, and any error. API keys are never
+stored in LLM logs. Worker LLM calls and external Worker commands are not
+recorded.
+
 ## Validation and errors
 
 Send JSON bodies with `Content-Type: application/json`. Unknown fields,
@@ -194,8 +204,8 @@ SQLite writes use immediate transactions and a five-second busy timeout. LLM
 settings live in a singleton row and are the only mutable data; the graph
 tables keep their append-only triggers. Data and constraints survive
 application restarts. There are no graph update or delete routes, only the
-`/settings` replacement endpoint, and no extra health, documentation, or
-frontend routes.
+`/settings` replacement endpoint. The frontend also provides `/logs` for
+persisted Dispatch LLM interactions.
 
 ## Run
 

@@ -19,6 +19,7 @@ import (
 	"hotmouse/backend/internal/api"
 	"hotmouse/backend/internal/dispatch"
 	"hotmouse/backend/internal/domain"
+	llmlog "hotmouse/backend/internal/logging"
 	"hotmouse/backend/internal/storage"
 	"hotmouse/backend/internal/worker"
 )
@@ -55,7 +56,7 @@ func runAPI() error {
 	defer sqlDB.Close()
 
 	service := api.NewService(db)
-	dispatcher := dispatch.New(service, dispatch.AgentFunc(worker.RunConfigured))
+	dispatcher := dispatch.NewWithLogger(service, dispatch.AgentFunc(worker.RunConfigured), llmlog.NewWithSink(log.Default(), storage.NewLLMLogSink(db)))
 	service.SetProjectChangedHandler(dispatcher.Enqueue)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

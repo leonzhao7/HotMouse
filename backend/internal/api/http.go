@@ -32,6 +32,7 @@ func NewApp(service *Service) *iris.Application {
 	app.Post("/project/{id:uint64}/step", handler.addStep)
 	app.Get("/settings", handler.getSettings)
 	app.Put("/settings", handler.updateSettings)
+	app.Get("/llm-log", handler.listLLMLogs)
 	app.OnErrorCode(http.StatusNotFound, func(ctx iris.Context) {
 		ctx.JSON(errorBody{Error: errorDetail{Code: "not_found", Message: "resource not found"}})
 	})
@@ -213,6 +214,15 @@ func (handler *Handler) updateSettings(ctx iris.Context) {
 		return
 	}
 	ctx.JSON(settings)
+}
+
+func (handler *Handler) listLLMLogs(ctx iris.Context) {
+	logs, err := handler.service.ListLLMLogs(ctx.Request().Context())
+	if err != nil {
+		writeError(ctx, err)
+		return
+	}
+	ctx.JSON(logs)
 }
 
 func readProjectID(ctx iris.Context) (uint, bool) {

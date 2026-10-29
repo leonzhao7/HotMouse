@@ -5,6 +5,7 @@ import type {
   CreateProjectInput,
   Graph,
   GraphNode,
+  LLMLog,
   Project,
   Settings,
   Step,
@@ -108,4 +109,6 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(input),
     }),
+
+  listLLMLogs: () => request<LLMLog[]>('/llm-log'),
 }
