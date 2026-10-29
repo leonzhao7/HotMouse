@@ -26,11 +26,25 @@ func Open(dsn string) (*gorm.DB, error) {
 	}
 	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetMaxIdleConns(1)
+	var projectTableCount int
+	if err := db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'projects'").Scan(&projectTableCount).Error; err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
+	projectTableExists := projectTableCount > 0
 	err = db.Transaction(func(tx *gorm.DB) error {
-		if err := migrateProjectState(tx); err != nil {
-			return err
+		return migrateProjectState(tx)
+	})
+	if err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
+	err = db.Transaction(func(tx *gorm.DB) error {
+		models := []any{&domain.Node{}, &domain.Step{}, &domain.Settings{}, &domain.LLMLog{}}
+		if !projectTableExists {
+			models = append([]any{&domain.Project{}}, models...)
 		}
-		if err := tx.AutoMigrate(&domain.Project{}, &domain.Node{}, &domain.Step{}, &domain.Settings{}, &domain.LLMLog{}); err != nil {
+		if err := tx.AutoMigrate(models...); err != nil {
 			return err
 		}
 		for _, statement := range graphConstraints {
