@@ -20,12 +20,14 @@ var (
 	ErrGraphChanged    = errors.New("project graph changed while dispatch was running")
 	ErrGoalUnreachable = errors.New("at least one step must point to the goal before completion")
 	ErrProjectClosed   = errors.New("completed projects cannot accept new graph data")
+	ErrProjectAborted  = errors.New("aborted projects cannot accept new graph data")
 )
 
 type Service struct {
 	db                    *gorm.DB
 	projectChangedMu      sync.RWMutex
 	projectChangedHandler func(uint)
+	projectAbortedHandler func(uint)
 }
 
 func NewService(db *gorm.DB) *Service {
@@ -38,9 +40,27 @@ func (service *Service) SetProjectChangedHandler(handler func(uint)) {
 	service.projectChangedHandler = handler
 }
 
+// SetProjectAbortedHandler registers a callback that is invoked after a
+// project enters the terminal aborted state. The dispatcher uses this hook to
+// cancel an in-flight LLM or worker call immediately.
+func (service *Service) SetProjectAbortedHandler(handler func(uint)) {
+	service.projectChangedMu.Lock()
+	defer service.projectChangedMu.Unlock()
+	service.projectAbortedHandler = handler
+}
+
 func (service *Service) notifyProjectChanged(projectID uint) {
 	service.projectChangedMu.RLock()
 	handler := service.projectChangedHandler
+	service.projectChangedMu.RUnlock()
+	if handler != nil {
+		handler(projectID)
+	}
+}
+
+func (service *Service) notifyProjectAborted(projectID uint) {
+	service.projectChangedMu.RLock()
+	handler := service.projectAbortedHandler
 	service.projectChangedMu.RUnlock()
 	if handler != nil {
 		handler(projectID)
@@ -172,6 +192,9 @@ func (service *Service) ApplyDispatchResult(ctx context.Context, expected domain
 			return mapNotFound(err)
 		}
 		if current.Status != domain.ProjectOpen {
+			if current.Status == domain.ProjectAborted {
+				return ErrProjectAborted
+			}
 			return ErrProjectClosed
 		}
 		if err := tx.Where("project_id = ? AND kind = ?", expected.ID, domain.NodeKindGoal).First(&current.Goal).Error; err != nil {
@@ -345,6 +368,9 @@ func (service *Service) CompleteProject(ctx context.Context, projectID uint) (do
 		if project.Status == domain.ProjectCompleted {
 			return nil
 		}
+		if project.Status == domain.ProjectAborted {
+			return ErrProjectAborted
+		}
 		var incoming int64
 		if err := tx.Table("steps").Joins("JOIN nodes ON nodes.id = steps.to_node_id").
 			Where("steps.project_id = ? AND nodes.project_id = ? AND nodes.kind = ?", projectID, projectID, domain.NodeKindGoal).
@@ -372,6 +398,40 @@ func (service *Service) CompleteProject(ctx context.Context, projectID uint) (do
 	return project, nil
 }
 
+func (service *Service) AbortProject(ctx context.Context, projectID uint) (domain.Project, error) {
+	var project domain.Project
+	aborted := false
+	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&project, projectID).Error; err != nil {
+			return mapNotFound(err)
+		}
+		if project.Status == domain.ProjectAborted {
+			return nil
+		}
+		if project.Status == domain.ProjectCompleted {
+			return ErrProjectClosed
+		}
+		abortedAt := time.Now().UTC()
+		if err := tx.Model(&project).Updates(map[string]any{
+			"status":     domain.ProjectAborted,
+			"aborted_at": abortedAt,
+		}).Error; err != nil {
+			return err
+		}
+		project.Status = domain.ProjectAborted
+		project.AbortedAt = &abortedAt
+		aborted = true
+		return nil
+	})
+	if err != nil {
+		return domain.Project{}, err
+	}
+	if aborted {
+		service.notifyProjectAborted(projectID)
+	}
+	return project, nil
+}
+
 func (service *Service) ensureProject(ctx context.Context, projectID uint) error {
 	var project domain.Project
 	return mapNotFound(service.db.WithContext(ctx).First(&project, projectID).Error)
@@ -383,6 +443,9 @@ func ensureOpenProject(db *gorm.DB, projectID uint) error {
 		return mapNotFound(err)
 	}
 	if project.Status != domain.ProjectOpen {
+		if project.Status == domain.ProjectAborted {
+			return ErrProjectAborted
+		}
 		return ErrProjectClosed
 	}
 	return nil

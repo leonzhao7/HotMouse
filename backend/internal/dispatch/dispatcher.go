@@ -44,7 +44,12 @@ type Dispatcher struct {
 	mu      sync.Mutex
 	queue   []uint
 	pending map[uint]struct{}
+	active  map[uint]*projectRun
 	wake    chan struct{}
+}
+
+type projectRun struct {
+	cancel context.CancelFunc
 }
 
 type plan struct {
@@ -69,6 +74,7 @@ func NewWithLogger(store Store, agent Agent, llmLogger *llmlog.Logger) *Dispatch
 		agent:     agent,
 		llmLogger: llmLogger,
 		pending:   make(map[uint]struct{}),
+		active:    make(map[uint]*projectRun),
 		wake:      make(chan struct{}, 1),
 	}
 }
@@ -82,6 +88,10 @@ func (dispatcher *Dispatcher) Enqueue(projectID uint) {
 		dispatcher.mu.Unlock()
 		return
 	}
+	if _, exists := dispatcher.active[projectID]; exists {
+		dispatcher.mu.Unlock()
+		return
+	}
 	dispatcher.pending[projectID] = struct{}{}
 	dispatcher.queue = append(dispatcher.queue, projectID)
 	dispatcher.mu.Unlock()
@@ -89,6 +99,29 @@ func (dispatcher *Dispatcher) Enqueue(projectID uint) {
 	case dispatcher.wake <- struct{}{}:
 	default:
 	}
+}
+
+// Cancel stops a queued or currently running dispatch for a project. The
+// project status is persisted by the API service; this method only interrupts
+// dispatcher work that may otherwise continue after the project is aborted.
+func (dispatcher *Dispatcher) Cancel(projectID uint) {
+	if projectID == 0 {
+		return
+	}
+	dispatcher.mu.Lock()
+	if run, active := dispatcher.active[projectID]; active {
+		run.cancel()
+	}
+	if _, pending := dispatcher.pending[projectID]; pending {
+		delete(dispatcher.pending, projectID)
+		for index, queuedID := range dispatcher.queue {
+			if queuedID == projectID {
+				dispatcher.queue = append(dispatcher.queue[:index], dispatcher.queue[index+1:]...)
+				break
+			}
+		}
+	}
+	dispatcher.mu.Unlock()
 }
 
 func (dispatcher *Dispatcher) Run(ctx context.Context) {
@@ -126,6 +159,8 @@ func (dispatcher *Dispatcher) pop() (uint, bool) {
 }
 
 func (dispatcher *Dispatcher) dispatchProject(ctx context.Context, projectID uint) error {
+	ctx, finish := dispatcher.startProject(ctx, projectID)
+	defer finish()
 	settings, err := dispatcher.store.GetSettings(ctx)
 	if err != nil {
 		return fmt.Errorf("load LLM settings: %w", err)
@@ -192,6 +227,22 @@ func (dispatcher *Dispatcher) dispatchProject(ctx context.Context, projectID uin
 	}
 	log.Printf("dispatch paused project %d after %d iterations", projectID, iterations)
 	return nil
+}
+
+func (dispatcher *Dispatcher) startProject(parent context.Context, projectID uint) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	run := &projectRun{cancel: cancel}
+	dispatcher.mu.Lock()
+	dispatcher.active[projectID] = run
+	dispatcher.mu.Unlock()
+	return ctx, func() {
+		dispatcher.mu.Lock()
+		if current, ok := dispatcher.active[projectID]; ok && current == run {
+			delete(dispatcher.active, projectID)
+		}
+		dispatcher.mu.Unlock()
+		cancel()
+	}
 }
 
 func (dispatcher *Dispatcher) planNextStep(ctx context.Context, settings domain.Settings, graph domain.Graph) (plan, error) {

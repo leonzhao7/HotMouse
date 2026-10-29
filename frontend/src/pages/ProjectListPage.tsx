@@ -16,7 +16,7 @@ export function ProjectListPage() {
   const [projects, setProjects] = useState<Project[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'completed'>('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'completed' | 'aborted'>('all')
 
   const load = useCallback(async () => {
     setError(null)
@@ -86,6 +86,7 @@ export function ProjectListPage() {
               ['all', '全部'],
               ['open', '进行中'],
               ['completed', '已完成'],
+              ['aborted', '已中止'],
             ] as const
           ).map(([value, label]) => (
             <Button
@@ -130,15 +131,29 @@ export function ProjectListPage() {
                     <p className="mt-1 text-sm text-fg-muted">{project.description}</p>
                   ) : null}
                 </div>
-                <Badge tone={project.status === 'completed' ? 'success' : 'accent'}>
-                  {project.status === 'completed' ? '已完成' : '进行中'}
+                <Badge
+                  tone={
+                    project.status === 'completed'
+                      ? 'success'
+                      : project.status === 'aborted'
+                        ? 'danger'
+                        : 'accent'
+                  }
+                >
+                  {project.status === 'completed'
+                    ? '已完成'
+                    : project.status === 'aborted'
+                      ? '已中止'
+                      : '进行中'}
                 </Badge>
               </div>
               <p className="mt-3 text-xs text-fg-subtle">
                 #{project.id} · 创建于 {formatRelative(project.created_at)}
                 {project.completed_at
                   ? ` · 完成于 ${formatRelative(project.completed_at)}`
-                  : null}
+                  : project.aborted_at
+                    ? ` · 中止于 ${formatRelative(project.aborted_at)}`
+                    : null}
               </p>
             </Card>
           ))}

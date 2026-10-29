@@ -10,6 +10,7 @@ It exposes only the following route patterns:
 | `GET` | `/project/{id}/export` | Download the project graph as JSON |
 | `GET` | `/project/{id}/goal` | Read the project's immutable goal node |
 | `POST` | `/project/{id}/goal` | Complete a project after a step reaches its goal |
+| `POST` | `/project/{id}/abort` | Abort an open project and cancel its dispatch work |
 | `GET` | `/project/{id}/fact` | List fact nodes |
 | `POST` | `/project/{id}/fact` | Append a fact node |
 | `GET` | `/project/{id}/step` | List directed steps |
@@ -81,12 +82,19 @@ facts or steps may be appended. Repeating the completion request is idempotent
 and returns the original completion timestamp. Completion changes project
 status, not the goal node.
 
+Abort an open project by sending `POST /project/{id}/abort` with an empty body.
+Aborted projects are terminal: their dispatch work is cancelled and no further
+facts or steps may be appended. Repeating the abort request is idempotent and
+returns the original `aborted_at` timestamp. A completed project cannot be
+aborted.
+
 Successful creation operations return `201 Created`. Invalid graph operations
 return `400`, unknown project or node IDs return `404`, and duplicate steps
 return `409`. Responses use JSON.
 
 `GET /project` returns an array of project metadata (`id`, `name`, optional
-`description`, `status`, `created_at`, and optional `completed_at`). The goal
+`description`, `status`, `created_at`, and optional `completed_at` or
+`aborted_at`). `status` is one of `open`, `completed`, or `aborted`. The goal
 endpoint returns one node. Fact and step endpoints return arrays sorted by ID;
 an empty list is `[]`, not `null`. Node objects contain `id`, `project_id`,
 `kind`, `content`, and `created_at`. Step objects contain `id`, `project_id`,
@@ -186,7 +194,8 @@ Errors use this shape:
 
 Graph validation uses `invalid_graph` (`400`), missing resources use
 `not_found` (`404`), duplicate node pairs use `duplicate_step` (`409`), and
-attempts to append to a completed project use `project_completed` (`409`).
+attempts to append to a completed or aborted project use `project_completed` or
+`project_aborted` (`409`) respectively.
 Settings validation uses `invalid_settings` (`400`). Unexpected storage
 failures return a generic `internal_error` (`500`).
 
@@ -196,9 +205,10 @@ GORM initializes the SQLite schema automatically. A partial unique index limits
 each project to one goal, and a unique index on normalized node pairs prevents
 both duplicate and reverse steps, including concurrent inserts. SQLite checks
 and triggers enforce valid node kinds, project-local endpoints, goal direction,
-and the completion precondition. Nodes and steps cannot be updated or deleted,
-including through replacement/upsert SQL. Completing a project only updates
-its status and completion timestamp; it does not modify its graph.
+and terminal completion or abort states. Nodes and steps cannot be updated or deleted,
+including through replacement/upsert SQL. Completing or aborting a project only
+updates its status and corresponding timestamp; neither operation modifies its
+graph.
 
 SQLite writes use immediate transactions and a five-second busy timeout. LLM
 settings live in a singleton row and are the only mutable data; the graph

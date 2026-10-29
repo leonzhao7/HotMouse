@@ -7,7 +7,7 @@ import { Button } from '@/components/Button'
 import { Card } from '@/components/Card'
 import { TextArea } from '@/components/Field'
 import { GraphView } from '@/components/GraphView'
-import { IconArrowRight, IconCheck, IconLink, IconLock, IconPlus, IconTarget } from '@/components/icons'
+import { IconAlert, IconArrowRight, IconCheck, IconLink, IconLock, IconPlus, IconTarget } from '@/components/icons'
 import { PageLoading } from '@/components/Spinner'
 import { ApiError, api } from '@/lib/api'
 import { formatDateTime } from '@/lib/format'
@@ -64,6 +64,8 @@ export function ProjectDetailPage() {
   }, [load])
 
   const isCompleted = data?.project.status === 'completed'
+  const isAborted = data?.project.status === 'aborted'
+  const isClosed = isCompleted || isAborted
 
   const factById = useMemo(() => {
     const map = new Map<number, GraphNode>()
@@ -131,6 +133,13 @@ export function ProjectDetailPage() {
     })
   }
 
+  const handleAbort = () => {
+    void runAction(async () => {
+      await api.abortProject(projectId)
+      return '项目已中止。'
+    })
+  }
+
   if (loadError) {
     return (
       <div className="flex flex-col gap-3">
@@ -156,8 +165,8 @@ export function ProjectDetailPage() {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-semibold text-fg md:text-3xl">{project.name}</h1>
-            <Badge tone={isCompleted ? 'success' : 'accent'}>
-              {isCompleted ? '已完成' : '进行中'}
+            <Badge tone={isCompleted ? 'success' : isAborted ? 'danger' : 'accent'}>
+              {isCompleted ? '已完成' : isAborted ? '已中止' : '进行中'}
             </Badge>
           </div>
           {project.description ? (
@@ -167,7 +176,9 @@ export function ProjectDetailPage() {
             #{project.id} · 创建于 {formatDateTime(project.created_at)}
             {project.completed_at
               ? ` · 完成于 ${formatDateTime(project.completed_at)}`
-              : null}
+              : project.aborted_at
+                ? ` · 中止于 ${formatDateTime(project.aborted_at)}`
+                : null}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -182,22 +193,33 @@ export function ProjectDetailPage() {
               <IconLock className="h-4 w-4" />
               已完成
             </Button>
-          ) : (
-            <Button
-              disabled={busy || goalIncoming.length === 0}
-              onClick={handleComplete}
-              variant="primary"
-            >
-              <IconCheck className="h-4 w-4" />
-              标记为完成
+          ) : isAborted ? (
+            <Button disabled variant="secondary">
+              <IconAlert className="h-4 w-4" />
+              已中止
             </Button>
+          ) : (
+            <>
+              <Button
+                disabled={busy || goalIncoming.length === 0}
+                onClick={handleComplete}
+                variant="primary"
+              >
+                <IconCheck className="h-4 w-4" />
+                标记为完成
+              </Button>
+              <Button disabled={busy} onClick={handleAbort} variant="danger">
+                <IconAlert className="h-4 w-4" />
+                中止项目
+              </Button>
+            </>
           )}
         </div>
       </div>
 
       {actionError ? <Alert tone="danger">{actionError}</Alert> : null}
       {notice ? <Alert tone="success">{notice}</Alert> : null}
-      {!isCompleted && goalIncoming.length === 0 ? (
+      {!isClosed && goalIncoming.length === 0 ? (
         <Alert tone="info">
           目标目前不可达 —— 至少需要一条指向目标的步骤才能完成项目。
         </Alert>
@@ -245,7 +267,7 @@ export function ProjectDetailPage() {
             ) : null}
           </ul>
 
-          {isCompleted ? null : (
+          {isClosed ? null : (
             <form className="flex flex-col gap-2 border-t border-border pt-3" onSubmit={handleAddFact}>
               <TextArea
                 label="追加事实"
@@ -307,7 +329,7 @@ export function ProjectDetailPage() {
             ) : null}
           </ul>
 
-          {isCompleted ? null : (
+          {isClosed ? null : (
             <form
               className="flex flex-col gap-2 border-t border-border pt-3"
               onSubmit={handleAddStep}

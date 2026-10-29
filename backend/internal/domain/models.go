@@ -7,6 +7,7 @@ const (
 	NodeKindGoal     = "goal"
 	ProjectOpen      = "open"
 	ProjectCompleted = "completed"
+	ProjectAborted   = "aborted"
 
 	DefaultMaxIterations = 8
 	DefaultPlanPrompt    = `PHASE:PLAN
@@ -33,9 +34,10 @@ type Project struct {
 	ID          uint       `json:"id" gorm:"primaryKey"`
 	Name        string     `json:"name" gorm:"not null;check:project_name_required,length(trim(name)) > 0"`
 	Description string     `json:"description,omitempty" gorm:"type:text"`
-	Status      string     `json:"status" gorm:"not null;check:project_state,(status = 'open' AND completed_at IS NULL) OR (status = 'completed' AND completed_at IS NOT NULL)"`
+	Status      string     `json:"status" gorm:"not null;check:project_state,(status = 'open' AND completed_at IS NULL AND aborted_at IS NULL) OR (status = 'completed' AND completed_at IS NOT NULL AND aborted_at IS NULL) OR (status = 'aborted' AND completed_at IS NULL AND aborted_at IS NOT NULL)"`
 	CreatedAt   time.Time  `json:"created_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	AbortedAt   *time.Time `json:"aborted_at,omitempty"`
 }
 
 type Node struct {

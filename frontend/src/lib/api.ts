@@ -86,6 +86,12 @@ export const api = {
       body: JSON.stringify({}),
     }),
 
+  abortProject: (projectId: number) =>
+    request<Project>(`/project/${projectId}/abort`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+
   listFacts: (projectId: number) => request<GraphNode[]>(`/project/${projectId}/fact`),
 
   addFact: (projectId: number, content: string) =>

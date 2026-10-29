@@ -26,6 +26,7 @@ func NewApp(service *Service) *iris.Application {
 	app.Get("/project/{id:uint64}/export", handler.exportProject)
 	app.Get("/project/{id:uint64}/goal", handler.getGoal)
 	app.Post("/project/{id:uint64}/goal", handler.completeProject)
+	app.Post("/project/{id:uint64}/abort", handler.abortProject)
 	app.Get("/project/{id:uint64}/fact", handler.listFacts)
 	app.Post("/project/{id:uint64}/fact", handler.addFact)
 	app.Get("/project/{id:uint64}/step", handler.listSteps)
@@ -119,6 +120,23 @@ func (handler *Handler) completeProject(ctx iris.Context) {
 		return
 	}
 	project, err := handler.service.CompleteProject(ctx.Request().Context(), projectID)
+	if err != nil {
+		writeError(ctx, err)
+		return
+	}
+	ctx.JSON(project)
+}
+
+func (handler *Handler) abortProject(ctx iris.Context) {
+	projectID, ok := readProjectID(ctx)
+	if !ok {
+		return
+	}
+	var input struct{}
+	if !readJSON(ctx, &input, true) {
+		return
+	}
+	project, err := handler.service.AbortProject(ctx.Request().Context(), projectID)
 	if err != nil {
 		writeError(ctx, err)
 		return
@@ -304,6 +322,8 @@ func writeError(ctx iris.Context, err error) {
 		status, code = http.StatusConflict, "goal_unreachable"
 	case errors.Is(err, ErrProjectClosed):
 		status, code = http.StatusConflict, "project_completed"
+	case errors.Is(err, ErrProjectAborted):
+		status, code = http.StatusConflict, "project_aborted"
 	}
 	ctx.StatusCode(status)
 	message := err.Error()

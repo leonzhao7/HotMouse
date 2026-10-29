@@ -109,6 +109,26 @@ func TestHTTPProjectCompletionAndReadResources(test *testing.T) {
 	}
 }
 
+func TestHTTPProjectAbortIsTerminal(test *testing.T) {
+	app := newTestApp(test)
+	graph := createHTTPGraph(test, app)
+	abortPath := fmt.Sprintf("/project/%d/abort", graph.ID)
+	response := serveJSON(test, app, http.MethodPost, abortPath, "")
+	if response.Code != http.StatusOK {
+		test.Fatalf("abort status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var aborted domain.Project
+	if err := json.Unmarshal(response.Body.Bytes(), &aborted); err != nil || aborted.Status != domain.ProjectAborted || aborted.AbortedAt == nil {
+		test.Fatalf("abort response = %+v, error = %v", aborted, err)
+	}
+	repeated := serveJSON(test, app, http.MethodPost, abortPath, `{}`)
+	if repeated.Code != http.StatusOK || repeated.Body.String() != response.Body.String() {
+		test.Fatalf("non-idempotent abort: %s -> %s", response.Body.String(), repeated.Body.String())
+	}
+	assertHTTPError(test, serveJSON(test, app, http.MethodPost, fmt.Sprintf("/project/%d/fact", graph.ID), `{"content":"late"}`), http.StatusConflict, "project_aborted")
+	assertHTTPError(test, serveJSON(test, app, http.MethodPost, fmt.Sprintf("/project/%d/goal", graph.ID), `{}`), http.StatusConflict, "project_aborted")
+}
+
 func TestHTTPRejectsInvalidBodies(test *testing.T) {
 	app := newTestApp(test)
 	valid := `{"name":"project","goal":"goal","facts":["fact"]}`
@@ -158,6 +178,7 @@ func TestHTTPOnlyAllowedRoutesAndAppendMethods(test *testing.T) {
 		"/project":                    true,
 		"/project/{id:uint64}/export": true,
 		"/project/{id:uint64}/goal":   true,
+		"/project/{id:uint64}/abort":  true,
 		"/project/{id:uint64}/fact":   true,
 		"/project/{id:uint64}/step":   true,
 		"/settings":                   true,
@@ -178,10 +199,10 @@ func TestHTTPOnlyAllowedRoutesAndAppendMethods(test *testing.T) {
 			test.Fatalf("unexpected route: %s %s", route.Method, route.Path)
 		}
 	}
-	if methodPaths != 12 {
-		test.Fatalf("registered %d method/path pairs, want 12", methodPaths)
+	if methodPaths != 13 {
+		test.Fatalf("registered %d method/path pairs, want 13", methodPaths)
 	}
-	paths := []string{"/project", fmt.Sprintf("/project/%d/export", graph.ID), fmt.Sprintf("/project/%d/fact", graph.ID), fmt.Sprintf("/project/%d/step", graph.ID), fmt.Sprintf("/project/%d/goal", graph.ID)}
+	paths := []string{"/project", fmt.Sprintf("/project/%d/export", graph.ID), fmt.Sprintf("/project/%d/fact", graph.ID), fmt.Sprintf("/project/%d/step", graph.ID), fmt.Sprintf("/project/%d/goal", graph.ID), fmt.Sprintf("/project/%d/abort", graph.ID)}
 	for _, path := range paths {
 		for _, method := range []string{http.MethodPut, http.MethodPatch, http.MethodDelete} {
 			assertHTTPError(test, serveJSON(test, app, method, path, `{}`), http.StatusMethodNotAllowed, "method_not_allowed")

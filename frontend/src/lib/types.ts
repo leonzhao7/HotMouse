@@ -1,6 +1,6 @@
 /** 与 docs/API.md 一一对应的类型定义。 */
 
-export type ProjectStatus = 'open' | 'completed'
+export type ProjectStatus = 'open' | 'completed' | 'aborted'
 
 export type NodeKind = 'fact' | 'goal'
 
@@ -11,6 +11,7 @@ export interface Project {
   status: ProjectStatus
   created_at: string
   completed_at?: string
+  aborted_at?: string
 }
 
 export interface GraphNode {
@@ -38,6 +39,7 @@ export interface Graph {
   status: ProjectStatus
   created_at: string
   completed_at?: string
+  aborted_at?: string
   goal: GraphNode
   facts: GraphNode[]
   steps: Step[]
@@ -123,6 +125,7 @@ export type ApiErrorCode =
   | 'duplicate_step'
   | 'goal_unreachable'
   | 'project_completed'
+  | 'project_aborted'
   | 'invalid_json'
   | 'invalid_project_id'
   | 'unsupported_media_type'

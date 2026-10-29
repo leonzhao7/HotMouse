@@ -58,6 +58,7 @@ func runAPI() error {
 	service := api.NewService(db)
 	dispatcher := dispatch.NewWithLogger(service, dispatch.AgentFunc(worker.RunConfigured), llmlog.NewWithSink(log.Default(), storage.NewLLMLogSink(db)))
 	service.SetProjectChangedHandler(dispatcher.Enqueue)
+	service.SetProjectAbortedHandler(dispatcher.Cancel)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go dispatcher.Run(ctx)
