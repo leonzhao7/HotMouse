@@ -90,22 +90,15 @@ export function LLMLogsPage() {
                       <p>合计 {log.total_tokens}</p>
                     </td>
                     <td className="max-w-80 border-b border-border px-3 py-3">
-                      <details>
-                        <summary className="cursor-pointer text-accent">查看请求</summary>
-                        <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-subtle p-2 font-mono text-xs text-fg">
-                          {log.prompt}
-                        </pre>
-                      </details>
+                      <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-subtle p-2 font-mono text-xs text-fg">
+                        {log.prompt}
+                      </pre>
                     </td>
                     <td className="max-w-80 border-b border-border px-3 py-3">
-                      <details>
-                        <summary className="cursor-pointer text-accent">
-                          {log.error ? '查看错误' : '查看响应'}
-                        </summary>
-                        <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-subtle p-2 font-mono text-xs text-fg">
-                          {log.error || log.response || '（空响应）'}
-                        </pre>
-                      </details>
+                      <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-subtle p-2 font-mono text-xs text-fg">
+                        {log.response || '（空响应）'}
+                      </pre>
+                      {log.error ? <p className="mt-2 break-words text-xs text-danger">错误：{log.error}</p> : null}
                     </td>
                   </tr>
                 ))}
