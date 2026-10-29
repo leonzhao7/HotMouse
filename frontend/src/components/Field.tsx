@@ -28,14 +28,22 @@ export function Field({ label, hint, children, htmlFor }: FieldProps) {
 interface TextInputProps extends InputHTMLAttributes<HTMLInputElement> {
   label: string
   hint?: ReactNode
+  trailingAction?: ReactNode
 }
 
-export function TextInput({ label, hint, id, className = '', ...props }: TextInputProps) {
+export function TextInput({ label, hint, id, className = '', trailingAction, ...props }: TextInputProps) {
   const generatedId = useId()
   const inputId = id ?? generatedId
   return (
     <Field hint={hint} htmlFor={inputId} label={label}>
-      <input className={`${FIELD_CLASS} ${className}`} id={inputId} {...props} />
+      {trailingAction ? (
+        <div className="relative">
+          <input className={`${FIELD_CLASS} pr-10 ${className}`} id={inputId} {...props} />
+          <div className="absolute inset-y-0 right-0 flex items-center pr-2">{trailingAction}</div>
+        </div>
+      ) : (
+        <input className={`${FIELD_CLASS} ${className}`} id={inputId} {...props} />
+      )}
     </Field>
   )
 }

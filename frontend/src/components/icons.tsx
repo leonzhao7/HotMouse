@@ -111,6 +111,35 @@ export function IconLock(props: IconProps) {
   )
 }
 
+export function IconEye(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path
+        d="M8 2C4.75 2 1.9 4.32.5 8c1.4 3.68 4.25 6 7.5 6s6.1-2.32 7.5-6C14.1 4.32 11.25 2 8 2Zm0 10.5A5.9 5.9 0 0 1 2.15 8 5.9 5.9 0 0 1 8 3.5 5.9 5.9 0 0 1 13.85 8 5.9 5.9 0 0 1 8 12.5Zm0-2A2.5 2.5 0 1 0 8 5a2.5 2.5 0 0 0 0 5.5Z"
+        fill="currentColor"
+      />
+    </Icon>
+  )
+}
+
+export function IconEyeClosed(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path
+        d="M8 2C4.75 2 1.9 4.32.5 8c1.4 3.68 4.25 6 7.5 6s6.1-2.32 7.5-6C14.1 4.32 11.25 2 8 2Zm0 10.5A5.9 5.9 0 0 1 2.15 8 5.9 5.9 0 0 1 8 3.5 5.9 5.9 0 0 1 13.85 8 5.9 5.9 0 0 1 8 12.5Zm0-2A2.5 2.5 0 1 0 8 5a2.5 2.5 0 0 0 0 5.5Z"
+        fill="currentColor"
+      />
+      <path
+        d="m2 2 12 12"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.5"
+      />
+    </Icon>
+  )
+}
+
 export function IconTrash(props: IconProps) {
   return (
     <Icon {...props}>

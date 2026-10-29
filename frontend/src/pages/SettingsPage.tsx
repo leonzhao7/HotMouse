@@ -5,6 +5,7 @@ import { Alert } from '@/components/Alert'
 import { Button } from '@/components/Button'
 import { Card } from '@/components/Card'
 import { TextArea, TextInput } from '@/components/Field'
+import { IconEye, IconEyeClosed } from '@/components/icons'
 import { PageLoading } from '@/components/Spinner'
 import { ApiError, api } from '@/lib/api'
 import { formatDateTime } from '@/lib/format'
@@ -31,6 +32,8 @@ function ProfileFields({
   profile: ProfileValues
   onChange: (next: ProfileValues) => void
 }) {
+  const [showApiKey, setShowApiKey] = useState(false)
+
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -54,7 +57,19 @@ function ProfileFields({
         label="API Key"
         onChange={(event) => onChange({ ...profile, apiKey: event.target.value })}
         spellCheck={false}
-        type="password"
+        trailingAction={
+          <button
+            aria-label={showApiKey ? '隐藏 API Key' : '显示 API Key'}
+            aria-pressed={showApiKey}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-canvas-subtle hover:text-fg focus:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            onClick={() => setShowApiKey((visible) => !visible)}
+            title={showApiKey ? '隐藏 API Key' : '显示 API Key'}
+            type="button"
+          >
+            {showApiKey ? <IconEyeClosed /> : <IconEye />}
+          </button>
+        }
+        type={showApiKey ? 'text' : 'password'}
         value={profile.apiKey}
       />
       <TextInput
