@@ -135,6 +135,31 @@ func TestRunConfiguredReplacesPromptPlaceholderWithoutShell(t *testing.T) {
 	}
 }
 
+func TestWorkerEnvironmentExpandsConfigurationPlaceholders(t *testing.T) {
+	values, err := workerEnvironment(map[string]string{
+		"TASK":  "{{prompt}}",
+		"MODEL": "{{worker_model}}",
+		"URL":   "{{worker_llm_url}}",
+	}, map[string]string{
+		"prompt":         "hello world",
+		"worker_model":   "worker-model",
+		"worker_llm_url": "https://worker.example/v1",
+	})
+	if err != nil {
+		t.Fatalf("expand worker environment: %v", err)
+	}
+	got := map[string]string{}
+	for _, value := range values {
+		key, content, found := strings.Cut(value, "=")
+		if found {
+			got[key] = content
+		}
+	}
+	if got["TASK"] != "hello world" || got["MODEL"] != "worker-model" || got["URL"] != "https://worker.example/v1" {
+		t.Fatalf("expanded environment = %#v", got)
+	}
+}
+
 func TestRunConfiguredRejectsUnterminatedCommand(t *testing.T) {
 	if _, err := commandArguments(`worker "unterminated`, "prompt"); err == nil {
 		t.Fatal("accepted unterminated command")

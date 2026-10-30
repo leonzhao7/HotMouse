@@ -190,13 +190,16 @@ func (dispatcher *Dispatcher) dispatchProject(ctx context.Context, projectID uin
 			return fmt.Errorf("planner selected unknown fact ID %d", selectedPlan.FromFactID)
 		}
 
-		workerPrompt := renderPrompt(settings.WorkerPrompt, domain.DefaultWorkerPrompt, map[string]string{
+		workerTemplateValues := map[string]string{
 			"goal":    graph.Goal.Content,
 			"fact":    fromFact.Content,
 			"fact_id": fmt.Sprintf("%d", fromFact.ID),
 			"action":  selectedPlan.Action,
-		})
-		workerOutput, err := dispatcher.runAgent(ctx, settings.ForWorker(), workerPrompt)
+		}
+		workerPrompt := renderPrompt(settings.WorkerPrompt, domain.DefaultWorkerPrompt, workerTemplateValues)
+		workerSettings := settings.ForWorker()
+		workerSettings.WorkerTemplateValues = workerTemplateValues
+		workerOutput, err := dispatcher.runAgent(ctx, workerSettings, workerPrompt)
 		if err != nil {
 			return fmt.Errorf("run planned worker action: %w", err)
 		}

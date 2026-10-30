@@ -19,9 +19,10 @@ interface ProfileValues {
   model: string
   maxTokens: string
   command: string
+  env: string
 }
 
-const emptyProfile: ProfileValues = { url: '', apiKey: '', model: '', maxTokens: '', command: '' }
+const emptyProfile: ProfileValues = { url: '', apiKey: '', model: '', maxTokens: '', command: '', env: '{}' }
 
 function ProfileFields({
   label,
@@ -92,14 +93,25 @@ function ProfileFields({
         value={profile.maxTokens}
       />
       {label === 'Worker' ? (
-        <TextArea
-          hint="可填写外部 Worker 命令。不经过 Shell 执行；支持 {{prompt}} 占位符注入参数，同时也会将 prompt 写入标准输入。"
-          label="Worker 启动命令行"
-          onChange={(event) => onChange({ ...profile, command: event.target.value })}
-          placeholder="my-worker --prompt {{prompt}}"
-          spellCheck={false}
-          value={profile.command}
-        />
+        <>
+          <TextArea
+            hint="可填写外部 Worker 命令。不经过 Shell 执行；支持 {{prompt}} 注入参数，同时也会将 prompt 写入标准输入。"
+            label="Worker 启动命令行"
+            onChange={(event) => onChange({ ...profile, command: event.target.value })}
+            placeholder="my-worker --prompt {{prompt}}"
+            spellCheck={false}
+            value={profile.command}
+          />
+          <TextArea
+            className="min-h-32 font-mono"
+            hint="使用 JSON 对象配置环境变量，例如 {&quot;API_URL&quot;:&quot;{{llm_url}}&quot;,&quot;TASK&quot;:&quot;{{prompt}}&quot;}。值支持 prompt、LLM 配置和当前任务占位符。"
+            label="Worker 环境变量"
+            onChange={(event) => onChange({ ...profile, env: event.target.value })}
+            placeholder={'{"API_URL":"{{llm_url}}","TASK":"{{prompt}}"}'}
+            spellCheck={false}
+            value={profile.env}
+          />
+        </>
       ) : null}
     </div>
   )
@@ -131,6 +143,7 @@ export function SettingsPage() {
           model: settings.worker_model || settings.model,
           maxTokens: String(settings.worker_max_tokens || settings.max_tokens || ''),
           command: settings.worker_command,
+          env: JSON.stringify(settings.worker_env ?? {}, null, 2),
         })
         setDispatch({
           url: settings.dispatch_llm_url,
@@ -138,6 +151,7 @@ export function SettingsPage() {
           model: settings.dispatch_model,
           maxTokens: String(settings.dispatch_max_tokens || ''),
           command: '',
+          env: '{}',
         })
         setMaxIterations(String(settings.max_iterations || ''))
         setPromptPlan(settings.dispatch_plan_prompt)
@@ -189,6 +203,20 @@ export function SettingsPage() {
       return
     }
 
+    let workerEnv: Record<string, string>
+    try {
+      const parsed: unknown = JSON.parse(worker.env.trim() || '{}')
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error()
+      workerEnv = Object.create(null) as Record<string, string>
+      for (const [key, value] of Object.entries(parsed)) {
+        if (!key.trim() || key.includes('=') || typeof value !== 'string') throw new Error()
+        workerEnv[key] = value
+      }
+    } catch {
+      setError('Worker 环境变量必须是键和值均为字符串的 JSON 对象。')
+      return
+    }
+
     setSaving(true)
     try {
       const saved = await api.updateSettings({
@@ -201,6 +229,7 @@ export function SettingsPage() {
         worker_model: workerModel,
         worker_max_tokens: workerTokens,
         worker_command: worker.command.trim(),
+        worker_env: workerEnv,
         dispatch_llm_url: dispatch.url.trim(),
         dispatch_api_key: dispatch.apiKey.trim(),
         dispatch_model: dispatch.model.trim(),
@@ -216,6 +245,7 @@ export function SettingsPage() {
         model: saved.worker_model || saved.model,
         maxTokens: String(saved.worker_max_tokens || saved.max_tokens),
         command: saved.worker_command,
+        env: JSON.stringify(saved.worker_env ?? {}, null, 2),
       })
       setDispatch({
         url: saved.dispatch_llm_url,
@@ -223,6 +253,7 @@ export function SettingsPage() {
         model: saved.dispatch_model,
         maxTokens: String(saved.dispatch_max_tokens),
         command: '',
+        env: '{}',
       })
       setMaxIterations(String(saved.max_iterations))
       setPromptPlan(saved.dispatch_plan_prompt)

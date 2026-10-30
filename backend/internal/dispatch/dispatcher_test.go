@@ -42,6 +42,7 @@ func TestDispatchRunsWorkerSummarizesAndCompletesProject(t *testing.T) {
 		WorkerPrompt:          "goal={{goal}} fact={{fact}} id={{fact_id}} action={{action}}",
 		DispatchSummaryPrompt: "PHASE:SUMMARIZE {{worker_output}} {{chosen_action_json}}",
 		WorkerCommand:         "external-worker --prompt {{prompt}}",
+		WorkerEnv:             map[string]string{"TASK": "{{action}} for {{goal}}"},
 	})
 	if err != nil {
 		t.Fatalf("configure dispatcher: %v", err)
@@ -64,6 +65,9 @@ func TestDispatchRunsWorkerSummarizesAndCompletesProject(t *testing.T) {
 		default:
 			if settings.Model != "worker-model" || settings.WorkerCommand != "external-worker --prompt {{prompt}}" || !strings.Contains(prompt, "goal=Launch the product") || !strings.Contains(prompt, "action=Run a user acceptance test") {
 				t.Errorf("worker prompt omitted selected action: %s", prompt)
+			}
+			if settings.WorkerEnv["TASK"] != "{{action}} for {{goal}}" || settings.WorkerTemplateValues["action"] != "Run a user acceptance test" || settings.WorkerTemplateValues["goal"] != "Launch the product" {
+				t.Errorf("worker template configuration = %#v / %#v", settings.WorkerEnv, settings.WorkerTemplateValues)
 			}
 			return writeString(output, "The test passed and users approved the prototype.")
 		}

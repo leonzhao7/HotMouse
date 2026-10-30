@@ -26,11 +26,12 @@ type UpdateSettingsInput struct {
 	Model     string `json:"model"`
 	MaxTokens int    `json:"max_tokens"`
 
-	WorkerLLMURL    string `json:"worker_llm_url"`
-	WorkerAPIKey    string `json:"worker_api_key"`
-	WorkerModel     string `json:"worker_model"`
-	WorkerMaxTokens int    `json:"worker_max_tokens"`
-	WorkerCommand   string `json:"worker_command"`
+	WorkerLLMURL    string            `json:"worker_llm_url"`
+	WorkerAPIKey    string            `json:"worker_api_key"`
+	WorkerModel     string            `json:"worker_model"`
+	WorkerMaxTokens int               `json:"worker_max_tokens"`
+	WorkerCommand   string            `json:"worker_command"`
+	WorkerEnv       map[string]string `json:"worker_env"`
 
 	DispatchLLMURL    string `json:"dispatch_llm_url"`
 	DispatchAPIKey    string `json:"dispatch_api_key"`
@@ -78,6 +79,9 @@ func (service *Service) UpdateSettings(ctx context.Context, input UpdateSettings
 	if worker.maxTokens <= 0 || worker.maxTokens > maxTokensLimit || dispatch.maxTokens <= 0 || dispatch.maxTokens > maxTokensLimit {
 		return domain.Settings{}, fmt.Errorf("%w: worker and dispatch max tokens must be between 1 and %d", ErrInvalidSettings, maxTokensLimit)
 	}
+	if err := validateWorkerEnvironment(input.WorkerEnv); err != nil {
+		return domain.Settings{}, fmt.Errorf("%w: %v", ErrInvalidSettings, err)
+	}
 	workerPrompt := input.WorkerPrompt
 	planPrompt := input.DispatchPlanPrompt
 	summaryPrompt := input.DispatchSummaryPrompt
@@ -92,6 +96,7 @@ func (service *Service) UpdateSettings(ctx context.Context, input UpdateSettings
 		WorkerModel:           worker.model,
 		WorkerMaxTokens:       worker.maxTokens,
 		WorkerCommand:         strings.TrimSpace(input.WorkerCommand),
+		WorkerEnv:             cloneStringMap(input.WorkerEnv),
 		DispatchLLMURL:        dispatch.llmURL,
 		DispatchAPIKey:        dispatch.apiKey,
 		DispatchModel:         dispatch.model,
@@ -134,6 +139,9 @@ func normalizeProfile(url, key, model string, tokens int, fallbackURL, fallbackK
 }
 
 func withSettingsDefaults(settings domain.Settings) domain.Settings {
+	if settings.WorkerEnv == nil {
+		settings.WorkerEnv = map[string]string{}
+	}
 	if settings.WorkerLLMURL == "" {
 		settings.WorkerLLMURL = settings.LLMURL
 		settings.WorkerAPIKey = settings.APIKey
@@ -153,6 +161,29 @@ func withSettingsDefaults(settings domain.Settings) domain.Settings {
 	settings.DispatchPlanPrompt = nonBlankOrDefault(settings.DispatchPlanPrompt, domain.DefaultPlanPrompt)
 	settings.DispatchSummaryPrompt = nonBlankOrDefault(settings.DispatchSummaryPrompt, domain.DefaultSummaryPrompt)
 	return settings
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return map[string]string{}
+	}
+	copy := make(map[string]string, len(values))
+	for key, value := range values {
+		copy[key] = value
+	}
+	return copy
+}
+
+func validateWorkerEnvironment(values map[string]string) error {
+	for key, value := range values {
+		if key == "" || strings.ContainsAny(key, "=\x00") {
+			return fmt.Errorf("worker_env key %q is invalid", key)
+		}
+		if strings.ContainsRune(value, '\x00') {
+			return fmt.Errorf("worker_env value for %q contains a NUL byte", key)
+		}
+	}
+	return nil
 }
 
 func nonBlankOrDefault(value, fallback string) string {

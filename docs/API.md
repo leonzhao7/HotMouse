@@ -129,6 +129,10 @@ work; dispatch then uses the same LLM profile.
   "worker_model": "gpt-4o-mini",
   "worker_max_tokens": 1024,
   "worker_command": "my-worker --prompt {{prompt}}",
+  "worker_env": {
+    "API_URL": "{{worker_llm_url}}",
+    "TASK": "{{prompt}}"
+  },
   "dispatch_llm_url": "https://api.openai.com/v1",
   "dispatch_api_key": "secret",
   "dispatch_model": "gpt-4o-mini",
@@ -151,8 +155,22 @@ worker profile is reused. Each max-token value must be between `1` and
 planned action. The command is split into arguments without invoking a shell,
 so shell operators are not interpreted. `{{prompt}}` is replaced with the
 actual Worker prompt; the same prompt is also written to standard input. An
-empty command keeps the built-in OpenAI-compatible Worker. Dispatch planning
-and summarization always use the configured Dispatch LLM.
+empty command keeps the built-in OpenAI-compatible Worker. Command arguments
+support `{{prompt}}`; environment values support `{{prompt}}`, the worker/LLM
+configuration placeholders below, and the dispatched action context
+placeholders. Dispatch planning and summarization always use the configured
+Dispatch LLM.
+
+`worker_env` optionally adds environment variables to an external Worker
+process. It is a JSON object whose keys and values are strings. The process
+inherits the server environment, with configured keys overriding inherited
+values. Available configuration placeholders include `{{llm_url}}`,
+`{{api_key}}`, `{{model}}`, `{{max_tokens}}`, the worker and dispatch profile
+fields (such as `{{worker_model}}` and `{{worker_llm_url}}`), and
+`{{max_iterations}}`. During a dispatched action, worker context placeholders
+`{{goal}}`, `{{fact}}`, `{{fact_id}}`, and `{{action}}` are also available to
+environment values.
+Unknown placeholders remain unchanged.
 
 The worker prompt supports `{{goal}}`, `{{fact}}`, `{{fact_id}}`, and
 `{{action}}`. The dispatch plan prompt supports `{{graph_json}}`. The dispatch

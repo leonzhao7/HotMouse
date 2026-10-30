@@ -93,11 +93,13 @@ type Settings struct {
 	Model     string `json:"model" gorm:"not null;check:settings_model_required,length(trim(model)) > 0"`
 	MaxTokens int    `json:"max_tokens" gorm:"not null;check:settings_max_tokens,max_tokens BETWEEN 1 AND 10000000"`
 
-	WorkerLLMURL    string `json:"worker_llm_url" gorm:"not null;default:''"`
-	WorkerAPIKey    string `json:"worker_api_key" gorm:"not null;default:''"`
-	WorkerModel     string `json:"worker_model" gorm:"not null;default:''"`
-	WorkerMaxTokens int    `json:"worker_max_tokens" gorm:"not null;default:0"`
-	WorkerCommand   string `json:"worker_command" gorm:"not null;default:'';type:text"`
+	WorkerLLMURL         string            `json:"worker_llm_url" gorm:"not null;default:''"`
+	WorkerAPIKey         string            `json:"worker_api_key" gorm:"not null;default:''"`
+	WorkerModel          string            `json:"worker_model" gorm:"not null;default:''"`
+	WorkerMaxTokens      int               `json:"worker_max_tokens" gorm:"not null;default:0"`
+	WorkerCommand        string            `json:"worker_command" gorm:"not null;default:'';type:text"`
+	WorkerEnv            map[string]string `json:"worker_env" gorm:"serializer:json;not null;default:'{}'"`
+	WorkerTemplateValues map[string]string `json:"-" gorm:"-"`
 
 	DispatchLLMURL    string `json:"dispatch_llm_url" gorm:"not null;default:''"`
 	DispatchAPIKey    string `json:"dispatch_api_key" gorm:"not null;default:''"`
@@ -123,6 +125,8 @@ func (settings Settings) ForWorker() Settings {
 
 func (settings Settings) ForDispatch() Settings {
 	settings.WorkerCommand = ""
+	settings.WorkerEnv = nil
+	settings.WorkerTemplateValues = nil
 	if settings.DispatchLLMURL != "" {
 		settings.LLMURL = settings.DispatchLLMURL
 		settings.APIKey = settings.DispatchAPIKey

@@ -69,6 +69,7 @@ export interface Settings {
   worker_model: string
   worker_max_tokens: number
   worker_command: string
+  worker_env: Record<string, string>
   dispatch_llm_url: string
   dispatch_api_key: string
   dispatch_model: string
@@ -90,6 +91,7 @@ export interface UpdateSettingsInput {
   worker_model: string
   worker_max_tokens: number
   worker_command: string
+  worker_env: Record<string, string>
   dispatch_llm_url: string
   dispatch_api_key: string
   dispatch_model: string

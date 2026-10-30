@@ -52,7 +52,9 @@ the prompt to the configured worker endpoint (appending `/chat/completions`
 when needed), streams the agent response to the terminal, and atomically saves
 the completed output to `--output`. A configured external Worker command is
 started without a shell, receives the prompt on stdin, and can use
-`{{prompt}}` as an argument placeholder. It uses `DATABASE_DSN` or defaults
+`{{prompt}}` as an argument placeholder. The settings page/API can also add
+Worker environment variables as a JSON object; their values support the same
+prompt and LLM configuration placeholders. It uses `DATABASE_DSN` or defaults
 to `hotmouse.db`.
 
 When the normal API process is running, it also starts a background dispatcher.

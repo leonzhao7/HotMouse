@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"hotmouse/backend/internal/domain"
@@ -56,8 +57,9 @@ func Run(ctx context.Context, settings domain.Settings, prompt string, output io
 }
 
 // RunConfigured uses an external worker command when configured. The command
-// is tokenized without invoking a shell; {{prompt}} is replaced with the
-// prompt, which is also provided on stdin for commands that read from stdin.
+// is tokenized without invoking a shell; {{prompt}} is replaced in command
+// arguments, and configured environment values can use worker placeholders.
+// The prompt is also provided on stdin for commands that read from stdin.
 func RunConfigured(ctx context.Context, settings domain.Settings, prompt string, output io.Writer) error {
 	if strings.TrimSpace(settings.WorkerCommand) == "" {
 		return Run(ctx, settings, prompt, output)
@@ -65,14 +67,20 @@ func RunConfigured(ctx context.Context, settings domain.Settings, prompt string,
 	if strings.TrimSpace(prompt) == "" || output == nil {
 		return ErrInvalidConfiguration
 	}
+	replacements := workerPlaceholders(settings, prompt)
 	args, err := commandArguments(settings.WorkerCommand, prompt)
 	if err != nil {
 		return fmt.Errorf("invalid worker command: %w", err)
+	}
+	env, err := workerEnvironment(settings.WorkerEnv, replacements)
+	if err != nil {
+		return fmt.Errorf("invalid worker environment: %w", err)
 	}
 	command := exec.CommandContext(ctx, args[0], args[1:]...)
 	command.Stdin = strings.NewReader(prompt)
 	command.Stdout = output
 	command.Stderr = os.Stderr
+	command.Env = env
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("run worker command: %w", err)
 	}
@@ -80,6 +88,10 @@ func RunConfigured(ctx context.Context, settings domain.Settings, prompt string,
 }
 
 func commandArguments(command, prompt string) ([]string, error) {
+	return commandArgumentsWithReplacements(command, map[string]string{"prompt": prompt})
+}
+
+func commandArgumentsWithReplacements(command string, replacements map[string]string) ([]string, error) {
 	parts, err := shellLikeSplit(command)
 	if err != nil {
 		return nil, err
@@ -88,11 +100,84 @@ func commandArguments(command, prompt string) ([]string, error) {
 		return nil, errors.New("command is empty")
 	}
 	for index := range parts {
-		if strings.Contains(parts[index], "{{prompt}}") {
-			parts[index] = strings.ReplaceAll(parts[index], "{{prompt}}", prompt)
-		}
+		parts[index] = replacePlaceholders(parts[index], replacements)
 	}
 	return parts, nil
+}
+
+func workerPlaceholders(settings domain.Settings, prompt string) map[string]string {
+	workerURL := settings.WorkerLLMURL
+	workerAPIKey := settings.WorkerAPIKey
+	workerModel := settings.WorkerModel
+	workerMaxTokens := settings.WorkerMaxTokens
+	if workerURL == "" {
+		workerURL = settings.LLMURL
+		workerAPIKey = settings.APIKey
+		workerModel = settings.Model
+		workerMaxTokens = settings.MaxTokens
+	}
+	replacements := map[string]string{
+		"prompt":                  prompt,
+		"llm_url":                 settings.LLMURL,
+		"api_key":                 settings.APIKey,
+		"model":                   settings.Model,
+		"max_tokens":              fmt.Sprint(settings.MaxTokens),
+		"worker_llm_url":          workerURL,
+		"worker_api_key":          workerAPIKey,
+		"worker_model":            workerModel,
+		"worker_max_tokens":       fmt.Sprint(workerMaxTokens),
+		"worker_command":          settings.WorkerCommand,
+		"dispatch_llm_url":        settings.DispatchLLMURL,
+		"dispatch_api_key":        settings.DispatchAPIKey,
+		"dispatch_model":          settings.DispatchModel,
+		"dispatch_max_tokens":     fmt.Sprint(settings.DispatchMaxTokens),
+		"max_iterations":          fmt.Sprint(settings.MaxIterations),
+		"worker_prompt":           settings.WorkerPrompt,
+		"dispatch_plan_prompt":    settings.DispatchPlanPrompt,
+		"dispatch_summary_prompt": settings.DispatchSummaryPrompt,
+	}
+	for name, value := range settings.WorkerTemplateValues {
+		replacements[name] = value
+	}
+	return replacements
+}
+
+func replacePlaceholders(value string, replacements map[string]string) string {
+	pairs := make([]string, 0, len(replacements)*2)
+	for name, replacement := range replacements {
+		pairs = append(pairs, "{{"+name+"}}", replacement)
+	}
+	return strings.NewReplacer(pairs...).Replace(value)
+}
+
+func workerEnvironment(config map[string]string, replacements map[string]string) ([]string, error) {
+	overrides := make(map[string]string, len(config))
+	keys := make([]string, 0, len(config))
+	for key, value := range config {
+		if key == "" || strings.ContainsAny(key, "=\x00") {
+			return nil, fmt.Errorf("environment variable name %q is invalid", key)
+		}
+		expanded := replacePlaceholders(value, replacements)
+		if strings.ContainsRune(expanded, '\x00') {
+			return nil, fmt.Errorf("environment variable %q contains a NUL byte", key)
+		}
+		overrides[key] = expanded
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	base := os.Environ()
+	result := make([]string, 0, len(base)+len(keys))
+	for _, entry := range base {
+		key, _, _ := strings.Cut(entry, "=")
+		if _, overridden := overrides[key]; !overridden {
+			result = append(result, entry)
+		}
+	}
+	for _, key := range keys {
+		result = append(result, key+"="+overrides[key])
+	}
+	return result, nil
 }
 
 func shellLikeSplit(value string) ([]string, error) {

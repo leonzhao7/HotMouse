@@ -28,6 +28,9 @@ func TestGetSettingsReturnsEmptyDefaults(t *testing.T) {
 	if settings.WorkerCommand != "" {
 		t.Fatalf("default worker command = %q", settings.WorkerCommand)
 	}
+	if len(settings.WorkerEnv) != 0 {
+		t.Fatalf("default worker environment = %#v", settings.WorkerEnv)
+	}
 }
 
 func TestUpdateSettingsStoresWorkerDispatchAndPromptConfiguration(t *testing.T) {
@@ -38,6 +41,7 @@ func TestUpdateSettingsStoresWorkerDispatchAndPromptConfiguration(t *testing.T) 
 		DispatchLLMURL: "https://dispatch.example/v1", DispatchAPIKey: "dispatch-key", DispatchModel: "dispatch", DispatchMaxTokens: 900,
 		MaxIterations: 3, WorkerPrompt: "do {{action}}", DispatchPlanPrompt: "plan {{graph_json}}", DispatchSummaryPrompt: "summarize {{worker_output}}",
 		WorkerCommand: "my-worker --prompt {{prompt}}",
+		WorkerEnv:     map[string]string{"TASK": "{{prompt}}", "MODEL": "{{worker_model}}"},
 	})
 	if err != nil {
 		t.Fatalf("update settings: %v", err)
@@ -54,11 +58,14 @@ func TestUpdateSettingsStoresWorkerDispatchAndPromptConfiguration(t *testing.T) 
 	if saved.WorkerCommand != "my-worker --prompt {{prompt}}" {
 		t.Fatalf("worker command = %q", saved.WorkerCommand)
 	}
+	if saved.WorkerEnv["TASK"] != "{{prompt}}" || saved.WorkerEnv["MODEL"] != "{{worker_model}}" {
+		t.Fatalf("worker environment = %#v", saved.WorkerEnv)
+	}
 	loaded, err := service.GetSettings(context.Background())
 	if err != nil {
 		t.Fatalf("reload settings: %v", err)
 	}
-	if loaded.DispatchModel != "dispatch" || loaded.MaxIterations != 3 || loaded.DispatchSummaryPrompt != "summarize {{worker_output}}" || loaded.WorkerCommand != "my-worker --prompt {{prompt}}" {
+	if loaded.DispatchModel != "dispatch" || loaded.MaxIterations != 3 || loaded.DispatchSummaryPrompt != "summarize {{worker_output}}" || loaded.WorkerCommand != "my-worker --prompt {{prompt}}" || loaded.WorkerEnv["TASK"] != "{{prompt}}" {
 		t.Fatalf("persisted settings = %+v", loaded)
 	}
 }
@@ -119,6 +126,10 @@ func TestUpdateSettingsRejectsInvalidInput(t *testing.T) {
 		"too many dispatch iterations": {
 			LLMURL: "https://api.example.com", Model: "model", MaxTokens: 1,
 			MaxIterations: maxIterationsLimit + 1,
+		},
+		"invalid worker environment key": {
+			LLMURL: "https://api.example.com", Model: "model", MaxTokens: 1,
+			WorkerEnv: map[string]string{"BAD=KEY": "value"},
 		},
 	}
 	for name, input := range cases {
