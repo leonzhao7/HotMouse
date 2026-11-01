@@ -34,8 +34,6 @@ func TestDispatchRunsWorkerSummarizesAndCompletesProject(t *testing.T) {
 		t.Fatalf("create project: %v", err)
 	}
 	_, err = service.UpdateSettings(context.Background(), api.UpdateSettingsInput{
-		LLMURL: "https://worker.example/v1", APIKey: "worker-key", Model: "worker-model", MaxTokens: 512,
-		WorkerLLMURL: "https://worker.example/v1", WorkerAPIKey: "worker-key", WorkerModel: "worker-model", WorkerMaxTokens: 512,
 		DispatchLLMURL: "https://dispatch.example/v1", DispatchAPIKey: "dispatch-key", DispatchModel: "dispatch-model", DispatchMaxTokens: 1024,
 		MaxIterations:         1,
 		DispatchPlanPrompt:    "PHASE:PLAN {{graph_json}}",
@@ -63,16 +61,21 @@ func TestDispatchRunsWorkerSummarizesAndCompletesProject(t *testing.T) {
 			}
 			return writeString(output, `{"facts":["Users approved the prototype"],"steps":[{"from_fact_index":1,"to_goal":true,"description":"Approval satisfies launch criteria"}],"goal_reached":true}`)
 		default:
-			if settings.Model != "worker-model" || settings.WorkerCommand != "external-worker --prompt {{prompt}}" || !strings.Contains(prompt, "goal=Launch the product") || !strings.Contains(prompt, "action=Run a user acceptance test") {
-				t.Errorf("worker prompt omitted selected action: %s", prompt)
-			}
-			if settings.WorkerEnv["TASK"] != "{{action}} for {{goal}}" || settings.WorkerTemplateValues["action"] != "Run a user acceptance test" || settings.WorkerTemplateValues["goal"] != "Launch the product" {
-				t.Errorf("worker template configuration = %#v / %#v", settings.WorkerEnv, settings.WorkerTemplateValues)
-			}
-			return writeString(output, "The test passed and users approved the prototype.")
+			t.Errorf("dispatch LLM received worker prompt: %s", prompt)
+			return nil
 		}
 	})
-	dispatcher := New(service, agent)
+	workerAgent := AgentFunc(func(_ context.Context, settings domain.Settings, prompt string, output io.Writer) error {
+		calls++
+		if settings.WorkerCommand != "external-worker --prompt {{prompt}}" || !strings.Contains(prompt, "goal=Launch the product") || !strings.Contains(prompt, "action=Run a user acceptance test") {
+			t.Errorf("worker config/prompt = %+v, %s", settings, prompt)
+		}
+		if settings.WorkerEnv["TASK"] != "{{action}} for {{goal}}" || settings.WorkerTemplateValues["action"] != "Run a user acceptance test" || settings.WorkerTemplateValues["goal"] != "Launch the product" {
+			t.Errorf("worker template configuration = %#v / %#v", settings.WorkerEnv, settings.WorkerTemplateValues)
+		}
+		return writeString(output, "The test passed and users approved the prototype.")
+	})
+	dispatcher := New(service, agent, workerAgent)
 	if err := dispatcher.dispatchProject(context.Background(), graph.ID); err != nil {
 		t.Fatalf("dispatch project: %v", err)
 	}
@@ -113,7 +116,7 @@ func TestDispatchRejectsUnknownPlannedFact(t *testing.T) {
 	}
 	dispatcher := New(service, AgentFunc(func(_ context.Context, _ domain.Settings, _ string, output io.Writer) error {
 		return writeString(output, `{"from_fact_id":999,"action":"continue","rationale":"unknown"}`)
-	}))
+	}), nil)
 	if err := dispatcher.dispatchProject(context.Background(), graph.ID); err == nil {
 		t.Fatal("dispatch accepted a plan using an unknown fact")
 	}
@@ -162,7 +165,7 @@ func TestDispatchHonorsConfiguredIterationLimit(t *testing.T) {
 			return writeString(output, "worked")
 		}
 	})
-	if err := New(service, agent).dispatchProject(context.Background(), graph.ID); err != nil {
+	if err := New(service, agent, agent).dispatchProject(context.Background(), graph.ID); err != nil {
 		t.Fatalf("dispatch project: %v", err)
 	}
 	if calls != 6 || summaries != 2 {
@@ -171,7 +174,7 @@ func TestDispatchHonorsConfiguredIterationLimit(t *testing.T) {
 }
 
 func TestEnqueueDeduplicatesPendingProjects(t *testing.T) {
-	dispatcher := New(nil, nil)
+	dispatcher := New(nil, nil, nil)
 	dispatcher.Enqueue(4)
 	dispatcher.Enqueue(4)
 	dispatcher.Enqueue(7)

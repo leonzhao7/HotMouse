@@ -56,16 +56,16 @@ func Run(ctx context.Context, settings domain.Settings, prompt string, output io
 	return runWithClient(ctx, settings, prompt, output, http.DefaultClient)
 }
 
-// RunConfigured uses an external worker command when configured. The command
+// RunConfigured runs the configured external worker command. The command
 // is tokenized without invoking a shell; {{prompt}} is replaced in command
 // arguments, and configured environment values can use worker placeholders.
 // The prompt is also provided on stdin for commands that read from stdin.
 func RunConfigured(ctx context.Context, settings domain.Settings, prompt string, output io.Writer) error {
 	if strings.TrimSpace(settings.WorkerCommand) == "" {
-		return Run(ctx, settings, prompt, output)
+		return errors.New("worker command is required")
 	}
 	if strings.TrimSpace(prompt) == "" || output == nil {
-		return ErrInvalidConfiguration
+		return errors.New("worker requires a non-empty prompt and an output writer")
 	}
 	replacements := workerPlaceholders(settings, prompt)
 	args, err := commandArguments(settings.WorkerCommand, prompt)
@@ -106,26 +106,12 @@ func commandArgumentsWithReplacements(command string, replacements map[string]st
 }
 
 func workerPlaceholders(settings domain.Settings, prompt string) map[string]string {
-	workerURL := settings.WorkerLLMURL
-	workerAPIKey := settings.WorkerAPIKey
-	workerModel := settings.WorkerModel
-	workerMaxTokens := settings.WorkerMaxTokens
-	if workerURL == "" {
-		workerURL = settings.LLMURL
-		workerAPIKey = settings.APIKey
-		workerModel = settings.Model
-		workerMaxTokens = settings.MaxTokens
-	}
 	replacements := map[string]string{
 		"prompt":                  prompt,
 		"llm_url":                 settings.LLMURL,
 		"api_key":                 settings.APIKey,
 		"model":                   settings.Model,
 		"max_tokens":              fmt.Sprint(settings.MaxTokens),
-		"worker_llm_url":          workerURL,
-		"worker_api_key":          workerAPIKey,
-		"worker_model":            workerModel,
-		"worker_max_tokens":       fmt.Sprint(workerMaxTokens),
 		"worker_command":          settings.WorkerCommand,
 		"dispatch_llm_url":        settings.DispatchLLMURL,
 		"dispatch_api_key":        settings.DispatchAPIKey,

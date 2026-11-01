@@ -15,8 +15,8 @@ It exposes only the following route patterns:
 | `POST` | `/project/{id}/fact` | Append a fact node |
 | `GET` | `/project/{id}/step` | List directed steps |
 | `POST` | `/project/{id}/step` | Append a directed step |
-| `GET` | `/settings` | Read the LLM settings |
-| `PUT` | `/settings` | Replace the LLM settings |
+| `GET` | `/settings` | Read the Dispatch, Worker, and prompt settings |
+| `PUT` | `/settings` | Replace the Dispatch, Worker, and prompt settings |
 | `GET` | `/llm-log` | List the latest persisted Dispatch LLM interactions |
 
 Graph data has no update or delete endpoints. `/settings` is the only mutable
@@ -107,7 +107,7 @@ JSON attachment named `project-{id}.json`. Facts and steps are sorted by ID;
 an empty list is `[]`. Unknown project IDs return `404` with the standard JSON
 error envelope.
 
-## LLM settings
+## Settings
 
 `GET /settings` returns the singleton configuration. Before anything has been
 saved it returns empty LLM connection fields, default prompt templates, a
@@ -115,8 +115,11 @@ saved it returns empty LLM connection fields, default prompt templates, a
 
 `PUT /settings` replaces all fields and returns the stored configuration. The
 legacy `llm_url`, `api_key`, `model`, and `max_tokens` fields remain aliases for
-the worker profile. Existing clients that send only those fields continue to
-work; dispatch then uses the same LLM profile.
+the Dispatch LLM profile. Clients can send just the `dispatch_*` profile fields
+without supplying the legacy aliases. Existing clients that send only the
+legacy LLM fields continue to configure Dispatch. Worker configuration consists
+of `worker_command` and `worker_env`; Worker LLM profile fields are no longer
+accepted or returned.
 
 ```json
 {
@@ -124,13 +127,10 @@ work; dispatch then uses the same LLM profile.
   "api_key": "secret",
   "model": "gpt-4o-mini",
   "max_tokens": 1024,
-  "worker_llm_url": "https://api.openai.com/v1",
-  "worker_api_key": "secret",
-  "worker_model": "gpt-4o-mini",
-  "worker_max_tokens": 1024,
   "worker_command": "my-worker --prompt {{prompt}}",
   "worker_env": {
-    "API_URL": "{{worker_llm_url}}",
+    "API_URL": "https://worker.example/v1",
+    "API_KEY": "worker-secret",
     "TASK": "{{prompt}}"
   },
   "dispatch_llm_url": "https://api.openai.com/v1",
@@ -144,20 +144,23 @@ work; dispatch then uses the same LLM profile.
 }
 ```
 
-The worker and dispatch LLM profiles each configure URL, API key, model, and
-maximum tokens independently. Empty dispatch URL/model/token fields inherit
-the worker values; an empty API key means no authentication when a dispatch
-profile is provided. If all dispatch profile fields are omitted, the complete
-worker profile is reused. Each max-token value must be between `1` and
-`10000000`. `max_iterations` must be between `1` and `100`.
+The Dispatch LLM profile configures URL, API key, model, and maximum tokens.
+URL and model are required, and maximum tokens must be between `1` and
+`10000000`. An empty API key means no authentication. If legacy aliases are
+provided, empty Dispatch URL/model/token fields inherit those values; the
+legacy API key is used only when all Dispatch profile fields are omitted.
+Responses always return the legacy aliases with the effective Dispatch values.
+Existing databases retain their saved Dispatch profile; databases with only
+legacy LLM settings use those values for Dispatch. `max_iterations` must be
+between `1` and `100`.
 
-`worker_command` optionally starts an external Worker process for the actual
-planned action. The command is split into arguments without invoking a shell,
+`worker_command` starts an external Worker process for the actual planned
+action. It may be empty when saving settings, but running a Worker requires a
+non-empty command. The command is split into arguments without invoking a shell,
 so shell operators are not interpreted. `{{prompt}}` is replaced with the
-actual Worker prompt; the same prompt is also written to standard input. An
-empty command keeps the built-in OpenAI-compatible Worker. Command arguments
-support `{{prompt}}`; environment values support `{{prompt}}`, the worker/LLM
-configuration placeholders below, and the dispatched action context
+actual Worker prompt; the same prompt is also written to standard input.
+Command arguments support `{{prompt}}`; environment values support `{{prompt}}`,
+the configuration placeholders below, and the dispatched action context
 placeholders. Dispatch planning and summarization always use the configured
 Dispatch LLM.
 
@@ -165,8 +168,10 @@ Dispatch LLM.
 process. It is a JSON object whose keys and values are strings. The process
 inherits the server environment, with configured keys overriding inherited
 values. Available configuration placeholders include `{{llm_url}}`,
-`{{api_key}}`, `{{model}}`, `{{max_tokens}}`, the worker and dispatch profile
-fields (such as `{{worker_model}}` and `{{worker_llm_url}}`), and
+`{{api_key}}`, `{{model}}`, `{{max_tokens}}` (aliases for Dispatch values),
+`{{dispatch_llm_url}}`, `{{dispatch_api_key}}`, `{{dispatch_model}}`,
+`{{dispatch_max_tokens}}`, `{{worker_command}}`, `{{worker_prompt}}`,
+`{{dispatch_plan_prompt}}`, `{{dispatch_summary_prompt}}`, and
 `{{max_iterations}}`. During a dispatched action, worker context placeholders
 `{{goal}}`, `{{fact}}`, `{{fact_id}}`, and `{{action}}` are also available to
 environment values.
@@ -186,8 +191,7 @@ path.
 item contains the request and response on one row, including the operation,
 URL, model, configured maximum tokens, prompt, response content, HTTP status,
 actual prompt/completion/total token counts, and any error. API keys are never
-stored in LLM logs. Worker LLM calls and external Worker commands are not
-recorded.
+stored in LLM logs. External Worker commands are not recorded.
 
 ## Validation and errors
 

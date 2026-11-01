@@ -38,10 +38,11 @@ func TestRunWorkerStreamsAndSavesOutput(test *testing.T) {
 		test.Fatalf("open database: %v", err)
 	}
 	if _, err := api.NewService(db).UpdateSettings(context.Background(), api.UpdateSettingsInput{
-		LLMURL:    "https://example.test/v1",
-		APIKey:    "worker-key",
-		Model:     "worker-model",
-		MaxTokens: 256,
+		DispatchLLMURL:    "https://example.test/v1",
+		DispatchModel:     "dispatch-model",
+		DispatchMaxTokens: 256,
+		WorkerCommand:     "my-worker --prompt {{prompt}}",
+		WorkerEnv:         map[string]string{"TASK": "{{prompt}}"},
 	}); err != nil {
 		test.Fatalf("save settings: %v", err)
 	}
@@ -55,7 +56,10 @@ func TestRunWorkerStreamsAndSavesOutput(test *testing.T) {
 
 	test.Setenv("DATABASE_DSN", dsn)
 	outputPath := filepath.Join(test.TempDir(), "worker-output.txt")
-	fakeAgent := func(_ context.Context, _ domain.Settings, prompt string, output io.Writer) error {
+	fakeAgent := func(_ context.Context, settings domain.Settings, prompt string, output io.Writer) error {
+		if settings.WorkerCommand != "my-worker --prompt {{prompt}}" || settings.WorkerEnv["TASK"] != "{{prompt}}" {
+			test.Fatalf("worker settings = %+v", settings)
+		}
 		if prompt != "summarize this" {
 			test.Fatalf("worker prompt = %q", prompt)
 		}

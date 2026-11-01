@@ -36,9 +36,9 @@ Run checks from `backend` with `go test ./...`, `go test -race ./...`,
 
 ## Worker
 
-The worker starts an OpenAI-compatible streaming chat agent using the worker
-LLM profile stored in SQLite. You can optionally configure `worker_command` in
-the settings page to run an external Worker command instead. Run it from
+The worker runs an external command configured with `worker_command` in the
+settings page or API. Worker configuration contains only the command line and
+environment variables; LLM settings configure Dispatch. Run the worker from
 `backend/` after configuring the settings through the API or frontend:
 
 ```sh
@@ -47,15 +47,16 @@ go run ./cmd/hotmouse worker \
   --output ./worker-output.txt
 ```
 
-The prompt can also be supplied as one positional argument. The worker sends
-the prompt to the configured worker endpoint (appending `/chat/completions`
-when needed), streams the agent response to the terminal, and atomically saves
-the completed output to `--output`. A configured external Worker command is
-started without a shell, receives the prompt on stdin, and can use
-`{{prompt}}` as an argument placeholder. The settings page/API can also add
-Worker environment variables as a JSON object; their values support the same
-prompt and LLM configuration placeholders. It uses `DATABASE_DSN` or defaults
-to `hotmouse.db`.
+The prompt can also be supplied as one positional argument. The worker streams
+the command output to the terminal and atomically saves the completed output
+to `--output`. The command is started without a shell, receives the prompt on
+stdin, and can use `{{prompt}}` as an argument placeholder. The settings
+page/API can also add Worker environment variables as a JSON object; their
+values support the same
+prompt, Dispatch configuration, and current task placeholders. Configure any
+credentials required by the external tool through these environment variables.
+Running a worker requires a non-empty command. It uses `DATABASE_DSN` or
+defaults to `hotmouse.db`.
 
 When the normal API process is running, it also starts a background dispatcher.
 Creating a project or appending a fact or step queues that project for

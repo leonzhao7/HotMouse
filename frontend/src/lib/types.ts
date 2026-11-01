@@ -58,16 +58,12 @@ export interface AddStepInput {
   description?: string
 }
 
-/** 全局单例的 LLM 配置 (GET/PUT /settings)。 */
+/** 全局单例的 Dispatch、Worker 和提示词配置 (GET/PUT /settings)。 */
 export interface Settings {
   llm_url: string
   api_key: string
   model: string
   max_tokens: number
-  worker_llm_url: string
-  worker_api_key: string
-  worker_model: string
-  worker_max_tokens: number
   worker_command: string
   worker_env: Record<string, string>
   dispatch_llm_url: string
@@ -82,14 +78,10 @@ export interface Settings {
 }
 
 export interface UpdateSettingsInput {
-  llm_url: string
-  api_key: string
-  model: string
-  max_tokens: number
-  worker_llm_url: string
-  worker_api_key: string
-  worker_model: string
-  worker_max_tokens: number
+  llm_url?: string
+  api_key?: string
+  model?: string
+  max_tokens?: number
   worker_command: string
   worker_env: Record<string, string>
   dispatch_llm_url: string

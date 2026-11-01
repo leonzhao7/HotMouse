@@ -56,7 +56,7 @@ func runAPI() error {
 	defer sqlDB.Close()
 
 	service := api.NewService(db)
-	dispatcher := dispatch.NewWithLogger(service, dispatch.AgentFunc(worker.RunConfigured), llmlog.NewWithSink(log.Default(), storage.NewLLMLogSink(db)))
+	dispatcher := dispatch.NewWithLogger(service, dispatch.AgentFunc(worker.Run), dispatch.AgentFunc(worker.RunConfigured), llmlog.NewWithSink(log.Default(), storage.NewLLMLogSink(db)))
 	service.SetProjectChangedHandler(dispatcher.Enqueue)
 	service.SetProjectAbortedHandler(dispatcher.Cancel)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -83,7 +83,7 @@ func runWorker(args []string) error {
 func runWorkerCommand(args []string, runAgent func(context.Context, domain.Settings, string, io.Writer) error) error {
 	flags := flag.NewFlagSet("worker", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	prompt := flags.String("prompt", "", "prompt sent to the LLM agent")
+	prompt := flags.String("prompt", "", "prompt sent to the worker command")
 	outputPath := flags.String("output", "worker-output.txt", "file used to save the agent output")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -114,9 +114,8 @@ func runWorkerCommand(args []string, runAgent func(context.Context, domain.Setti
 
 	settings, err := api.NewService(db).GetSettings(context.Background())
 	if err != nil {
-		return fmt.Errorf("load LLM settings: %w", err)
+		return fmt.Errorf("load settings: %w", err)
 	}
-	settings = settings.ForWorker()
 
 	outputDirectory := filepath.Dir(*outputPath)
 	tempFile, err := os.CreateTemp(outputDirectory, "."+filepath.Base(*outputPath)+".tmp-*")

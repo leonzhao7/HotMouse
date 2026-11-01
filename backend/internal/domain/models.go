@@ -84,8 +84,9 @@ type LLMLog struct {
 	Error            string    `json:"error,omitempty" gorm:"not null;default:'';type:text"`
 }
 
-// Settings is the singleton row (ID 1) holding LLM connection details.
+// Settings is the singleton row (ID 1) holding dispatch and worker configuration.
 // The graph tables stay append-only; settings are the only mutable record.
+// Legacy LLM fields remain aliases for the Dispatch profile.
 type Settings struct {
 	ID        uint   `json:"-" gorm:"primaryKey;check:settings_singleton,id = 1"`
 	LLMURL    string `json:"llm_url" gorm:"not null;check:settings_llm_url_required,length(trim(llm_url)) > 0"`
@@ -93,10 +94,6 @@ type Settings struct {
 	Model     string `json:"model" gorm:"not null;check:settings_model_required,length(trim(model)) > 0"`
 	MaxTokens int    `json:"max_tokens" gorm:"not null;check:settings_max_tokens,max_tokens BETWEEN 1 AND 10000000"`
 
-	WorkerLLMURL         string            `json:"worker_llm_url" gorm:"not null;default:''"`
-	WorkerAPIKey         string            `json:"worker_api_key" gorm:"not null;default:''"`
-	WorkerModel          string            `json:"worker_model" gorm:"not null;default:''"`
-	WorkerMaxTokens      int               `json:"worker_max_tokens" gorm:"not null;default:0"`
 	WorkerCommand        string            `json:"worker_command" gorm:"not null;default:'';type:text"`
 	WorkerEnv            map[string]string `json:"worker_env" gorm:"serializer:json;not null;default:'{}'"`
 	WorkerTemplateValues map[string]string `json:"-" gorm:"-"`
@@ -111,16 +108,6 @@ type Settings struct {
 	DispatchPlanPrompt    string     `json:"dispatch_plan_prompt" gorm:"not null;default:'';type:text"`
 	DispatchSummaryPrompt string     `json:"dispatch_summary_prompt" gorm:"not null;default:'';type:text"`
 	UpdatedAt             *time.Time `json:"updated_at,omitempty"`
-}
-
-func (settings Settings) ForWorker() Settings {
-	if settings.WorkerLLMURL != "" {
-		settings.LLMURL = settings.WorkerLLMURL
-		settings.APIKey = settings.WorkerAPIKey
-		settings.Model = settings.WorkerModel
-		settings.MaxTokens = settings.WorkerMaxTokens
-	}
-	return settings
 }
 
 func (settings Settings) ForDispatch() Settings {

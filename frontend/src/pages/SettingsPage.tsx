@@ -13,36 +13,33 @@ import { formatDateTime } from '@/lib/format'
 const MAX_TOKENS_LIMIT = 10_000_000
 const MAX_ITERATIONS_LIMIT = 100
 
-interface ProfileValues {
+interface DispatchValues {
   url: string
   apiKey: string
   model: string
   maxTokens: string
+}
+
+interface WorkerValues {
   command: string
   env: string
 }
 
-const emptyProfile: ProfileValues = { url: '', apiKey: '', model: '', maxTokens: '', command: '', env: '{}' }
-
-function ProfileFields({
-  label,
+function DispatchFields({
   profile,
   onChange,
 }: {
-  label: string
-  profile: ProfileValues
-  onChange: (next: ProfileValues) => void
+  profile: DispatchValues
+  onChange: (next: DispatchValues) => void
 }) {
   const [showApiKey, setShowApiKey] = useState(false)
 
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h2 className="text-base font-semibold text-fg">{label} LLM</h2>
+        <h2 className="text-base font-semibold text-fg">Dispatch LLM</h2>
         <p className="mt-1 text-xs text-fg-muted">
-          {label === 'Dispatch'
-            ? '地址、模型或 Token 数留空时沿用 Worker 配置；API Key 留空表示不鉴权。'
-            : 'Worker 配置用于执行任务；API Key 可留空以连接无需鉴权的本地模型。'}
+          用于规划任务和总结 Worker 执行结果；API Key 可留空以连接无需鉴权的本地模型。
         </p>
       </div>
       <TextInput
@@ -92,34 +89,13 @@ function ProfileFields({
         type="number"
         value={profile.maxTokens}
       />
-      {label === 'Worker' ? (
-        <>
-          <TextArea
-            hint="可填写外部 Worker 命令。不经过 Shell 执行；支持 {{prompt}} 注入参数，同时也会将 prompt 写入标准输入。"
-            label="Worker 启动命令行"
-            onChange={(event) => onChange({ ...profile, command: event.target.value })}
-            placeholder="my-worker --prompt {{prompt}}"
-            spellCheck={false}
-            value={profile.command}
-          />
-          <TextArea
-            className="min-h-32 font-mono"
-            hint="使用 JSON 对象配置环境变量，例如 {&quot;API_URL&quot;:&quot;{{llm_url}}&quot;,&quot;TASK&quot;:&quot;{{prompt}}&quot;}。值支持 prompt、LLM 配置和当前任务占位符。"
-            label="Worker 环境变量"
-            onChange={(event) => onChange({ ...profile, env: event.target.value })}
-            placeholder={'{"API_URL":"{{llm_url}}","TASK":"{{prompt}}"}'}
-            spellCheck={false}
-            value={profile.env}
-          />
-        </>
-      ) : null}
     </div>
   )
 }
 
 export function SettingsPage() {
-  const [worker, setWorker] = useState<ProfileValues>(emptyProfile)
-  const [dispatch, setDispatch] = useState<ProfileValues>(emptyProfile)
+  const [worker, setWorker] = useState<WorkerValues>({ command: '', env: '{}' })
+  const [dispatch, setDispatch] = useState<DispatchValues>({ url: '', apiKey: '', model: '', maxTokens: '' })
   const [maxIterations, setMaxIterations] = useState('')
   const [promptPlan, setPromptPlan] = useState('')
   const [promptWorker, setPromptWorker] = useState('')
@@ -138,10 +114,6 @@ export function SettingsPage() {
         const settings = await api.getSettings()
         if (cancelled) return
         setWorker({
-          url: settings.worker_llm_url || settings.llm_url,
-          apiKey: settings.worker_api_key || settings.api_key,
-          model: settings.worker_model || settings.model,
-          maxTokens: String(settings.worker_max_tokens || settings.max_tokens || ''),
           command: settings.worker_command,
           env: JSON.stringify(settings.worker_env ?? {}, null, 2),
         })
@@ -150,8 +122,6 @@ export function SettingsPage() {
           apiKey: settings.dispatch_api_key,
           model: settings.dispatch_model,
           maxTokens: String(settings.dispatch_max_tokens || ''),
-          command: '',
-          env: '{}',
         })
         setMaxIterations(String(settings.max_iterations || ''))
         setPromptPlan(settings.dispatch_plan_prompt)
@@ -177,18 +147,13 @@ export function SettingsPage() {
     setError(null)
     setNotice(null)
 
-    const workerUrl = worker.url.trim()
-    const workerModel = worker.model.trim()
-    const workerTokens = Number(worker.maxTokens)
-    if (!workerUrl || !workerModel) {
-      setError('Worker 的 LLM 地址和模型都是必填项。')
+    const dispatchUrl = dispatch.url.trim()
+    const dispatchModel = dispatch.model.trim()
+    if (!dispatchUrl || !dispatchModel) {
+      setError('Dispatch 的 LLM 地址和模型都是必填项。')
       return
     }
-    if (!Number.isInteger(workerTokens) || workerTokens <= 0 || workerTokens > MAX_TOKENS_LIMIT) {
-      setError(`Worker 最大 Token 数必须是 1 到 ${MAX_TOKENS_LIMIT} 之间的整数。`)
-      return
-    }
-    const dispatchTokens = dispatch.maxTokens.trim() ? Number(dispatch.maxTokens) : workerTokens
+    const dispatchTokens = Number(dispatch.maxTokens)
     if (!Number.isInteger(dispatchTokens) || dispatchTokens <= 0 || dispatchTokens > MAX_TOKENS_LIMIT) {
       setError(`Dispatch 最大 Token 数必须是 1 到 ${MAX_TOKENS_LIMIT} 之间的整数。`)
       return
@@ -220,19 +185,11 @@ export function SettingsPage() {
     setSaving(true)
     try {
       const saved = await api.updateSettings({
-        llm_url: workerUrl,
-        api_key: worker.apiKey.trim(),
-        model: workerModel,
-        max_tokens: workerTokens,
-        worker_llm_url: workerUrl,
-        worker_api_key: worker.apiKey.trim(),
-        worker_model: workerModel,
-        worker_max_tokens: workerTokens,
         worker_command: worker.command.trim(),
         worker_env: workerEnv,
-        dispatch_llm_url: dispatch.url.trim(),
+        dispatch_llm_url: dispatchUrl,
         dispatch_api_key: dispatch.apiKey.trim(),
-        dispatch_model: dispatch.model.trim(),
+        dispatch_model: dispatchModel,
         dispatch_max_tokens: dispatchTokens,
         max_iterations: iterations,
         worker_prompt: promptWorker,
@@ -240,10 +197,6 @@ export function SettingsPage() {
         dispatch_summary_prompt: promptSummarize,
       })
       setWorker({
-        url: saved.worker_llm_url || saved.llm_url,
-        apiKey: saved.worker_api_key || saved.api_key,
-        model: saved.worker_model || saved.model,
-        maxTokens: String(saved.worker_max_tokens || saved.max_tokens),
         command: saved.worker_command,
         env: JSON.stringify(saved.worker_env ?? {}, null, 2),
       })
@@ -252,8 +205,6 @@ export function SettingsPage() {
         apiKey: saved.dispatch_api_key,
         model: saved.dispatch_model,
         maxTokens: String(saved.dispatch_max_tokens),
-        command: '',
-        env: '{}',
       })
       setMaxIterations(String(saved.max_iterations))
       setPromptPlan(saved.dispatch_plan_prompt)
@@ -277,7 +228,7 @@ export function SettingsPage() {
       <div>
         <h1 className="text-2xl font-semibold text-fg md:text-3xl">设置</h1>
         <p className="mt-1 text-sm text-fg-muted">
-          配置 worker、dispatch 使用的模型，以及程序执行过程中使用的提示词。保存后写入本地数据库。
+          配置 Worker 命令行和环境变量、Dispatch 模型及提示词。保存后写入本地数据库。
         </p>
       </div>
 
@@ -287,8 +238,32 @@ export function SettingsPage() {
       <form onSubmit={handleSubmit}>
         <div className="flex flex-col gap-4">
           <Card className="grid gap-6 p-4 md:grid-cols-2">
-            <ProfileFields label="Worker" onChange={setWorker} profile={worker} />
-            <ProfileFields label="Dispatch" onChange={setDispatch} profile={dispatch} />
+            <div className="flex flex-col gap-4">
+              <div>
+                <h2 className="text-base font-semibold text-fg">Worker</h2>
+                <p className="mt-1 text-xs text-fg-muted">
+                  通过命令行执行任务，可使用环境变量配置所调用的工具。
+                </p>
+              </div>
+              <TextArea
+                hint="执行任务前需配置命令。不经过 Shell 执行；支持 {{prompt}} 注入参数，同时也会将 prompt 写入标准输入。"
+                label="Worker 启动命令行"
+                onChange={(event) => setWorker({ ...worker, command: event.target.value })}
+                placeholder="my-worker --prompt {{prompt}}"
+                spellCheck={false}
+                value={worker.command}
+              />
+              <TextArea
+                className="min-h-32 font-mono"
+                hint="使用 JSON 对象配置环境变量，例如 {&quot;TASK&quot;:&quot;{{prompt}}&quot;}。值支持 prompt、Dispatch 配置和当前任务占位符。"
+                label="Worker 环境变量"
+                onChange={(event) => setWorker({ ...worker, env: event.target.value })}
+                placeholder={'{"TASK":"{{prompt}}"}'}
+                spellCheck={false}
+                value={worker.env}
+              />
+            </div>
+            <DispatchFields onChange={setDispatch} profile={dispatch} />
           </Card>
 
           <Card className="flex flex-col gap-4 p-4">

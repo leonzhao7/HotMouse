@@ -36,18 +36,16 @@ func TestGetSettingsReturnsEmptyDefaults(t *testing.T) {
 func TestUpdateSettingsStoresWorkerDispatchAndPromptConfiguration(t *testing.T) {
 	service := newTestService(t)
 	saved, err := service.UpdateSettings(context.Background(), UpdateSettingsInput{
-		LLMURL: "https://worker.example/v1", APIKey: "worker-key", Model: "worker", MaxTokens: 500,
-		WorkerLLMURL: "https://worker.example/v1", WorkerAPIKey: "worker-key", WorkerModel: "worker", WorkerMaxTokens: 500,
 		DispatchLLMURL: "https://dispatch.example/v1", DispatchAPIKey: "dispatch-key", DispatchModel: "dispatch", DispatchMaxTokens: 900,
 		MaxIterations: 3, WorkerPrompt: "do {{action}}", DispatchPlanPrompt: "plan {{graph_json}}", DispatchSummaryPrompt: "summarize {{worker_output}}",
 		WorkerCommand: "my-worker --prompt {{prompt}}",
-		WorkerEnv:     map[string]string{"TASK": "{{prompt}}", "MODEL": "{{worker_model}}"},
+		WorkerEnv:     map[string]string{"TASK": "{{prompt}}", "MODEL": "tool-model"},
 	})
 	if err != nil {
 		t.Fatalf("update settings: %v", err)
 	}
-	if got := saved.ForWorker(); got.LLMURL != "https://worker.example/v1" || got.APIKey != "worker-key" || got.Model != "worker" || got.MaxTokens != 500 {
-		t.Fatalf("worker profile = %+v", got)
+	if saved.LLMURL != saved.DispatchLLMURL || saved.APIKey != saved.DispatchAPIKey || saved.Model != saved.DispatchModel || saved.MaxTokens != saved.DispatchMaxTokens {
+		t.Fatalf("legacy LLM aliases do not match dispatch: %+v", saved)
 	}
 	if got := saved.ForDispatch(); got.LLMURL != "https://dispatch.example/v1" || got.APIKey != "dispatch-key" || got.Model != "dispatch" || got.MaxTokens != 900 {
 		t.Fatalf("dispatch profile = %+v", got)
@@ -58,7 +56,7 @@ func TestUpdateSettingsStoresWorkerDispatchAndPromptConfiguration(t *testing.T) 
 	if saved.WorkerCommand != "my-worker --prompt {{prompt}}" {
 		t.Fatalf("worker command = %q", saved.WorkerCommand)
 	}
-	if saved.WorkerEnv["TASK"] != "{{prompt}}" || saved.WorkerEnv["MODEL"] != "{{worker_model}}" {
+	if saved.WorkerEnv["TASK"] != "{{prompt}}" || saved.WorkerEnv["MODEL"] != "tool-model" {
 		t.Fatalf("worker environment = %#v", saved.WorkerEnv)
 	}
 	loaded, err := service.GetSettings(context.Background())
@@ -119,9 +117,17 @@ func TestUpdateSettingsRejectsInvalidInput(t *testing.T) {
 		"zero tokens":     {LLMURL: "https://api.example.com", Model: "model", MaxTokens: 0},
 		"negative tokens": {LLMURL: "https://api.example.com", Model: "model", MaxTokens: -1},
 		"too many tokens": {LLMURL: "https://api.example.com", Model: "model", MaxTokens: maxTokensLimit + 1},
-		"too many worker tokens": {
-			LLMURL: "https://api.example.com", Model: "model", MaxTokens: 1,
-			WorkerLLMURL: "https://worker.example", WorkerModel: "worker", WorkerMaxTokens: maxTokensLimit + 1,
+		"too many dispatch tokens": {
+			DispatchLLMURL: "https://dispatch.example", DispatchModel: "dispatch", DispatchMaxTokens: maxTokensLimit + 1,
+		},
+		"missing dispatch URL": {
+			DispatchModel: "dispatch", DispatchMaxTokens: 1,
+		},
+		"missing dispatch model": {
+			DispatchLLMURL: "https://dispatch.example", DispatchMaxTokens: 1,
+		},
+		"missing dispatch tokens": {
+			DispatchLLMURL: "https://dispatch.example", DispatchModel: "dispatch",
 		},
 		"too many dispatch iterations": {
 			LLMURL: "https://api.example.com", Model: "model", MaxTokens: 1,
@@ -139,6 +145,38 @@ func TestUpdateSettingsRejectsInvalidInput(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHTTPSettingsAcceptsDispatchAndWorkerCommandWithoutWorkerLLM(t *testing.T) {
+	app := newTestApp(t)
+	body := `{"dispatch_llm_url":"https://dispatch.example/v1","dispatch_model":"dispatch","dispatch_max_tokens":512,"worker_command":"my-worker --prompt {{prompt}}","worker_env":{"API_KEY":"tool-key"}}`
+	for _, method := range []string{http.MethodPut, http.MethodGet} {
+		requestBody := ""
+		if method == http.MethodPut {
+			requestBody = body
+		}
+		response := serveJSON(t, app, method, "/settings", requestBody)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s settings status = %d, body = %s", method, response.Code, response.Body.String())
+		}
+		var saved domain.Settings
+		if err := json.Unmarshal(response.Body.Bytes(), &saved); err != nil {
+			t.Fatalf("decode settings: %v", err)
+		}
+		if saved.DispatchModel != "dispatch" || saved.WorkerCommand != "my-worker --prompt {{prompt}}" || saved.WorkerEnv["API_KEY"] != "tool-key" {
+			t.Fatalf("settings = %+v", saved)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(response.Body.Bytes(), &fields); err != nil {
+			t.Fatal(err)
+		}
+		for _, removed := range []string{"worker_llm_url", "worker_api_key", "worker_model", "worker_max_tokens"} {
+			if _, exists := fields[removed]; exists {
+				t.Errorf("%s settings still returns %s", method, removed)
+			}
+		}
+	}
+	assertHTTPError(t, serveJSON(t, app, http.MethodPut, "/settings", `{"worker_llm_url":"https://worker.example/v1"}`), http.StatusBadRequest, "invalid_json")
 }
 
 func TestHTTPSettingsRoundTrip(t *testing.T) {

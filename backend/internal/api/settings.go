@@ -9,7 +9,7 @@ import (
 	"hotmouse/backend/internal/domain"
 )
 
-var ErrInvalidSettings = errors.New("invalid LLM settings")
+var ErrInvalidSettings = errors.New("invalid settings")
 
 const (
 	settingsRowID      = 1
@@ -26,12 +26,8 @@ type UpdateSettingsInput struct {
 	Model     string `json:"model"`
 	MaxTokens int    `json:"max_tokens"`
 
-	WorkerLLMURL    string            `json:"worker_llm_url"`
-	WorkerAPIKey    string            `json:"worker_api_key"`
-	WorkerModel     string            `json:"worker_model"`
-	WorkerMaxTokens int               `json:"worker_max_tokens"`
-	WorkerCommand   string            `json:"worker_command"`
-	WorkerEnv       map[string]string `json:"worker_env"`
+	WorkerCommand string            `json:"worker_command"`
+	WorkerEnv     map[string]string `json:"worker_env"`
 
 	DispatchLLMURL    string `json:"dispatch_llm_url"`
 	DispatchAPIKey    string `json:"dispatch_api_key"`
@@ -62,22 +58,16 @@ func (service *Service) GetSettings(ctx context.Context) (domain.Settings, error
 // UpdateSettings replaces the singleton row. API keys are stored as given
 // because the service has no other way to authenticate with the LLM provider.
 func (service *Service) UpdateSettings(ctx context.Context, input UpdateSettingsInput) (domain.Settings, error) {
-	input.LLMURL = strings.TrimSpace(input.LLMURL)
-	input.APIKey = strings.TrimSpace(input.APIKey)
-	input.Model = strings.TrimSpace(input.Model)
-	if input.LLMURL == "" || input.Model == "" || input.MaxTokens <= 0 || input.MaxTokens > maxTokensLimit {
-		return domain.Settings{}, fmt.Errorf("%w: llm_url and model are required; max_tokens must be between 1 and %d", ErrInvalidSettings, maxTokensLimit)
+	dispatch := normalizeProfile(input.DispatchLLMURL, input.DispatchAPIKey, input.DispatchModel, input.DispatchMaxTokens,
+		strings.TrimSpace(input.LLMURL), strings.TrimSpace(input.APIKey), strings.TrimSpace(input.Model), input.MaxTokens)
+	if dispatch.llmURL == "" || dispatch.model == "" || dispatch.maxTokens <= 0 || dispatch.maxTokens > maxTokensLimit {
+		return domain.Settings{}, fmt.Errorf("%w: dispatch_llm_url and dispatch_model are required; dispatch_max_tokens must be between 1 and %d", ErrInvalidSettings, maxTokensLimit)
 	}
-	worker := normalizeProfile(input.WorkerLLMURL, input.WorkerAPIKey, input.WorkerModel, input.WorkerMaxTokens, input.LLMURL, input.APIKey, input.Model, input.MaxTokens)
-	dispatch := normalizeProfile(input.DispatchLLMURL, input.DispatchAPIKey, input.DispatchModel, input.DispatchMaxTokens, worker.llmURL, worker.apiKey, worker.model, worker.maxTokens)
 	if input.MaxIterations == 0 {
 		input.MaxIterations = defaultIterations
 	}
 	if input.MaxIterations < 1 || input.MaxIterations > maxIterationsLimit {
 		return domain.Settings{}, fmt.Errorf("%w: max_iterations must be between 1 and %d", ErrInvalidSettings, maxIterationsLimit)
-	}
-	if worker.maxTokens <= 0 || worker.maxTokens > maxTokensLimit || dispatch.maxTokens <= 0 || dispatch.maxTokens > maxTokensLimit {
-		return domain.Settings{}, fmt.Errorf("%w: worker and dispatch max tokens must be between 1 and %d", ErrInvalidSettings, maxTokensLimit)
 	}
 	if err := validateWorkerEnvironment(input.WorkerEnv); err != nil {
 		return domain.Settings{}, fmt.Errorf("%w: %v", ErrInvalidSettings, err)
@@ -87,14 +77,10 @@ func (service *Service) UpdateSettings(ctx context.Context, input UpdateSettings
 	summaryPrompt := input.DispatchSummaryPrompt
 	settings := domain.Settings{
 		ID:                    settingsRowID,
-		LLMURL:                worker.llmURL,
-		APIKey:                worker.apiKey,
-		Model:                 worker.model,
-		MaxTokens:             worker.maxTokens,
-		WorkerLLMURL:          worker.llmURL,
-		WorkerAPIKey:          worker.apiKey,
-		WorkerModel:           worker.model,
-		WorkerMaxTokens:       worker.maxTokens,
+		LLMURL:                dispatch.llmURL,
+		APIKey:                dispatch.apiKey,
+		Model:                 dispatch.model,
+		MaxTokens:             dispatch.maxTokens,
 		WorkerCommand:         strings.TrimSpace(input.WorkerCommand),
 		WorkerEnv:             cloneStringMap(input.WorkerEnv),
 		DispatchLLMURL:        dispatch.llmURL,
@@ -142,18 +128,16 @@ func withSettingsDefaults(settings domain.Settings) domain.Settings {
 	if settings.WorkerEnv == nil {
 		settings.WorkerEnv = map[string]string{}
 	}
-	if settings.WorkerLLMURL == "" {
-		settings.WorkerLLMURL = settings.LLMURL
-		settings.WorkerAPIKey = settings.APIKey
-		settings.WorkerModel = settings.Model
-		settings.WorkerMaxTokens = settings.MaxTokens
-	}
 	if settings.DispatchLLMURL == "" {
 		settings.DispatchLLMURL = settings.LLMURL
 		settings.DispatchAPIKey = settings.APIKey
 		settings.DispatchModel = settings.Model
 		settings.DispatchMaxTokens = settings.MaxTokens
 	}
+	settings.LLMURL = settings.DispatchLLMURL
+	settings.APIKey = settings.DispatchAPIKey
+	settings.Model = settings.DispatchModel
+	settings.MaxTokens = settings.DispatchMaxTokens
 	if settings.MaxIterations == 0 {
 		settings.MaxIterations = defaultIterations
 	}

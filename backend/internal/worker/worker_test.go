@@ -101,6 +101,7 @@ func TestRunConfiguredUsesCommandAndStdin(t *testing.T) {
 	var output strings.Builder
 	err = RunConfigured(context.Background(), domain.Settings{
 		WorkerCommand: commandLine,
+		WorkerEnv:     map[string]string{"HOTMOUSE_TEST_WORKER_TASK": "{{prompt}}"},
 	}, "hello from worker", &output)
 	if err != nil {
 		t.Fatalf("run configured worker: %v", err)
@@ -114,10 +115,23 @@ func TestWorkerCommandHelper(test *testing.T) {
 	if os.Getenv("HOTMOUSE_TEST_WORKER_CHILD") != "1" {
 		return
 	}
-	if _, err := io.Copy(os.Stdout, os.Stdin); err != nil {
+	prompt, err := io.ReadAll(os.Stdin)
+	if err != nil || os.Getenv("HOTMOUSE_TEST_WORKER_TASK") != string(prompt) {
 		os.Exit(2)
 	}
+	if _, err := os.Stdout.Write(prompt); err != nil {
+		os.Exit(3)
+	}
 	os.Exit(0)
+}
+
+func TestRunConfiguredRequiresCommandEvenWithLLMSettings(t *testing.T) {
+	err := RunConfigured(context.Background(), domain.Settings{
+		LLMURL: "https://example.test/v1", Model: "dispatch-model", MaxTokens: 128,
+	}, "hello", io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "worker command is required") {
+		t.Fatalf("error = %v, want missing worker command", err)
+	}
 }
 
 func quoteCommandArgument(value string) string {
@@ -136,15 +150,16 @@ func TestRunConfiguredReplacesPromptPlaceholderWithoutShell(t *testing.T) {
 }
 
 func TestWorkerEnvironmentExpandsConfigurationPlaceholders(t *testing.T) {
+	replacements := workerPlaceholders(domain.Settings{
+		DispatchModel: "dispatch-model", DispatchLLMURL: "https://dispatch.example/v1",
+		WorkerTemplateValues: map[string]string{"action": "run a test"},
+	}, "hello world")
 	values, err := workerEnvironment(map[string]string{
-		"TASK":  "{{prompt}}",
-		"MODEL": "{{worker_model}}",
-		"URL":   "{{worker_llm_url}}",
-	}, map[string]string{
-		"prompt":         "hello world",
-		"worker_model":   "worker-model",
-		"worker_llm_url": "https://worker.example/v1",
-	})
+		"TASK":   "{{prompt}}",
+		"MODEL":  "{{dispatch_model}}",
+		"URL":    "{{dispatch_llm_url}}",
+		"ACTION": "{{action}}",
+	}, replacements)
 	if err != nil {
 		t.Fatalf("expand worker environment: %v", err)
 	}
@@ -155,7 +170,7 @@ func TestWorkerEnvironmentExpandsConfigurationPlaceholders(t *testing.T) {
 			got[key] = content
 		}
 	}
-	if got["TASK"] != "hello world" || got["MODEL"] != "worker-model" || got["URL"] != "https://worker.example/v1" {
+	if got["TASK"] != "hello world" || got["MODEL"] != "dispatch-model" || got["URL"] != "https://dispatch.example/v1" || got["ACTION"] != "run a test" {
 		t.Fatalf("expanded environment = %#v", got)
 	}
 }

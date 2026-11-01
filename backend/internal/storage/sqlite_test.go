@@ -25,6 +25,18 @@ func (legacySettings) TableName() string {
 	return "settings"
 }
 
+type legacyProfileSettings struct {
+	domain.Settings
+	WorkerLLMURL    string `gorm:"not null;default:''"`
+	WorkerAPIKey    string `gorm:"not null;default:''"`
+	WorkerModel     string `gorm:"not null;default:''"`
+	WorkerMaxTokens int    `gorm:"not null;default:0"`
+}
+
+func (legacyProfileSettings) TableName() string {
+	return "settings"
+}
+
 func openTestDatabase(test *testing.T, dsn string) *gorm.DB {
 	test.Helper()
 	db, err := Open(dsn)
@@ -137,8 +149,54 @@ func TestOpenMigratesLegacySettings(test *testing.T) {
 	if settings.LLMURL != "https://legacy.example/v1" || settings.APIKey != "legacy-key" || settings.Model != "legacy-model" || settings.MaxTokens != 700 {
 		test.Fatalf("legacy values changed during migration: %+v", settings)
 	}
-	if settings.DispatchLLMURL != "" || settings.WorkerLLMURL != "" {
-		test.Fatalf("new profile fields should remain empty for compatibility fallback: %+v", settings)
+	if settings.DispatchLLMURL != "" {
+		test.Fatalf("dispatch profile should remain empty for compatibility fallback: %+v", settings)
+	}
+}
+
+func TestOpenPreservesDispatchAndWorkerCommandFromLegacyProfiles(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "profiles.db")
+	legacyDB, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacyDB.AutoMigrate(&legacyProfileSettings{}); err != nil {
+		t.Fatal(err)
+	}
+	previous := legacyProfileSettings{
+		Settings: domain.Settings{
+			ID: 1, LLMURL: "https://worker.example/v1", APIKey: "worker-key", Model: "worker", MaxTokens: 500,
+			DispatchLLMURL: "https://dispatch.example/v1", DispatchAPIKey: "dispatch-key", DispatchModel: "dispatch", DispatchMaxTokens: 900,
+			WorkerCommand: "my-worker --prompt {{prompt}}", WorkerEnv: map[string]string{"API_KEY": "tool-key"},
+		},
+		WorkerLLMURL: "https://worker.example/v1", WorkerAPIKey: "worker-key", WorkerModel: "worker", WorkerMaxTokens: 500,
+	}
+	if err := legacyDB.Create(&previous).Error; err != nil {
+		t.Fatal(err)
+	}
+	legacySQL, err := legacyDB.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacySQL.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db := openTestDatabase(t, dsn)
+	var settings domain.Settings
+	if err := db.First(&settings, "id = ?", 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	dispatch := settings.ForDispatch()
+	if dispatch.LLMURL != previous.DispatchLLMURL || dispatch.APIKey != previous.DispatchAPIKey || dispatch.Model != previous.DispatchModel || dispatch.MaxTokens != previous.DispatchMaxTokens {
+		t.Fatalf("dispatch settings changed during migration: %+v", dispatch)
+	}
+	if settings.WorkerCommand != previous.WorkerCommand || settings.WorkerEnv["API_KEY"] != "tool-key" {
+		t.Fatalf("worker command/environment changed during migration: %+v", settings)
+	}
+	settings.WorkerEnv["API_KEY"] = "new-tool-key"
+	if err := db.Save(&settings).Error; err != nil {
+		t.Fatalf("save settings after migration: %v", err)
 	}
 }
 

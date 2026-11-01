@@ -39,6 +39,7 @@ func (agent AgentFunc) Run(ctx context.Context, settings domain.Settings, prompt
 type Dispatcher struct {
 	store     Store
 	agent     Agent
+	worker    Agent
 	llmLogger *llmlog.Logger
 
 	mu      sync.Mutex
@@ -64,14 +65,15 @@ type summary struct {
 	GoalReached bool               `json:"goal_reached"`
 }
 
-func New(store Store, agent Agent) *Dispatcher {
-	return NewWithLogger(store, agent, nil)
+func New(store Store, agent, worker Agent) *Dispatcher {
+	return NewWithLogger(store, agent, worker, nil)
 }
 
-func NewWithLogger(store Store, agent Agent, llmLogger *llmlog.Logger) *Dispatcher {
+func NewWithLogger(store Store, agent, worker Agent, llmLogger *llmlog.Logger) *Dispatcher {
 	return &Dispatcher{
 		store:     store,
 		agent:     agent,
+		worker:    worker,
 		llmLogger: llmLogger,
 		pending:   make(map[uint]struct{}),
 		active:    make(map[uint]*projectRun),
@@ -163,7 +165,7 @@ func (dispatcher *Dispatcher) dispatchProject(ctx context.Context, projectID uin
 	defer finish()
 	settings, err := dispatcher.store.GetSettings(ctx)
 	if err != nil {
-		return fmt.Errorf("load LLM settings: %w", err)
+		return fmt.Errorf("load settings: %w", err)
 	}
 	iterations := settings.MaxIterations
 	if iterations <= 0 {
@@ -197,9 +199,9 @@ func (dispatcher *Dispatcher) dispatchProject(ctx context.Context, projectID uin
 			"action":  selectedPlan.Action,
 		}
 		workerPrompt := renderPrompt(settings.WorkerPrompt, domain.DefaultWorkerPrompt, workerTemplateValues)
-		workerSettings := settings.ForWorker()
+		workerSettings := settings
 		workerSettings.WorkerTemplateValues = workerTemplateValues
-		workerOutput, err := dispatcher.runAgent(ctx, workerSettings, workerPrompt)
+		workerOutput, err := runAgent(ctx, dispatcher.worker, workerSettings, workerPrompt)
 		if err != nil {
 			return fmt.Errorf("run planned worker action: %w", err)
 		}
@@ -306,9 +308,9 @@ func renderPrompt(value, fallback string, replacements map[string]string) string
 	return strings.NewReplacer(pairs...).Replace(value)
 }
 
-func (dispatcher *Dispatcher) runAgent(ctx context.Context, settings domain.Settings, prompt string) (string, error) {
+func runAgent(ctx context.Context, agent Agent, settings domain.Settings, prompt string) (string, error) {
 	var output cappedBuffer
-	if err := dispatcher.agent.Run(ctx, settings, prompt, &output); err != nil {
+	if err := agent.Run(ctx, settings, prompt, &output); err != nil {
 		return "", err
 	}
 	return output.String(), nil
@@ -316,11 +318,11 @@ func (dispatcher *Dispatcher) runAgent(ctx context.Context, settings domain.Sett
 
 func (dispatcher *Dispatcher) runDispatchAgent(ctx context.Context, settings domain.Settings, prompt, operation string) (string, error) {
 	if dispatcher.llmLogger == nil {
-		return dispatcher.runAgent(ctx, settings, prompt)
+		return runAgent(ctx, dispatcher.agent, settings, prompt)
 	}
 	ctx = llmlog.WithLLMLogger(ctx, dispatcher.llmLogger)
 	ctx = llmlog.WithOperation(ctx, operation)
-	return dispatcher.runAgent(ctx, settings, prompt)
+	return runAgent(ctx, dispatcher.agent, settings, prompt)
 }
 
 func decodeObject(content string, target any) error {
