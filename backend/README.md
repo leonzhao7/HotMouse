@@ -2,6 +2,8 @@
 
 Local single-process backend for HotMouse. It uses Go, Iris and SQLite.
 
+The React workbench is in [frontend](../frontend/README.md). Start this backend, then run `npm ci` and `npm run dev` in `frontend/` and open `http://127.0.0.1:5173`. The frontend proxies both core and product API routes and supports browser registration/login.
+
 The command-line interface and examples are documented in [docs/cli.md](../docs/cli.md). The binary runs a service with `serve`; all business commands use its HTTP API. Running `hotmouse` without a subcommand prints help.
 
 ```bash

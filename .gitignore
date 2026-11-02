@@ -34,6 +34,16 @@ backend/*.db-wal
 backend/*.db-journal
 backend/hotmouse
 
+# Frontend build and local test output
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/.env.local
+frontend/.env.*.local
+backend/data/
+.hotmouse/run/
+
 # Editor/IDE
 # .idea/
 # .vscode/
