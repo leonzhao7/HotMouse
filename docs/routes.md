@@ -1,5 +1,7 @@
 # Route scope
 
+The CLI commands and their route mappings are described in [cli.md](cli.md). Run the HTTP service with `hotmouse serve`; business commands connect through the API.
+
 Core routes:
 
 - `/projects` create/list/read/delete/title/status, complete/reopen, YAML export

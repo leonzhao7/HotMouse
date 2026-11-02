@@ -35,11 +35,13 @@ type workerConfig struct {
 
 func New(db *core.DB) *Runner { return &Runner{DB: db, Interval: time.Second} }
 
-func (r *Runner) Start(ctx context.Context) {
+func (r *Runner) Start(ctx context.Context) <-chan struct{} {
 	if r.Interval <= 0 {
 		r.Interval = time.Second
 	}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		t := time.NewTicker(r.Interval)
 		defer t.Stop()
 		for {
@@ -51,6 +53,7 @@ func (r *Runner) Start(ctx context.Context) {
 			}
 		}
 	}()
+	return done
 }
 
 func (r *Runner) RunOnce(ctx context.Context) {

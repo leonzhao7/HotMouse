@@ -2,35 +2,36 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
+	"os/signal"
+	"sync/atomic"
+	"syscall"
 
-	"github.com/kataras/iris/v12"
-	"hotmouse/backend/internal/core"
-	"hotmouse/backend/internal/httpapi"
-	"hotmouse/backend/internal/worker"
+	"hotmouse/backend/internal/cli"
 )
 
 func main() {
-	path := os.Getenv("HOTMOUSE_DB")
-	db, err := core.Open(path)
-	if err != nil {
-		log.Fatal(err)
+	ctx, cancel := context.WithCancel(context.Background())
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	var interrupted atomic.Int32
+	go func() {
+		select {
+		case sig := <-signals:
+			if sig == syscall.SIGTERM {
+				interrupted.Store(143)
+			} else {
+				interrupted.Store(130)
+			}
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	code := cli.Run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
+	signal.Stop(signals)
+	cancel()
+	if interrupted.Load() != 0 {
+		code = int(interrupted.Load())
 	}
-	defer db.SQL.Close()
-	workerCtx, cancelWorker := context.WithCancel(context.Background())
-	defer cancelWorker()
-	if os.Getenv("HOTMOUSE_AUTORUN") == "1" {
-		worker.New(db).Start(workerCtx)
-	}
-	app := iris.New()
-	httpapi.Register(app, httpapi.New(db))
-	addr := os.Getenv("HOTMOUSE_ADDR")
-	if addr == "" {
-		addr = ":8080"
-	}
-	log.Printf("HotMouse backend listening on %s", addr)
-	if err := app.Listen(addr, iris.WithoutServerError(iris.ErrServerClosed)); err != nil {
-		log.Fatal(err)
-	}
+	os.Exit(code)
 }

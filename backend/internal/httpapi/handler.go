@@ -618,15 +618,16 @@ func (h *Handler) WorkerConfig(ctx iris.Context) {
 }
 func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 	var r struct {
-		Name            string            `json:"name"`
-		Driver          string            `json:"driver"`
-		Command         string            `json:"command"`
-		WorkspaceRoot   *string           `json:"workspace_root"`
-		CompletedAction *string           `json:"completed_action"`
-		ContextRoot     *string           `json:"context_root"`
-		Runtime         json.RawMessage   `json:"runtime"`
-		Environment     map[string]string `json:"environment"`
-		Enabled         *bool             `json:"enabled"`
+		Name              string            `json:"name"`
+		Driver            string            `json:"driver"`
+		Command           string            `json:"command"`
+		WorkspaceRoot     *string           `json:"workspace_root"`
+		CompletedAction   *string           `json:"completed_action"`
+		ContextRoot       *string           `json:"context_root"`
+		Runtime           json.RawMessage   `json:"runtime"`
+		Environment       map[string]string `json:"environment"`
+		EnvironmentRemove []string          `json:"environment_remove"`
+		Enabled           *bool             `json:"enabled"`
 	}
 	if !read(ctx, &r) {
 		return
@@ -683,6 +684,17 @@ func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 		en = 0
 	}
 	env := parseJSON(existingEnv)
+	for _, key := range r.EnvironmentRemove {
+		if strings.TrimSpace(key) == "" {
+			bad(ctx, fmt.Errorf("environment_remove keys must not be empty"))
+			return
+		}
+		if _, exists := r.Environment[key]; exists {
+			bad(ctx, fmt.Errorf("environment key cannot be set and removed together"))
+			return
+		}
+		delete(env, key)
+	}
 	for k, v := range r.Environment {
 		if v == "***" {
 			continue

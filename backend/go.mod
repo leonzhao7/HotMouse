@@ -3,9 +3,14 @@ module hotmouse/backend
 go 1.25.0
 
 require (
+	github.com/gofrs/flock v0.12.1
 	github.com/kataras/iris/v12 v12.2.11
 	github.com/mattn/go-sqlite3 v1.14.42
+	github.com/spf13/cobra v1.9.1
+	github.com/spf13/pflag v1.0.6
 	golang.org/x/crypto v0.23.0
+	golang.org/x/sys v0.26.0
+	golang.org/x/term v0.20.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -29,6 +34,7 @@ require (
 	github.com/gomarkdown/markdown v0.0.0-20240328165702-4d01890c35c0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/css v1.0.0 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/iris-contrib/schema v0.0.6 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/kataras/blocks v0.0.8 // indirect
@@ -40,6 +46,7 @@ require (
 	github.com/mailgun/raymond/v2 v2.0.48 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.26 // indirect
+	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/schollz/closestmatch v2.1.0+incompatible // indirect
 	github.com/sirupsen/logrus v1.8.1 // indirect
@@ -51,7 +58,6 @@ require (
 	github.com/yosssi/ace v0.0.5 // indirect
 	golang.org/x/exp v0.0.0-20240404231335-c0f41cb1a7a0 // indirect
 	golang.org/x/net v0.25.0 // indirect
-	golang.org/x/sys v0.20.0 // indirect
 	golang.org/x/text v0.15.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
