@@ -614,7 +614,13 @@ func (h *Handler) WorkerConfig(ctx iris.Context) {
 	}
 	runtime := core.DefaultWorkerRuntime()
 	_ = json.Unmarshal([]byte(runtimeJSON), &runtime)
-	ctx.JSON(iris.Map{"name": name, "driver": driver, "command": command, "environment": maskEnvironment(parseJSON(env)), "enabled": enabled != 0, "updated_at": updated, "worker_mode": "single", "workspace_root": workspaceRoot, "completed_action": completedAction, "context_root": contextRoot, "runtime": runtime})
+	environment := parseJSON(env)
+	if ctx.URLParam("reveal") != "1" && ctx.URLParam("reveal") != "true" {
+		environment = maskEnvironment(environment)
+	} else {
+		ctx.Header("Cache-Control", "no-store")
+	}
+	ctx.JSON(iris.Map{"name": name, "driver": driver, "command": command, "environment": environment, "enabled": enabled != 0, "updated_at": updated, "worker_mode": "single", "workspace_root": workspaceRoot, "completed_action": completedAction, "context_root": contextRoot, "runtime": runtime})
 }
 func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 	var r struct {
@@ -1130,7 +1136,7 @@ func workerBinaryFor(driver string, environment map[string]any) string {
 	return workerBinary(driver)
 }
 func (h *Handler) WorkerHistory(ctx iris.Context) {
-	query := `SELECT w.id,w.worker,w.project_id,p.title,w.step_id,w.task_type,w.status,w.started_at,w.finished_at,w.detail FROM worker_task_history w LEFT JOIN projects p ON p.id=w.project_id`
+	query := `SELECT w.id,w.worker,w.project_id,COALESCE(p.title,''),w.step_id,w.task_type,w.status,w.started_at,w.finished_at,w.detail FROM worker_task_history w LEFT JOIN projects p ON p.id=w.project_id`
 	args := []any{}
 	if name := ctx.Params().Get("worker_name"); name != "" {
 		query += ` WHERE w.worker=?`

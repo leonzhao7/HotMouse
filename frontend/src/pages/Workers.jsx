@@ -311,6 +311,7 @@ export default function Workers() {
 }
 
 function WorkerEditor({ initial, onClose, onSaved }) {
+  const { run } = useApp();
   const [draft, setDraft] = useState(() => ({
     ...initial,
     runtime: { ...initial.runtime },
@@ -330,6 +331,25 @@ function WorkerEditor({ initial, onClose, onSaved }) {
         position === index ? { ...row, [key]: value } : row,
       ),
     );
+  const toggleShowValues = async (show) => {
+    if (!show) {
+      setShowValues(false);
+      return;
+    }
+    const revealed = await run(async () => {
+      const current = await api("/api/workers/config?reveal=1");
+      const environment = current.environment || {};
+      setRows((previous) =>
+        previous.map((row) =>
+          row.value === "***" && Object.hasOwn(environment, row.key)
+            ? { ...row, value: environment[row.key] }
+            : row,
+        ),
+      );
+      setShowValues(true);
+    });
+    if (!revealed) setShowValues(false);
+  };
   return (
     <FormModal
       title="编辑本地 Worker"
@@ -431,13 +451,13 @@ function WorkerEditor({ initial, onClose, onSaved }) {
           <input
             type="checkbox"
             checked={showValues}
-            onChange={(event) => setShowValues(event.target.checked)}
+            onChange={(event) => toggleShowValues(event.target.checked)}
           />
           显示输入值
         </label>
       </div>
       <p className="muted">
-        保留 *** 会沿用已保存的敏感值；删除行后，保存会移除对应键。
+        显示输入值会读取已保存的敏感环境变量；删除行后，保存会移除对应键。
       </p>
       <div className="environment-rows">
         {rows.map((row, index) => (
