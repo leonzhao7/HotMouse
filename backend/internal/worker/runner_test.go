@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -12,6 +13,42 @@ import (
 
 	"hotmouse/backend/internal/core"
 )
+
+func TestAgentWorkerUsesIdentityAndLogsInvocation(t *testing.T) {
+	db, err := core.Open(filepath.Join(t.TempDir(), "agent-worker.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.SQL.Close()
+	project, err := db.CreateProject(t.Context(), core.CreateProject{Title: "parallel", Origin: "target", Goal: "verify"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	step, err := db.CreateStep(t.Context(), project.Project.ID, core.CreateStep{From: []string{"origin"}, Description: "inspect", Creator: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "worker-id")
+	env, _ := json.Marshal(map[string]string{"WORKER_ID_MARKER": marker})
+	command := `printf '%s' "$HOTMOUSE_WORKER_ID" > "$WORKER_ID_MARKER"; printf '%s' '{"accepted":true,"data":{"description":"confirmed","result":{"type":"progress","detail":"evidence"}}}'`
+	if _, err := db.SQL.Exec(`UPDATE worker_config SET name='local',driver='command',command=?,environment_json=?,worker_count=2 WHERE id=1`, command, string(env)); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	runner := New(db)
+	runner.SetLogOutput(&logs)
+	NewAgentWorker(runner, "local/worker/02").RunOnce(t.Context())
+	identity, err := os.ReadFile(marker)
+	if err != nil || string(identity) != "local/worker/02" {
+		t.Fatalf("worker identity=%q err=%v", identity, err)
+	}
+	text := logs.String()
+	for _, want := range []string{"worker process start", project.Project.ID, step.ID, "local/worker/02", `"sh","-c"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("invocation log missing %q: %s", want, text)
+		}
+	}
+}
 
 func TestDecideContractAppliesWrappedStepMutation(t *testing.T) {
 	db, err := core.Open(filepath.Join(t.TempDir(), "worker.db"))

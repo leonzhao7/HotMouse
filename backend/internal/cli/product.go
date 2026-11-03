@@ -341,7 +341,7 @@ func (a *app) updateWorker(c *cobra.Command, patch map[string]any) (any, error) 
 	return a.request(c, "PUT", "/api/workers/config", body)
 }
 func (a *app) workers() *cobra.Command {
-	g := group("worker", "管理服务内单个串行 Worker；历史只覆盖最近 20 条")
+	g := group("worker", "管理项目 Dispatcher 和 Agent Worker 池；历史只覆盖最近 20 条")
 	status := a.leaf("status", "显示本地 Worker、执行和恢复状态", 0, 0, "none", func(c *cobra.Command, _ []string) (any, error) { return a.get(c, "/api/workers/observability") })
 	watchFlags(status)
 	g.AddCommand(status)

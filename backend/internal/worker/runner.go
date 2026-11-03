@@ -6,9 +6,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"hotmouse/backend/internal/core"
@@ -20,6 +23,9 @@ import (
 type Runner struct {
 	DB       *core.DB
 	Interval time.Duration
+	logger   *log.Logger
+	locksMu  sync.Mutex
+	stepLock map[string]*sync.Mutex
 }
 
 type workerConfig struct {
@@ -31,9 +37,66 @@ type workerConfig struct {
 	completedAction string
 	contextRoot     string
 	runtime         core.WorkerRuntime
+	workerCount     int
+	identity        string
+	logger          *log.Logger
 }
 
-func New(db *core.DB) *Runner { return &Runner{DB: db, Interval: time.Second} }
+const defaultWorkerCount = 4
+
+func New(db *core.DB) *Runner {
+	return &Runner{DB: db, Interval: time.Second, logger: log.New(io.Discard, "", log.LstdFlags), stepLock: map[string]*sync.Mutex{}}
+}
+
+func (r *Runner) SetLogOutput(output io.Writer) {
+	if output == nil {
+		output = io.Discard
+	}
+	r.logger = log.New(output, "", log.LstdFlags)
+}
+
+// Dispatcher owns planning for exactly one project. Agent workers only claim
+// and execute existing steps; they never modify the project plan.
+type Dispatcher struct {
+	runner  *Runner
+	project string
+}
+
+func NewDispatcher(runner *Runner, project string) *Dispatcher {
+	return &Dispatcher{runner: runner, project: project}
+}
+
+func (d *Dispatcher) RunOnce(ctx context.Context) {
+	d.runner.dispatchProject(ctx, d.project)
+}
+
+// AgentWorker is one stable local worker instance mapped to an external agent
+// invocation for each claimed step.
+type AgentWorker struct {
+	runner   *Runner
+	Identity string
+}
+
+// Worker is the public name used by the execution role. AgentWorker remains
+// descriptive in internal code while this alias keeps the role explicit for
+// integrations that construct a worker directly.
+type Worker = AgentWorker
+
+func NewAgentWorker(runner *Runner, identity string) *AgentWorker {
+	return &AgentWorker{runner: runner, Identity: identity}
+}
+
+func NewWorker(runner *Runner, identity string) *Worker {
+	return NewAgentWorker(runner, identity)
+}
+
+func NewProjectDispatcher(runner *Runner, project string) *Dispatcher {
+	return NewDispatcher(runner, project)
+}
+
+func (w *AgentWorker) RunOnce(ctx context.Context) {
+	w.runner.executeNext(ctx, w.Identity)
+}
 
 func (r *Runner) Start(ctx context.Context) <-chan struct{} {
 	if r.Interval <= 0 {
@@ -42,25 +105,133 @@ func (r *Runner) Start(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		t := time.NewTicker(r.Interval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				r.RunOnce(ctx)
-			}
-		}
+		r.startDispatchersAndWorkers(ctx)
 	}()
 	return done
 }
 
-func (r *Runner) RunOnce(ctx context.Context) {
-	if !r.DB.WorkerMu.TryLock() {
+func (r *Runner) startDispatchersAndWorkers(ctx context.Context) {
+	var wg sync.WaitGroup
+	childCtx, cancel := context.WithCancel(ctx)
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
+
+	dispatchers := map[string]<-chan struct{}{}
+	manager := time.NewTicker(r.Interval)
+	defer manager.Stop()
+	workerCount := r.config(ctx).workerCount
+	if workerCount < 1 {
+		workerCount = defaultWorkerCount
+	}
+	for slot := 1; slot <= workerCount; slot++ {
+		identity := r.workerIdentity(slot)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.agentWorkerLoop(childCtx, NewAgentWorker(r, identity))
+		}()
+	}
+
+	startDispatchers := func() {
+		for project, finished := range dispatchers {
+			select {
+			case <-finished:
+				delete(dispatchers, project)
+			default:
+			}
+		}
+		rows, err := r.DB.SQL.QueryContext(childCtx, `SELECT id FROM projects WHERE status='active' ORDER BY created_at,id`)
+		if err != nil {
+			return
+		}
+		projects := []string{}
+		for rows.Next() {
+			var project string
+			if rows.Scan(&project) == nil {
+				projects = append(projects, project)
+			}
+		}
+		_ = rows.Close()
+		for _, project := range projects {
+			if _, exists := dispatchers[project]; exists {
+				continue
+			}
+			finished := make(chan struct{})
+			dispatchers[project] = finished
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer close(finished)
+				r.dispatcherLoop(childCtx, NewDispatcher(r, project))
+			}()
+		}
+	}
+	startDispatchers()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-manager.C:
+			r.maintenance(childCtx)
+			startDispatchers()
+		}
+	}
+}
+
+func (r *Runner) dispatcherLoop(ctx context.Context, dispatcher *Dispatcher) {
+	ticker := time.NewTicker(r.Interval)
+	defer ticker.Stop()
+	for {
+		var status string
+		if err := r.DB.SQL.QueryRowContext(ctx, `SELECT status FROM projects WHERE id=?`, dispatcher.project).Scan(&status); err != nil || status != "active" {
+			return
+		}
+		dispatcher.RunOnce(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (r *Runner) agentWorkerLoop(ctx context.Context, worker *AgentWorker) {
+	ticker := time.NewTicker(r.Interval)
+	defer ticker.Stop()
+	for {
+		worker.RunOnce(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (r *Runner) maintenance(ctx context.Context) {
+	r.cleanupCompletedWorkspaces(ctx)
+	_ = r.DB.ReconcileInterruptedInvestments(ctx)
+	_ = r.DB.RefreshRouteLimits(ctx)
+	rows, err := r.DB.SQL.QueryContext(ctx, `SELECT id FROM projects WHERE status='active'`)
+	if err != nil {
 		return
 	}
-	defer r.DB.WorkerMu.Unlock()
+	var projects []string
+	for rows.Next() {
+		var project string
+		if rows.Scan(&project) == nil {
+			projects = append(projects, project)
+		}
+	}
+	_ = rows.Close()
+	for _, project := range projects {
+		_, _ = r.DB.GetProject(ctx, project)
+	}
+}
+
+func (r *Runner) RunOnce(ctx context.Context) {
 	defer r.cleanupCompletedWorkspaces(context.Background())
 	r.cleanupCompletedWorkspaces(ctx)
 	if err := r.DB.ReconcileInterruptedInvestments(ctx); err != nil {
@@ -104,10 +275,6 @@ func (r *Runner) RunOnce(ctx context.Context) {
 }
 
 func (r *Runner) ExecuteNow(ctx context.Context, project, step string) (core.ConcludeResult, error) {
-	if !r.DB.WorkerMu.TryLock() {
-		return core.ConcludeResult{}, fmt.Errorf("local worker is busy")
-	}
-	defer r.DB.WorkerMu.Unlock()
 	if err := r.DB.ReconcileInterruptedInvestments(ctx); err != nil {
 		return core.ConcludeResult{}, err
 	}
@@ -122,9 +289,49 @@ func (r *Runner) ExecuteNow(ctx context.Context, project, step string) (core.Con
 	return r.execute(ctx, project, step, description)
 }
 
+func (r *Runner) executeNext(ctx context.Context, identity string) {
+	if identity == "" {
+		return
+	}
+	if err := r.DB.ReconcileInterruptedInvestments(ctx); err != nil {
+		return
+	}
+	if err := r.DB.RefreshRouteLimits(ctx); err != nil {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for attempts := 0; attempts < 8; attempts++ {
+		var project, step, description string
+		var completed bool
+		err := r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description,s.to_fact_id IS NOT NULL FROM worker_execute_recovery x JOIN steps s ON s.project_id=x.project_id AND s.id=x.step_id JOIN projects p ON p.id=s.project_id WHERE p.status='active' AND s.abandoned=0 AND ((x.payload_json<>'' AND x.status IN ('running','commit_pending')) OR (x.status='summary_pending' AND x.session_id<>'' AND s.to_fact_id IS NULL)) AND (s.to_fact_id IS NOT NULL OR (s.worker IS NULL AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)))) ORDER BY x.created_at LIMIT 1`, now).Scan(&project, &step, &description, &completed)
+		if err == sql.ErrNoRows {
+			err = r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM steps s WHERE s.to_fact_id IS NULL AND s.abandoned=0 AND s.worker IS NULL AND s.project_id IN (SELECT id FROM projects WHERE status='active' AND decide_worker IS NULL) AND NOT EXISTS(SELECT 1 FROM routes rt WHERE rt.project_id=s.project_id AND rt.id=s.route_id AND rt.status='shelved') AND NOT EXISTS (SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id) AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)) ORDER BY s.priority DESC,s.created_at LIMIT 1`, now).Scan(&project, &step, &description)
+		}
+		if err != nil {
+			return
+		}
+		if !completed {
+			if _, err := r.DB.HeartbeatStep(ctx, project, step, identity); err != nil {
+				continue
+			}
+		}
+		_, _ = r.executeAs(ctx, project, step, description, identity)
+		return
+	}
+}
+
 func (r *Runner) execute(parent context.Context, project, step, description string) (core.ConcludeResult, error) {
+	return r.executeAs(parent, project, step, description, r.workerName())
+}
+
+func (r *Runner) executeAs(parent context.Context, project, step, description, identity string) (core.ConcludeResult, error) {
+	unlock := r.lockStep(project, step)
+	defer unlock()
 	started := time.Now().UTC().Format(time.RFC3339Nano)
-	worker := r.workerName()
+	worker := identity
+	if worker == "" {
+		worker = r.workerName()
+	}
 	history := r.historyStart(project, step, "execute", started, worker)
 	checkpoint, err := r.loadExecuteRecovery(parent, project, step)
 	if err != nil {
@@ -183,6 +390,8 @@ func (r *Runner) execute(parent context.Context, project, step, description stri
 			return core.ConcludeResult{}, err
 		}
 		cfg := r.config(leaseCtx)
+		cfg.identity = worker
+		cfg.logger = r.logger
 		if !cfg.enabled {
 			r.releaseStep(project, step, worker)
 			r.historyFinish(history, "disabled", "worker disabled")
@@ -220,7 +429,9 @@ func (r *Runner) execute(parent context.Context, project, step, description stri
 				var vars map[string]string
 				vars, err = r.commandVars(leaseCtx, project, step, description, graph, "execute", cfg, workspace)
 				if err == nil {
-					process := runProcess(leaseCtx, []string{"sh", "-c", cfg.command}, cfg.env, workspace, vars, time.Duration(cfg.runtime.ExecuteTimeoutSeconds)*time.Second, nil)
+					argv := []string{"sh", "-c", cfg.command}
+					r.logInvocation(cfg, project, step, "execute", argv)
+					process := runProcess(leaseCtx, argv, cfg.env, workspace, vars, time.Duration(cfg.runtime.ExecuteTimeoutSeconds)*time.Second, nil)
 					output, err = process.stdout, process.err
 				}
 			}
@@ -431,6 +642,58 @@ func (r *Runner) nextDecideProject(ctx context.Context) string {
 }
 
 func (r *Runner) decideProject(parent context.Context, project string) {
+	r.decideProjectAs(parent, project, r.workerName())
+}
+
+func (r *Runner) dispatchProject(ctx context.Context, project string) {
+	var status string
+	if err := r.DB.SQL.QueryRowContext(ctx, `SELECT status FROM projects WHERE id=?`, project).Scan(&status); err != nil || status != "active" {
+		return
+	}
+	events, err := r.DB.PendingDecideEvents(ctx, project)
+	if err != nil {
+		return
+	}
+	var retrying int
+	if err := r.DB.SQL.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM worker_retry_state WHERE project_id=? AND task_type='decide' AND julianday(retry_after)>julianday(?))`, project, time.Now().UTC().Format(time.RFC3339Nano)).Scan(&retrying); err != nil || retrying != 0 {
+		return
+	}
+	if len(events) > 0 {
+		r.decideProjectAs(ctx, project, r.dispatcherIdentity(project))
+		return
+	}
+	detail, err := r.DB.GetProject(ctx, project)
+	if err != nil {
+		return
+	}
+	cfg := r.config(ctx)
+	if !cfg.enabled {
+		return
+	}
+	shelved := map[string]bool{}
+	for _, route := range detail.Routes {
+		if route.Status == "shelved" {
+			shelved[route.ID] = true
+		}
+	}
+	for _, step := range detail.Steps {
+		if step.To == nil && !step.Abandoned && (step.RouteID == nil || !shelved[*step.RouteID]) {
+			return
+		}
+	}
+	if cfg.driver == "mock" && len(detail.Steps) > 0 {
+		return
+	}
+	if cfg.driver != "mock" {
+		var previous string
+		if err := r.DB.SQL.QueryRowContext(ctx, `SELECT fingerprint FROM worker_decide_state WHERE project_id=?`, project).Scan(&previous); err == nil && previous == graphFingerprint(detail) {
+			return
+		}
+	}
+	r.decideProjectAs(ctx, project, r.dispatcherIdentity(project))
+}
+
+func (r *Runner) decideProjectAs(parent context.Context, project, worker string) {
 	events, eventErr := r.DB.PendingDecideEvents(parent, project)
 	if eventErr != nil {
 		return
@@ -441,7 +704,6 @@ func (r *Runner) decideProject(parent context.Context, project string) {
 		eventThrough = events[len(events)-1].ID
 		trigger = "event: " + events[len(events)-1].Reason
 	}
-	worker := r.workerName()
 	history := r.historyStart(project, "", "decide", time.Now().UTC().Format(time.RFC3339Nano), worker)
 	if _, err := r.DB.ClaimDecide(parent, project, core.ClaimDecide{Worker: worker, Trigger: trigger}); err != nil {
 		r.historyFinish(history, "claim_failed", err.Error())
@@ -466,6 +728,8 @@ func (r *Runner) decideProject(parent context.Context, project string) {
 		return
 	}
 	cfg := r.config(leaseCtx)
+	cfg.identity = worker
+	cfg.logger = r.logger
 	if !cfg.enabled {
 		r.releaseDecide(project, worker)
 		r.historyFinish(history, "disabled", "worker disabled")
@@ -506,7 +770,9 @@ func (r *Runner) decideProject(parent context.Context, project string) {
 				payload, _, _, err = r.runProvider(leaseCtx, cfg, "decide", session, workspace, vars, time.Duration(cfg.runtime.DecideTimeoutSeconds)*time.Second, nil)
 			}
 		} else {
-			process := runProcess(leaseCtx, []string{"sh", "-c", cfg.command}, cfg.env, workspace, vars, time.Duration(cfg.runtime.DecideTimeoutSeconds)*time.Second, nil)
+			argv := []string{"sh", "-c", cfg.command}
+			r.logInvocation(cfg, project, "", "decide", argv)
+			process := runProcess(leaseCtx, argv, cfg.env, workspace, vars, time.Duration(cfg.runtime.DecideTimeoutSeconds)*time.Second, nil)
 			payload, err = process.stdout, process.err
 		}
 		if err != nil {
@@ -536,7 +802,7 @@ func (r *Runner) decideProject(parent context.Context, project string) {
 		r.recordTaskOutcome(project, "decide", "failed")
 		return
 	}
-	if err = applyDecide(r.DB, leaseCtx, project, detail, payload, worker); err != nil {
+	if err = applyDecide(r.DB, leaseCtx, project, detail, payload, r.workerName()); err != nil {
 		r.releaseDecide(project, worker)
 		status := "invalid_payload"
 		if isWorkerRejection(err) {
@@ -873,7 +1139,7 @@ func (r *Runner) config(ctx context.Context) workerConfig {
 	var cfg workerConfig
 	var raw, runtimeJSON string
 	var enabled int
-	err := r.DB.SQL.QueryRowContext(ctx, `SELECT driver,command,environment_json,enabled,workspace_root,completed_action,context_root,runtime_json FROM worker_config WHERE id=1`).Scan(&cfg.driver, &cfg.command, &raw, &enabled, &cfg.workspaceRoot, &cfg.completedAction, &cfg.contextRoot, &runtimeJSON)
+	err := r.DB.SQL.QueryRowContext(ctx, `SELECT driver,command,environment_json,enabled,workspace_root,completed_action,context_root,runtime_json,worker_count FROM worker_config WHERE id=1`).Scan(&cfg.driver, &cfg.command, &raw, &enabled, &cfg.workspaceRoot, &cfg.completedAction, &cfg.contextRoot, &runtimeJSON, &cfg.workerCount)
 	if err != nil {
 		return cfg
 	}
@@ -887,6 +1153,10 @@ func (r *Runner) config(ctx context.Context) workerConfig {
 	if cfg.completedAction != "remove" {
 		cfg.completedAction = "keep"
 	}
+	if cfg.workerCount < 1 || cfg.workerCount > 32 {
+		cfg.workerCount = defaultWorkerCount
+	}
+	cfg.logger = r.logger
 	return cfg
 }
 func (r *Runner) workspaceRoot(cfg workerConfig) (string, error) {
@@ -959,6 +1229,18 @@ func (r *Runner) ensureWorkspace(project string, cfg workerConfig) (string, erro
 	return dir, nil
 }
 
+func (r *Runner) logInvocation(cfg workerConfig, project, step, task string, argv []string) {
+	logger := cfg.logger
+	if logger == nil {
+		logger = r.logger
+	}
+	if logger == nil {
+		return
+	}
+	encoded, _ := json.Marshal(argv)
+	logger.Printf("worker process start project=%s step=%s task=%s worker=%s argv=%s", project, step, task, cfg.identity, encoded)
+}
+
 func (r *Runner) cleanupCompletedWorkspaces(ctx context.Context) {
 	cfg := r.config(ctx)
 	if cfg.completedAction != "remove" {
@@ -1005,6 +1287,7 @@ func (r *Runner) commandVars(ctx context.Context, project, step, description, gr
 		"HOTMOUSE_GRAPH_YAML":         graph,
 		"HOTMOUSE_MODEL_CONTEXT_YAML": graph,
 		"HOTMOUSE_CONTRACT_VERSION":   "1",
+		"HOTMOUSE_WORKER_ID":          cfg.identity,
 	}
 	if taskType == "execute" {
 		vars["HOTMOUSE_WORKER_PROMPT"] = executePrompt(graph, step, description)
@@ -1114,6 +1397,27 @@ func (r *Runner) workerName() string {
 		return "local"
 	}
 	return strings.TrimSpace(name)
+}
+
+func (r *Runner) workerIdentity(slot int) string {
+	return fmt.Sprintf("%s/worker/%02d", r.workerName(), slot)
+}
+
+func (r *Runner) dispatcherIdentity(project string) string {
+	return r.workerName() + "/dispatcher/" + project
+}
+
+func (r *Runner) lockStep(project, step string) func() {
+	key := project + "\x00" + step
+	r.locksMu.Lock()
+	lock := r.stepLock[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		r.stepLock[key] = lock
+	}
+	r.locksMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
 }
 
 func (r *Runner) saveExecuteStarted(ctx context.Context, project, step, worker string) error {

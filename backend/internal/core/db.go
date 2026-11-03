@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, crea
 CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, level TEXT NOT NULL DEFAULT 'info', title TEXT NOT NULL, body TEXT, link TEXT, read INTEGER NOT NULL DEFAULT 0, user_id TEXT, kind TEXT, read_at TEXT);
 CREATE TABLE IF NOT EXISTS project_templates (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL DEFAULT 'anonymous', name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', origin TEXT NOT NULL DEFAULT '', goal TEXT NOT NULL DEFAULT '', hints_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS templates (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL, origin TEXT NOT NULL, goal TEXT NOT NULL, hints_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS worker_config (id INTEGER PRIMARY KEY CHECK(id=1), name TEXT NOT NULL DEFAULT 'local', driver TEXT NOT NULL DEFAULT 'mock', command TEXT NOT NULL DEFAULT '', environment_json TEXT NOT NULL DEFAULT '{}', enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT '', workspace_root TEXT NOT NULL DEFAULT '', completed_action TEXT NOT NULL DEFAULT 'keep', context_root TEXT NOT NULL DEFAULT '', runtime_json TEXT NOT NULL DEFAULT '{}');
+CREATE TABLE IF NOT EXISTS worker_config (id INTEGER PRIMARY KEY CHECK(id=1), name TEXT NOT NULL DEFAULT 'local', driver TEXT NOT NULL DEFAULT 'mock', command TEXT NOT NULL DEFAULT '', environment_json TEXT NOT NULL DEFAULT '{}', enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT '', workspace_root TEXT NOT NULL DEFAULT '', completed_action TEXT NOT NULL DEFAULT 'keep', context_root TEXT NOT NULL DEFAULT '', runtime_json TEXT NOT NULL DEFAULT '{}', worker_count INTEGER NOT NULL DEFAULT 4);
 INSERT OR IGNORE INTO worker_config(id,updated_at) VALUES(1,'');
 CREATE TABLE IF NOT EXISTS worker_task_history (id INTEGER PRIMARY KEY AUTOINCREMENT, worker TEXT NOT NULL, project_id TEXT, step_id TEXT, task_type TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS worker_retry_state (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, task_type TEXT NOT NULL CHECK(task_type IN ('decide','execute')), failure_count INTEGER NOT NULL DEFAULT 0, retry_after TEXT NOT NULL, last_outcome TEXT NOT NULL, PRIMARY KEY(project_id,task_type));
@@ -92,6 +92,7 @@ func Open(path string) (*DB, error) {
 	_, _ = d.Exec(`ALTER TABLE worker_config ADD COLUMN completed_action TEXT NOT NULL DEFAULT 'keep'`)
 	_, _ = d.Exec(`ALTER TABLE worker_config ADD COLUMN context_root TEXT NOT NULL DEFAULT ''`)
 	_, _ = d.Exec(`ALTER TABLE worker_config ADD COLUMN runtime_json TEXT NOT NULL DEFAULT '{}'`)
+	_, _ = d.Exec(`ALTER TABLE worker_config ADD COLUMN worker_count INTEGER NOT NULL DEFAULT 4`)
 	if err := migrateUserIDs(d); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("migrate auth user IDs: %w", err)

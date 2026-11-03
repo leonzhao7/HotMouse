@@ -52,7 +52,11 @@ func (r *Runner) preserveProviderCheckpoint(project, step string, x *executeChec
 }
 
 func (r *Runner) executeProvider(ctx context.Context, cfg workerConfig, workspace, project, step, description, graph string, x *executeCheckpoint) ([]byte, error) {
-	identity := providerIdentity(cfg, r.workerName(), workspace)
+	workerIdentity := cfg.identity
+	if workerIdentity == "" {
+		workerIdentity = r.workerName()
+	}
+	identity := providerIdentity(cfg, workerIdentity, workspace)
 	if x != nil {
 		if x.status != "summary_pending" || x.driver != canonicalDriver(cfg.driver) || x.identity != identity || x.workspace != workspace {
 			x.status = "needs_attention"

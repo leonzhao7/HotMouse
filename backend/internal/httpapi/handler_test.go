@@ -144,7 +144,7 @@ func TestWorkerWorkspaceConfigAndLegacyUpdate(t *testing.T) {
 		app.ServeHTTP(recorder, req)
 		return recorder
 	}
-	configured := request(`{"name":"local","driver":"mock","workspace_root":"/tmp/hotmouse-workspaces","completed_action":"remove","context_root":"/tmp/hotmouse-context","runtime":{"execute_timeout_seconds":60,"recovery_attempts":2},"environment":{"PI_API_KEY":"fixture-secret","PI_MODEL":"fixture-model"}}`)
+	configured := request(`{"name":"local","driver":"mock","worker_count":3,"workspace_root":"/tmp/hotmouse-workspaces","completed_action":"remove","context_root":"/tmp/hotmouse-context","runtime":{"execute_timeout_seconds":60,"recovery_attempts":2},"environment":{"PI_API_KEY":"fixture-secret","PI_MODEL":"fixture-model"}}`)
 	if configured.Code != 200 {
 		t.Fatalf("configure workspace status=%d body=%s", configured.Code, configured.Body.String())
 	}
@@ -157,6 +157,7 @@ func TestWorkerWorkspaceConfigAndLegacyUpdate(t *testing.T) {
 		CompletedAction string             `json:"completed_action"`
 		ContextRoot     string             `json:"context_root"`
 		Runtime         core.WorkerRuntime `json:"runtime"`
+		WorkerCount     int                `json:"worker_count"`
 	}
 	if err := json.Unmarshal(legacyUpdate.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
@@ -166,6 +167,9 @@ func TestWorkerWorkspaceConfigAndLegacyUpdate(t *testing.T) {
 	}
 	if response.Runtime.ExecuteTimeoutSeconds != 60 || response.Runtime.RecoveryAttempts != 2 {
 		t.Fatalf("runtime was lost: %+v", response.Runtime)
+	}
+	if response.WorkerCount != 3 {
+		t.Fatalf("worker count was lost: %d", response.WorkerCount)
 	}
 	var envJSON string
 	if err := db.SQL.QueryRow(`SELECT environment_json FROM worker_config`).Scan(&envJSON); err != nil {
@@ -181,6 +185,9 @@ func TestWorkerWorkspaceConfigAndLegacyUpdate(t *testing.T) {
 	}
 	if invalid := request(`{"name":"local","driver":"mock","runtime":{"execute_timeout_seconds":0}}`); invalid.Code != 400 {
 		t.Fatalf("invalid runtime status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+	if invalid := request(`{"name":"local","driver":"mock","worker_count":0}`); invalid.Code != 400 {
+		t.Fatalf("invalid worker count status=%d body=%s", invalid.Code, invalid.Body.String())
 	}
 }
 

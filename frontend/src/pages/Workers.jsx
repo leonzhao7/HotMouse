@@ -81,7 +81,7 @@ export default function Workers() {
       <PageHeader
         eyebrow="LOCAL WORKER / 执行与观察"
         title="本地 Worker"
-        description="服务内的单个 Worker 串行处理项目，观察任务与恢复状态。"
+        description="每个项目由 Dispatcher 维护事实图与规划，Agent Worker 并行执行步骤。"
         actions={
           <>
             <Button
@@ -393,6 +393,16 @@ function WorkerEditor({ initial, onClose, onSaved }) {
             : "留空使用驱动默认命令"
         }
         required={draft.driver === "command"}
+      />
+      <TextField
+        label="Agent Worker 数量"
+        type="number"
+        min="1"
+        max="32"
+        step="1"
+        required
+        value={draft.worker_count ?? 4}
+        onChange={(event) => set("worker_count", Number(event.target.value))}
       />
       <div className="form-grid">
         <TextField

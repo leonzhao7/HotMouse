@@ -1,6 +1,6 @@
 # HotMouse
 
-以事实、目标和步骤组织安全评估的本地工作台。Go / Iris / SQLite 后端提供 HTTP API、完整 CLI 和一个服务内串行 Worker；React 前端提供项目图与管理界面。
+以事实、目标和步骤组织安全评估的本地工作台。Go / Iris / SQLite 后端提供 HTTP API、完整 CLI、项目级 Dispatcher 和多 Agent Worker；React 前端提供项目图与管理界面。
 
 一条命令启动前端和后端：
 

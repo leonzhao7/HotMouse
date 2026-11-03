@@ -265,6 +265,7 @@ func (r *Runner) runProvider(ctx context.Context, cfg workerConfig, phase, sessi
 	if err != nil {
 		return nil, session, processResult{}, err
 	}
+	r.logInvocation(cfg, vars["HOTMOUSE_PROJECT_ID"], vars["HOTMOUSE_STEP_ID"], vars["HOTMOUSE_TASK_TYPE"]+"/"+phase, argv)
 	if canonicalDriver(cfg.driver) == "pi" && cfg.env["PI_MODEL"] != "" && cfg.env["PI_BASE_URL"] != "" && cfg.env["PI_API_KEY"] != "" && cfg.env["PI_PROVIDER_API"] != "" {
 		vars["PI_CODING_AGENT_DIR"] = filepath.Join(workspace, ".hotmouse", "pi-agent")
 	}

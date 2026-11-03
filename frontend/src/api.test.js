@@ -24,7 +24,8 @@ test("Worker PUT preserves configuration and secrets while removing deleted keys
     completed_action: "keep",
     runtime: { recovery_attempts: 3 },
     environment: { API_TOKEN: "***", REMOVE_ME: "old", PUBLIC: "old" },
-    worker_mode: "single",
+    worker_mode: "dispatcher_pool",
+    worker_count: 4,
   };
   const result = workerPayload(config, [
     { key: "API_TOKEN", value: "***" },

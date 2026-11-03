@@ -345,7 +345,7 @@ func (h *Handler) ChangePassword(ctx iris.Context) {
 	ctx.StatusCode(iris.StatusNoContent)
 }
 func (h *Handler) Health(ctx iris.Context) {
-	ctx.JSON(iris.Map{"status": "ok", "service": "hotmouse", "database": "sqlite", "worker_mode": "single"})
+	ctx.JSON(iris.Map{"status": "ok", "service": "hotmouse", "database": "sqlite", "worker_mode": "dispatcher_pool"})
 }
 func (h *Handler) GetSettings(ctx iris.Context) {
 	var s core.Settings
@@ -462,7 +462,9 @@ func (h *Handler) SettingsHealth(ctx iris.Context) {
 		retentionStatus = "warning"
 	}
 	retentionCheck := iris.Map{"key": "retention", "label": "Retention policy", "status": retentionStatus, "summary": fmt.Sprintf("logs %d days, exports %d days", logDays, exportDays), "detail": fmt.Sprintf("Notifications are kept %d days; unread notifications: %d; worker history rows: %d.", notifyDays, unread, history)}
-	checks := []iris.Map{{"key": "server", "label": "API service", "status": "ok", "summary": "product API is reachable", "detail": "Project, worker and settings APIs are served by this process."}, {"key": "database", "label": "SQLite database", "status": "ok", "summary": fmt.Sprintf("%d projects and %d vulnerabilities", projects, vulns), "detail": fmt.Sprintf("%d users and %d audit entries.", users, audit)}, {"key": "dispatcher", "label": "Local worker", "status": func() string {
+	var workerCount int
+	_ = h.DB.SQL.QueryRow(`SELECT worker_count FROM worker_config WHERE id=1`).Scan(&workerCount)
+	checks := []iris.Map{{"key": "server", "label": "API service", "status": "ok", "summary": "product API is reachable", "detail": "Project, dispatcher, worker and settings APIs are served by this process."}, {"key": "database", "label": "SQLite database", "status": "ok", "summary": fmt.Sprintf("%d projects and %d vulnerabilities", projects, vulns), "detail": fmt.Sprintf("%d users and %d audit entries.", users, audit)}, {"key": "dispatcher", "label": "Project Dispatcher", "status": func() string {
 		if !workerReady {
 			if active > 0 {
 				return "error"
@@ -480,8 +482,8 @@ func (h *Handler) SettingsHealth(ctx iris.Context) {
 			}
 			return "worker command is not available"
 		}
-		return "single local worker configured"
-	}(), "detail": "Single-process serialized worker mode."}, authCheck, retentionCheck}
+		return fmt.Sprintf("one dispatcher per project; %d agent workers configured", workerCount)
+	}(), "detail": "Dispatcher maintains project facts and planning; agent workers execute steps."}, authCheck, retentionCheck}
 	if !workerReady && active > 0 {
 		alerts = append(alerts, iris.Map{"level": "danger", "title": "Active projects have no available worker", "detail": "The local worker is disabled or its configured command is unavailable."})
 	}
@@ -494,7 +496,7 @@ func (h *Handler) SettingsHealth(ctx iris.Context) {
 	if retentionStatus == "warning" && status == "ok" {
 		status = "warning"
 	}
-	ctx.JSON(iris.Map{"generated_at": nowString(), "summary": iris.Map{"status": status, "server_reachable": true, "dispatcher_reachable": workerReady, "active_projects": active, "online_workers": online, "offline_workers": func() int {
+	ctx.JSON(iris.Map{"generated_at": nowString(), "summary": iris.Map{"status": status, "server_reachable": true, "dispatcher_reachable": workerReady, "active_projects": active, "online_workers": online * workerCount, "offline_workers": func() int {
 		if enabled != 0 && !workerReady {
 			return 1
 		}
@@ -607,7 +609,8 @@ func (h *Handler) Campaign(ctx iris.Context) {
 func (h *Handler) WorkerConfig(ctx iris.Context) {
 	var name, driver, command, env, updated, workspaceRoot, completedAction, contextRoot, runtimeJSON string
 	var enabled int
-	e := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT name,driver,command,environment_json,enabled,updated_at,workspace_root,completed_action,context_root,runtime_json FROM worker_config WHERE id=1`).Scan(&name, &driver, &command, &env, &enabled, &updated, &workspaceRoot, &completedAction, &contextRoot, &runtimeJSON)
+	var workerCount int
+	e := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT name,driver,command,environment_json,enabled,updated_at,workspace_root,completed_action,context_root,runtime_json,worker_count FROM worker_config WHERE id=1`).Scan(&name, &driver, &command, &env, &enabled, &updated, &workspaceRoot, &completedAction, &contextRoot, &runtimeJSON, &workerCount)
 	if e != nil {
 		bad(ctx, e)
 		return
@@ -620,7 +623,7 @@ func (h *Handler) WorkerConfig(ctx iris.Context) {
 	} else {
 		ctx.Header("Cache-Control", "no-store")
 	}
-	ctx.JSON(iris.Map{"name": name, "driver": driver, "command": command, "environment": environment, "enabled": enabled != 0, "updated_at": updated, "worker_mode": "single", "workspace_root": workspaceRoot, "completed_action": completedAction, "context_root": contextRoot, "runtime": runtime})
+	ctx.JSON(iris.Map{"name": name, "driver": driver, "command": command, "environment": environment, "enabled": enabled != 0, "updated_at": updated, "worker_mode": "dispatcher_pool", "worker_count": workerCount, "workspace_root": workspaceRoot, "completed_action": completedAction, "context_root": contextRoot, "runtime": runtime})
 }
 func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 	var r struct {
@@ -631,6 +634,7 @@ func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 		CompletedAction   *string           `json:"completed_action"`
 		ContextRoot       *string           `json:"context_root"`
 		Runtime           json.RawMessage   `json:"runtime"`
+		WorkerCount       *int              `json:"worker_count"`
 		Environment       map[string]string `json:"environment"`
 		EnvironmentRemove []string          `json:"environment_remove"`
 		Enabled           *bool             `json:"enabled"`
@@ -640,6 +644,18 @@ func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 	}
 	if r.Name == "" {
 		r.Name = "local"
+	}
+	workerCount := 4
+	if err := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT worker_count FROM worker_config WHERE id=1`).Scan(&workerCount); err != nil {
+		bad(ctx, err)
+		return
+	}
+	if r.WorkerCount != nil {
+		workerCount = *r.WorkerCount
+	}
+	if workerCount < 1 || workerCount > 32 {
+		bad(ctx, fmt.Errorf("worker_count must be between 1 and 32"))
+		return
 	}
 	if r.Driver == "" {
 		r.Driver = "mock"
@@ -708,7 +724,7 @@ func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 		env[k] = v
 	}
 	runtimeBytes, _ := json.Marshal(runtime)
-	_, e := h.DB.SQL.ExecContext(ctx.Request().Context(), `UPDATE worker_config SET name=?,driver=?,command=?,environment_json=?,enabled=?,updated_at=?,workspace_root=?,completed_action=?,context_root=?,runtime_json=? WHERE id=1`, r.Name, r.Driver, r.Command, coreJSON(env), en, nowString(), workspaceRoot, completedAction, contextRoot, string(runtimeBytes))
+	_, e := h.DB.SQL.ExecContext(ctx.Request().Context(), `UPDATE worker_config SET name=?,driver=?,command=?,environment_json=?,enabled=?,updated_at=?,workspace_root=?,completed_action=?,context_root=?,runtime_json=?,worker_count=? WHERE id=1`, r.Name, r.Driver, r.Command, coreJSON(env), en, nowString(), workspaceRoot, completedAction, contextRoot, string(runtimeBytes), workerCount)
 	if e != nil {
 		bad(ctx, e)
 		return
@@ -742,16 +758,14 @@ func (h *Handler) WorkerObservability(ctx iris.Context) {
 		return
 	}
 	status := worker["status"].(string)
-	running := 0
-	if worker["running"].(bool) {
-		running = 1
-	}
 	var attention, pending int
 	if err := h.DB.SQL.QueryRowContext(requestCtx, `SELECT count(CASE WHEN status='needs_attention' OR (status='running' AND payload_json='') THEN 1 END),count(CASE WHEN status='summary_pending' THEN 1 END) FROM worker_execute_recovery`).Scan(&attention, &pending); err != nil {
 		bad(ctx, err)
 		return
 	}
 	workerName := worker["name"].(string)
+	var workerCount int
+	_ = h.DB.SQL.QueryRowContext(requestCtx, `SELECT worker_count FROM worker_config WHERE id=1`).Scan(&workerCount)
 	projectNames := map[string]string{}
 	projectRows, err := h.DB.SQL.QueryContext(requestCtx, `SELECT id,title FROM projects`)
 	if err != nil {
@@ -775,7 +789,7 @@ func (h *Handler) WorkerObservability(ctx iris.Context) {
 		worker, projectID, projectName, taskType, status, started, detail string
 		stepID, finished                                                  sql.NullString
 	}
-	historyRows, err := h.DB.SQL.QueryContext(requestCtx, `SELECT h.worker,h.project_id,COALESCE(p.title,''),h.task_type,h.status,h.started_at,h.finished_at,h.step_id,h.detail FROM worker_task_history h LEFT JOIN projects p ON p.id=h.project_id WHERE h.worker=? ORDER BY h.id DESC LIMIT 40`, workerName)
+	historyRows, err := h.DB.SQL.QueryContext(requestCtx, `SELECT h.worker,h.project_id,COALESCE(p.title,''),h.task_type,h.status,h.started_at,h.finished_at,h.step_id,h.detail FROM worker_task_history h LEFT JOIN projects p ON p.id=h.project_id WHERE (h.worker LIKE ? OR h.worker=?) ORDER BY h.id DESC LIMIT 40`, workerName+"/%", workerName)
 	if err != nil {
 		bad(ctx, err)
 		return
@@ -811,6 +825,11 @@ func (h *Handler) WorkerObservability(ctx iris.Context) {
 			recent = append(recent, iris.Map{"worker_name": row.worker, "project_id": row.projectID, "project_name": row.projectName, "task_type": row.taskType, "outcome": outcome, "started_at": row.started, "completed_at": nullableString(row.finished), "duration_seconds": historyDuration(row.started, row.finished), "step_id": nullableString(row.stepID), "intent_id": nullableString(row.stepID)})
 		}
 	}
+	var running int
+	_ = h.DB.SQL.QueryRowContext(requestCtx, `SELECT count(*) FROM worker_task_history WHERE status='running' AND (worker LIKE ? OR worker=?)`, workerName+"/%", workerName).Scan(&running)
+	if worker["running"].(bool) && running == 0 {
+		running = 1
+	}
 	taskMixRows := []iris.Map{}
 	for taskType, count := range taskMix {
 		taskMixRows = append(taskMixRows, iris.Map{"task_type": taskType, "count": count})
@@ -825,18 +844,15 @@ func (h *Handler) WorkerObservability(ctx iris.Context) {
 	})
 
 	runningTasks := []iris.Map{}
-	if worker["running"].(bool) {
-		projectID, _ := worker["project_id"].(string)
-		stepID, _ := worker["step_id"].(string)
-		taskType, _ := worker["task_type"].(string)
-		var runningSeconds any
-		for _, row := range history {
-			if row.status == "running" && row.projectID == projectID && row.taskType == taskType && row.stepID.String == stepID {
-				runningSeconds = historyElapsed(row.started)
-				break
-			}
+	for _, row := range history {
+		if row.status != "running" {
+			continue
 		}
-		runningTasks = append(runningTasks, iris.Map{"worker_name": workerName, "project_id": projectID, "project_name": projectNames[projectID], "task_type": taskType, "current_task": worker["current_task"], "step_id": worker["step_id"], "intent_id": worker["step_id"], "running_seconds": runningSeconds})
+		var currentSeconds any = historyElapsed(row.started)
+		runningTasks = append(runningTasks, iris.Map{"worker_name": row.worker, "project_id": row.projectID, "project_name": row.projectName, "task_type": row.taskType, "current_task": row.detail, "step_id": nullableString(row.stepID), "intent_id": nullableString(row.stepID), "running_seconds": currentSeconds})
+	}
+	if len(runningTasks) == 0 && worker["running"].(bool) {
+		runningTasks = append(runningTasks, iris.Map{"worker_name": workerName, "project_id": worker["project_id"], "project_name": projectNames[worker["project_id"].(string)], "task_type": worker["task_type"], "current_task": worker["current_task"], "step_id": worker["step_id"], "intent_id": worker["step_id"], "running_seconds": nil})
 	}
 	rejections := []iris.Map{}
 	retryRows, err := h.DB.SQL.QueryContext(requestCtx, `SELECT project_id,task_type,retry_after FROM worker_retry_state WHERE last_outcome='rejected' AND julianday(retry_after)>julianday(?)`, time.Now().UTC().Format(time.RFC3339Nano))
@@ -867,13 +883,13 @@ func (h *Handler) WorkerObservability(ctx iris.Context) {
 	}
 	retryRows.Close()
 	ctx.JSON(iris.Map{
-		"worker_mode": "single",
+		"worker_mode": "dispatcher_pool",
 		"summary": iris.Map{
-			"total": 1, "online": boolCount(status == "idle" || status == "busy"),
-			"busy": boolCount(status == "busy"), "idle": boolCount(status == "idle"),
+			"total": 1, "configured_workers": workerCount, "online": boolCount(status == "idle" || status == "busy"),
+			"busy": boolCount(running > 0), "idle": boolCount(running == 0 && status == "idle"),
 			"offline": boolCount(status == "offline"), "disabled": boolCount(status == "disabled"),
 			"running_tasks": running, "running_projects": running, "rejection_count": len(rejections),
-			"max_workers": 1, "max_running_projects": 1, "max_project_workers": 1, "attention_steps": attention, "summary_pending_steps": pending,
+			"max_workers": workerCount, "max_running_projects": workerCount, "max_project_workers": workerCount, "attention_steps": attention, "summary_pending_steps": pending,
 		},
 		"workers":  []iris.Map{worker},
 		"outcomes": outcomes, "task_mix": taskMixRows, "running_tasks": runningTasks,
@@ -930,7 +946,8 @@ func boolCount(value bool) int {
 func (h *Handler) workerSnapshot(ctx context.Context) (iris.Map, error) {
 	var name, driver, command, environment string
 	var enabled int
-	if err := h.DB.SQL.QueryRowContext(ctx, `SELECT name,driver,command,environment_json,enabled FROM worker_config WHERE id=1`).Scan(&name, &driver, &command, &environment, &enabled); err != nil {
+	var workerCount int
+	if err := h.DB.SQL.QueryRowContext(ctx, `SELECT name,driver,command,environment_json,enabled,worker_count FROM worker_config WHERE id=1`).Scan(&name, &driver, &command, &environment, &enabled, &workerCount); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(name) == "" {
@@ -938,10 +955,10 @@ func (h *Handler) workerSnapshot(ctx context.Context) (iris.Map, error) {
 	}
 	var completed, failed int
 	var average sql.NullFloat64
-	if err := h.DB.SQL.QueryRowContext(ctx, `SELECT count(*),AVG((julianday(finished_at)-julianday(started_at))*86400) FROM worker_task_history WHERE worker=? AND status='completed' AND finished_at IS NOT NULL`, name).Scan(&completed, &average); err != nil {
+	if err := h.DB.SQL.QueryRowContext(ctx, `SELECT count(*),AVG((julianday(finished_at)-julianday(started_at))*86400) FROM worker_task_history WHERE (worker LIKE ? OR worker=?) AND status='completed' AND finished_at IS NOT NULL`, name+"/%", name).Scan(&completed, &average); err != nil {
 		return nil, err
 	}
-	if err := h.DB.SQL.QueryRowContext(ctx, `SELECT count(*) FROM worker_task_history WHERE worker=? AND status IN ('failed','rejected','claim_failed','invalid_payload','commit_pending','summary_pending')`, name).Scan(&failed); err != nil {
+	if err := h.DB.SQL.QueryRowContext(ctx, `SELECT count(*) FROM worker_task_history WHERE (worker LIKE ? OR worker=?) AND status IN ('failed','rejected','claim_failed','invalid_payload','commit_pending','summary_pending')`, name+"/%", name).Scan(&failed); err != nil {
 		return nil, err
 	}
 	var task, projectID, taskType string
@@ -951,13 +968,13 @@ func (h *Handler) workerSnapshot(ctx context.Context) (iris.Map, error) {
 		SELECT project_id,task_type,step_id,current_task FROM (
 			SELECT p.id AS project_id,'execute' AS task_type,s.id AS step_id,s.description AS current_task,s.last_heartbeat_at AS heartbeat,st.step_timeout AS timeout
 			FROM steps s JOIN projects p ON p.id=s.project_id CROSS JOIN settings st
-			WHERE p.status='active' AND s.to_fact_id IS NULL AND s.abandoned=0 AND s.worker=? AND s.last_heartbeat_at IS NOT NULL
+			WHERE p.status='active' AND s.to_fact_id IS NULL AND s.abandoned=0 AND (s.worker LIKE ? OR s.worker=?) AND s.last_heartbeat_at IS NOT NULL
 			UNION ALL
 			SELECT p.id,'decide',NULL,'Decide: '||p.title,p.decide_last_heartbeat_at,st.decide_timeout
 			FROM projects p CROSS JOIN settings st
-			WHERE p.status='active' AND p.decide_worker=? AND p.decide_last_heartbeat_at IS NOT NULL
+			WHERE p.status='active' AND (p.decide_worker LIKE ? OR p.decide_worker=?) AND p.decide_last_heartbeat_at IS NOT NULL
 		) WHERE (julianday(?) - julianday(heartbeat))*86400 <= timeout
-		ORDER BY julianday(heartbeat) DESC LIMIT 1`, name, name, time.Now().UTC().Format(time.RFC3339Nano)).Scan(&projectID, &taskType, &stepID, &task)
+		ORDER BY julianday(heartbeat) DESC LIMIT 1`, name+"/%", name, name+"/%", name, time.Now().UTC().Format(time.RFC3339Nano)).Scan(&projectID, &taskType, &stepID, &task)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
@@ -967,10 +984,10 @@ func (h *Handler) workerSnapshot(ctx context.Context) (iris.Map, error) {
 	var heartbeat sql.NullFloat64
 	if err := h.DB.SQL.QueryRowContext(ctx, `
 		SELECT MIN(seconds_ago) FROM (
-			SELECT (julianday(?) - julianday(last_heartbeat_at))*86400 AS seconds_ago FROM steps WHERE worker=? AND last_heartbeat_at IS NOT NULL
+			SELECT (julianday(?) - julianday(last_heartbeat_at))*86400 AS seconds_ago FROM steps WHERE (worker LIKE ? OR worker=?) AND last_heartbeat_at IS NOT NULL
 			UNION ALL
-			SELECT (julianday(?) - julianday(decide_last_heartbeat_at))*86400 FROM projects WHERE decide_worker=? AND decide_last_heartbeat_at IS NOT NULL
-		)`, time.Now().UTC().Format(time.RFC3339Nano), name, time.Now().UTC().Format(time.RFC3339Nano), name).Scan(&heartbeat); err != nil {
+			SELECT (julianday(?) - julianday(decide_last_heartbeat_at))*86400 FROM projects WHERE (decide_worker LIKE ? OR decide_worker=?) AND decide_last_heartbeat_at IS NOT NULL
+		)`, time.Now().UTC().Format(time.RFC3339Nano), name+"/%", name, time.Now().UTC().Format(time.RFC3339Nano), name+"/%", name).Scan(&heartbeat); err != nil {
 		return nil, err
 	}
 	status := "idle"
@@ -1003,7 +1020,7 @@ func (h *Handler) workerSnapshot(ctx context.Context) (iris.Map, error) {
 	}
 	return iris.Map{
 		"name": name, "type": driver, "driver": driver, "enabled": enabled != 0, "status": status,
-		"running": running > 0, "worker_mode": "single", "current_task": currentTask,
+		"running": running > 0, "worker_mode": "dispatcher_pool", "worker_count": workerCount, "current_task": currentTask,
 		"project_id": nullableAny(projectID, running > 0), "step_id": nullableAny(stepID.String, running > 0 && stepID.Valid), "task_type": nullableAny(taskType, running > 0),
 		"tasks_completed": completed, "completed_tasks": completed, "failed_tasks": failed,
 		"avg_duration_seconds": avg, "last_heartbeat_seconds_ago": lastHeartbeat,

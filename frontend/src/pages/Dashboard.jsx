@@ -108,9 +108,13 @@ export default function Dashboard() {
         />
         <Metric
           title="本地 Worker"
-          value={summary ? `${summary.online} / 1` : null}
+          value={
+            summary
+              ? `${summary.online} / ${summary.configured_workers || worker?.worker_count || 1}`
+              : null
+          }
           icon={Monitor}
-          hint={worker ? `${worker.name} · ${worker.driver}` : "串行执行"}
+          hint={worker ? `${worker.name} · ${worker.driver}` : "Dispatcher / Agent Worker"}
           href="#/workers"
           tone="purple"
         />
@@ -221,7 +225,7 @@ export default function Dashboard() {
               </a>
             )}
             <div className="panel-bottom">
-              <span className="muted">一个进程 · 一个 Worker · 串行调度</span>
+              <span className="muted">项目级 Dispatcher · 多 Agent Worker</span>
               <a className="text-link" href="#/workers">
                 配置 <ArrowUpRight size={14} />
               </a>

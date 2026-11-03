@@ -131,6 +131,7 @@ export function workerPayload(config, rows) {
     workspace_root: config.workspace_root,
     context_root: config.context_root,
     completed_action: config.completed_action,
+    worker_count: config.worker_count,
     runtime: config.runtime,
     environment,
     environment_remove: Object.keys(config.environment || {}).filter(

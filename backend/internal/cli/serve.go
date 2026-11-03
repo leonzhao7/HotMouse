@@ -50,10 +50,10 @@ func (a *app) completionCommand() *cobra.Command {
 	return c
 }
 func (a *app) serveCommand() *cobra.Command {
-	c := &cobra.Command{Use: "serve", Short: "前台运行 HTTP 服务及可选串行 Worker", Args: cobra.NoArgs}
+	c := &cobra.Command{Use: "serve", Short: "前台运行 HTTP 服务及项目 Dispatcher 和 Agent Worker", Args: cobra.NoArgs}
 	c.Flags().String("addr", env("HOTMOUSE_ADDR", "127.0.0.1:8080"), "监听地址")
 	c.Flags().String("db", env("HOTMOUSE_DB", "hotmouse.db"), "SQLite 文件；同一文件只允许一个服务")
-	c.Flags().Bool("autorun", os.Getenv("HOTMOUSE_AUTORUN") == "1", "启动服务内串行 Worker 循环")
+	c.Flags().Bool("autorun", os.Getenv("HOTMOUSE_AUTORUN") == "1", "启动项目 Dispatcher 和 Agent Worker 池")
 	auth := "required"
 	if os.Getenv("HOTMOUSE_AUTH_REQUIRED") == "0" {
 		auth = "disabled"
@@ -131,7 +131,9 @@ func (a *app) serveCommand() *cobra.Command {
 		go func() { done <- server.Serve(listener) }()
 		var workerDone <-chan struct{}
 		if autorun {
-			workerDone = worker.New(db).Start(serviceCtx)
+			runner := worker.New(db)
+			runner.SetLogOutput(os.Stdout)
+			workerDone = runner.Start(serviceCtx)
 		}
 		fmt.Fprintf(a.errOut, "HotMouse listening on %s (db=%s, autorun=%t)\n", listener.Addr(), path, autorun)
 		var serveErr error
