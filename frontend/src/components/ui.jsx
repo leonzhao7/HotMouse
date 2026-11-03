@@ -18,7 +18,7 @@ export function Brand({ small = false }) {
       aria-label="HotMouse 首页"
     >
       <span className="brand-mark">
-        <Mouse size={23} />
+        <img src="/favicon.svg" alt="" aria-hidden="true" />
       </span>
       <span>
         Hot<span className="brand-accent">Mouse</span>

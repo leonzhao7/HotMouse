@@ -374,10 +374,12 @@ hr {
   place-items: center;
   width: 37px;
   height: 39px;
-  border: 1px solid #65cf8530;
+}
+.brand-mark img {
+  display: block;
+  width: 37px;
+  height: 37px;
   border-radius: 9px;
-  color: var(--accent);
-  background: var(--green-bg);
 }
 .brand-accent {
   color: var(--accent);
