@@ -830,6 +830,12 @@ func (h *Handler) WorkerObservability(ctx iris.Context) {
 	if worker["running"].(bool) && running == 0 {
 		running = 1
 	}
+	onlineWorkers := workerCount * boolCount(status == "idle" || status == "busy")
+	busyWorkers := running
+	if busyWorkers > onlineWorkers {
+		busyWorkers = onlineWorkers
+	}
+	idleWorkers := onlineWorkers - busyWorkers
 	taskMixRows := []iris.Map{}
 	for taskType, count := range taskMix {
 		taskMixRows = append(taskMixRows, iris.Map{"task_type": taskType, "count": count})
@@ -885,9 +891,9 @@ func (h *Handler) WorkerObservability(ctx iris.Context) {
 	ctx.JSON(iris.Map{
 		"worker_mode": "dispatcher_pool",
 		"summary": iris.Map{
-			"total": 1, "configured_workers": workerCount, "online": boolCount(status == "idle" || status == "busy"),
-			"busy": boolCount(running > 0), "idle": boolCount(running == 0 && status == "idle"),
-			"offline": boolCount(status == "offline"), "disabled": boolCount(status == "disabled"),
+			"total": workerCount, "configured_workers": workerCount, "online": onlineWorkers,
+			"busy": busyWorkers, "idle": idleWorkers,
+			"offline": workerCount * boolCount(status == "offline"), "disabled": workerCount * boolCount(status == "disabled"),
 			"running_tasks": running, "running_projects": running, "rejection_count": len(rejections),
 			"max_workers": workerCount, "max_running_projects": workerCount, "max_project_workers": workerCount, "attention_steps": attention, "summary_pending_steps": pending,
 		},
@@ -899,7 +905,7 @@ func (h *Handler) WorkerObservability(ctx iris.Context) {
 
 func historyOutcome(status string) string {
 	switch status {
-	case "completed":
+	case "completed", "submitted":
 		return "success"
 	case "rejected":
 		return "rejected"
@@ -955,7 +961,7 @@ func (h *Handler) workerSnapshot(ctx context.Context) (iris.Map, error) {
 	}
 	var completed, failed int
 	var average sql.NullFloat64
-	if err := h.DB.SQL.QueryRowContext(ctx, `SELECT count(*),AVG((julianday(finished_at)-julianday(started_at))*86400) FROM worker_task_history WHERE (worker LIKE ? OR worker=?) AND status='completed' AND finished_at IS NOT NULL`, name+"/%", name).Scan(&completed, &average); err != nil {
+	if err := h.DB.SQL.QueryRowContext(ctx, `SELECT count(*),AVG((julianday(finished_at)-julianday(started_at))*86400) FROM worker_task_history WHERE (worker LIKE ? OR worker=?) AND status IN ('completed','submitted') AND finished_at IS NOT NULL`, name+"/%", name).Scan(&completed, &average); err != nil {
 		return nil, err
 	}
 	if err := h.DB.SQL.QueryRowContext(ctx, `SELECT count(*) FROM worker_task_history WHERE (worker LIKE ? OR worker=?) AND status IN ('failed','rejected','claim_failed','invalid_payload','commit_pending','summary_pending')`, name+"/%", name).Scan(&failed); err != nil {
@@ -1195,7 +1201,9 @@ func (h *Handler) WorkerHistory(ctx iris.Context) {
 	ctx.JSON(out)
 }
 func (h *Handler) ExecuteStep(ctx iris.Context) {
-	result, e := worker.New(h.DB).ExecuteNow(ctx.Request().Context(), ctx.Params().Get("project_id"), ctx.Params().Get("step_id"))
+	runner := worker.New(h.DB)
+	runner.SetLogOutput(os.Stdout)
+	result, e := runner.ExecuteNow(ctx.Request().Context(), ctx.Params().Get("project_id"), ctx.Params().Get("step_id"))
 	if e != nil {
 		bad(ctx, e)
 		return

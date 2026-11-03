@@ -674,8 +674,11 @@ func TestWorkerStatusUsesLiveLeasesAndHistoryMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.SQL.Exec(`UPDATE worker_config SET worker_count=3 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().UTC()
-	if _, err := db.SQL.Exec(`UPDATE steps SET worker='local',last_heartbeat_at=? WHERE project_id=? AND id=?`, now.Format(time.RFC3339), project.Project.ID, step.ID); err != nil {
+	if _, err := db.SQL.Exec(`UPDATE steps SET worker='local/worker/01',last_heartbeat_at=? WHERE project_id=? AND id=?`, now.Format(time.RFC3339), project.Project.ID, step.ID); err != nil {
 		t.Fatal(err)
 	}
 	for _, duration := range []time.Duration{10 * time.Second, 30 * time.Second} {
@@ -684,6 +687,11 @@ func TestWorkerStatusUsesLiveLeasesAndHistoryMetrics(t *testing.T) {
 		if _, err := db.SQL.Exec(`INSERT INTO worker_task_history(worker,project_id,task_type,status,started_at,finished_at) VALUES('local',?,'execute','completed',?,?)`, project.Project.ID, started, finished); err != nil {
 			t.Fatal(err)
 		}
+	}
+	submittedStart := now.Add(-time.Minute).Format(time.RFC3339)
+	submittedFinish := now.Add(-40 * time.Second).Format(time.RFC3339)
+	if _, err := db.SQL.Exec(`INSERT INTO worker_task_history(worker,project_id,task_type,status,started_at,finished_at) VALUES('local/worker/01',?,'execute','submitted',?,?)`, project.Project.ID, submittedStart, submittedFinish); err != nil {
+		t.Fatal(err)
 	}
 	app := iris.New()
 	Register(app, New(db))
@@ -709,12 +717,15 @@ func TestWorkerStatusUsesLiveLeasesAndHistoryMetrics(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &workers); err != nil {
 		t.Fatal(err)
 	}
-	if response.Code != 200 || len(workers) != 1 || workers[0].Status != "busy" || workers[0].ProjectID != project.Project.ID || workers[0].StepID != step.ID || workers[0].CurrentTask == "" || len([]rune(workers[0].CurrentTask)) > 120 || workers[0].TasksCompleted != 2 || workers[0].AverageDuration == nil || *workers[0].AverageDuration != 20 || workers[0].LastHeartbeatSecondsAgo == nil {
+	if response.Code != 200 || len(workers) != 1 || workers[0].Status != "busy" || workers[0].ProjectID != project.Project.ID || workers[0].StepID != step.ID || workers[0].CurrentTask == "" || len([]rune(workers[0].CurrentTask)) > 120 || workers[0].TasksCompleted != 3 || workers[0].AverageDuration == nil || *workers[0].AverageDuration != 20 || workers[0].LastHeartbeatSecondsAgo == nil {
 		t.Fatalf("unexpected live worker status=%d body=%s decoded=%+v", response.Code, response.Body.String(), workers)
 	}
 	var observability struct {
 		Summary struct {
+			Total        int `json:"total"`
+			Online       int `json:"online"`
 			Busy         int `json:"busy"`
+			Idle         int `json:"idle"`
 			RunningTasks int `json:"running_tasks"`
 		} `json:"summary"`
 		Outcomes struct {
@@ -735,7 +746,7 @@ func TestWorkerStatusUsesLiveLeasesAndHistoryMetrics(t *testing.T) {
 	if err := json.Unmarshal(requestCtx.Body.Bytes(), &observability); err != nil {
 		t.Fatal(err)
 	}
-	if requestCtx.Code != 200 || observability.Summary.Busy != 1 || observability.Summary.RunningTasks != 1 || observability.Outcomes.Success != 2 || len(observability.TaskMix) != 1 || observability.TaskMix[0].TaskType != "execute" || observability.TaskMix[0].Count != 2 || len(observability.Running) != 1 || observability.Running[0].StepID != step.ID || len(observability.Recent) != 2 {
+	if requestCtx.Code != 200 || observability.Summary.Total != 3 || observability.Summary.Online != 3 || observability.Summary.Busy != 1 || observability.Summary.Idle != 2 || observability.Summary.RunningTasks != 1 || observability.Outcomes.Success != 3 || len(observability.TaskMix) != 1 || observability.TaskMix[0].TaskType != "execute" || observability.TaskMix[0].Count != 3 || len(observability.Running) != 1 || observability.Running[0].StepID != step.ID || len(observability.Recent) != 3 {
 		t.Fatalf("worker observability incomplete: status=%d body=%s decoded=%+v", requestCtx.Code, requestCtx.Body.String(), observability)
 	}
 	if _, err := db.SQL.Exec(`UPDATE steps SET last_heartbeat_at=? WHERE project_id=? AND id=?`, now.Add(-time.Hour).Format(time.RFC3339), project.Project.ID, step.ID); err != nil {

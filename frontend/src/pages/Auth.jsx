@@ -100,7 +100,7 @@ export default function Auth({ onLogin, expired }) {
           </div>
         </div>
         <footer>
-          HOTMOUSE <span>单进程 · 本地 Worker · SQLite</span>
+          HOTMOUSE <span>单进程 · 多 Agent Worker · SQLite</span>
         </footer>
       </div>
       <section className="auth-entry">

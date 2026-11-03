@@ -160,7 +160,7 @@ export default function Workers() {
                 <dt>平均任务时长</dt>
                 <dd>{duration(worker?.avg_duration_seconds)}</dd>
                 <dt>并发上限</dt>
-                <dd>1</dd>
+                <dd>{worker?.worker_count || 1}</dd>
               </dl>
             </div>
             {observation.data?.rejections?.map((item, index) => (
@@ -396,6 +396,7 @@ function WorkerEditor({ initial, onClose, onSaved }) {
       />
       <TextField
         label="Agent Worker 数量"
+        hint="保存后重启后端以应用新的并发数量。"
         type="number"
         min="1"
         max="32"

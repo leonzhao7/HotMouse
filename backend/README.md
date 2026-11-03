@@ -1,6 +1,6 @@
 # HotMouse backend
 
-Local backend for HotMouse. It uses Go, Iris and SQLite. Each active project has one Dispatcher for facts and planning; a configurable pool of Agent Workers executes steps against external agents.
+Local backend for HotMouse. It uses Go, Iris and SQLite. Each active project has one Dispatcher that owns project planning and commits agent results to the fact graph. A configurable pool of Agent Workers runs external agents to execute concrete steps; workers persist their results for the project Dispatcher to commit.
 
 The React workbench is in [frontend](../frontend/README.md). Start this backend, then run `npm ci` and `npm run dev` in `frontend/` and open `http://127.0.0.1:5173`. The frontend proxies both core and product API routes and supports browser registration/login.
 
@@ -37,6 +37,6 @@ Built-in `codex`, `claude`/`claudecode`, and `pi` drivers use local CLIs. Set `P
 
 Reports, report templates/attachments and Docker/container deployment are outside this migration.
 
-Set `HOTMOUSE_AUTORUN=1` to start project Dispatchers and the Agent Worker pool. Set `worker_count` through `/api/workers/config` to control the number of concurrent external agents. Without autorun, use the explicit `/api/projects/{project_id}/steps/{step_id}/execute` endpoint while developing or integrating another local trigger. Each external process start is logged to backend stdout with its project, step, worker identity and argv.
+Set `HOTMOUSE_AUTORUN=1` to start project Dispatchers and the Agent Worker pool. Set `worker_count` through `/api/workers/config` to control the number of concurrent external agents; restart the service to apply a changed pool size. Without autorun, use the explicit `/api/projects/{project_id}/steps/{step_id}/execute` endpoint while developing or integrating another local trigger. Each external process start is logged to backend stdout with its project, step, worker identity and argv.
 
 Compact model contexts, structured execution outcomes, event-triggered Decide, route stop-loss controls, history/experience recall and flag records are described in [strategy.md](../docs/strategy.md). Existing databases migrate on startup; complete YAML exports remain available.

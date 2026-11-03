@@ -50,6 +50,141 @@ func TestAgentWorkerUsesIdentityAndLogsInvocation(t *testing.T) {
 	}
 }
 
+func TestDispatcherCommitsAgentWorkerResultToProjectGraph(t *testing.T) {
+	db, err := core.Open(filepath.Join(t.TempDir(), "dispatcher.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.SQL.Close()
+	project, err := db.CreateProject(t.Context(), core.CreateProject{Title: "dispatcher", Origin: "target", Goal: "verify"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	step, err := db.CreateStep(t.Context(), project.Project.ID, core.CreateStep{From: []string{"origin"}, Description: "inspect", Creator: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := `if [ "$HOTMOUSE_TASK_TYPE" = decide ]; then printf '%s' '{"accepted":true,"data":{"steps":[{"from":["origin"],"description":"follow up","goal_id":"g001"}]}}'; else printf '%s' '{"accepted":true,"data":{"description":"confirmed","result":{"type":"progress","detail":"evidence"}}}'; fi`
+	if _, err := db.SQL.Exec(`UPDATE worker_config SET driver='command',command=?,enabled=1 WHERE id=1`, command); err != nil {
+		t.Fatal(err)
+	}
+	runner := New(db)
+	NewAgentWorker(runner, "local/worker/01").RunOnce(t.Context())
+	before, err := db.GetProject(t.Context(), project.Project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.Facts) != 1 || before.Steps[0].To != nil {
+		t.Fatalf("agent worker mutated project graph: facts=%d step=%+v", len(before.Facts), before.Steps[0])
+	}
+	var status, worker string
+	if err := db.SQL.QueryRow(`SELECT status,worker_name FROM worker_execute_recovery WHERE project_id=? AND step_id=?`, project.Project.ID, step.ID).Scan(&status, &worker); err != nil || status != "commit_pending" || worker != "local/worker/01" {
+		t.Fatalf("saved agent result status=%q worker=%q err=%v", status, worker, err)
+	}
+	NewDispatcher(runner, project.Project.ID).RunOnce(t.Context())
+	after, err := db.GetProject(t.Context(), project.Project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Facts) != 2 || after.Steps[0].To == nil || after.Steps[0].Worker == nil || *after.Steps[0].Worker != "local/dispatcher/"+project.Project.ID {
+		t.Fatalf("dispatcher did not commit agent result: facts=%d step=%+v", len(after.Facts), after.Steps[0])
+	}
+	var agentHistory, dispatcherHistory int
+	if err := db.SQL.QueryRow(`SELECT count(*) FROM worker_task_history WHERE project_id=? AND worker='local/worker/01' AND status='submitted'`, project.Project.ID).Scan(&agentHistory); err != nil || agentHistory != 1 {
+		t.Fatalf("agent submission history=%d err=%v", agentHistory, err)
+	}
+	if err := db.SQL.QueryRow(`SELECT count(*) FROM worker_task_history WHERE project_id=? AND worker=? AND task_type='dispatch_commit' AND status='completed'`, project.Project.ID, "local/dispatcher/"+project.Project.ID).Scan(&dispatcherHistory); err != nil || dispatcherHistory != 1 {
+		t.Fatalf("dispatcher commit history=%d err=%v", dispatcherHistory, err)
+	}
+	NewDispatcher(runner, project.Project.ID).RunOnce(t.Context())
+	planned, err := db.GetProject(t.Context(), project.Project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plannedByDispatcher bool
+	for _, plannedStep := range planned.Steps {
+		if plannedStep.Description == "follow up" && plannedStep.Creator == "local/dispatcher/"+project.Project.ID {
+			plannedByDispatcher = true
+		}
+	}
+	if !plannedByDispatcher {
+		t.Fatalf("dispatcher did not own project planning: %+v", planned.Steps)
+	}
+}
+
+func TestRunnerStartsConfiguredParallelAgentWorkers(t *testing.T) {
+	db, err := core.Open(filepath.Join(t.TempDir(), "parallel-workers.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.SQL.Close()
+	project, err := db.CreateProject(t.Context(), core.CreateProject{Title: "parallel", Origin: "target", Goal: "verify"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, description := range []string{"inspect one", "inspect two"} {
+		if _, err := db.CreateStep(t.Context(), project.Project.ID, core.CreateStep{From: []string{"origin"}, Description: description, Creator: "test"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workerIDs := filepath.Join(t.TempDir(), "worker-identities")
+	env, _ := json.Marshal(map[string]string{"WORKER_IDS": workerIDs})
+	command := `if [ "$HOTMOUSE_TASK_TYPE" = execute ]; then printf '%s\n' "$HOTMOUSE_WORKER_ID" >> "$WORKER_IDS"; deadline=$((SECONDS+3)); while [ "$(wc -l < "$WORKER_IDS")" -lt 2 ] && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.02; done; [ "$(wc -l < "$WORKER_IDS")" -ge 2 ] || exit 9; printf '%s' '{"accepted":true,"data":{"description":"confirmed","result":{"type":"progress","detail":"evidence"}}}'; else printf '{}'; fi`
+	if _, err := db.SQL.Exec(`UPDATE worker_config SET driver='command',command=?,environment_json=?,worker_count=2,enabled=1 WHERE id=1`, command, string(env)); err != nil {
+		t.Fatal(err)
+	}
+	runner := New(db)
+	runner.Interval = 5 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runner.Start(ctx)
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			cancel()
+			<-done
+			contents, _ := os.ReadFile(workerIDs)
+			detail, _ := db.GetProject(context.Background(), project.Project.ID)
+			history, _ := db.SQL.Query(`SELECT worker,status,detail FROM worker_task_history ORDER BY id`)
+			defer history.Close()
+			var entries []string
+			for history.Next() {
+				var worker, status, detail string
+				_ = history.Scan(&worker, &status, &detail)
+				entries = append(entries, worker+":"+status+":"+detail)
+			}
+			t.Fatalf("parallel agent workers did not finish both steps: identities=%q steps=%+v history=%v", contents, detail.Steps, entries)
+		case <-time.After(20 * time.Millisecond):
+			detail, err := db.GetProject(t.Context(), project.Project.ID)
+			if err != nil {
+				cancel()
+				<-done
+				t.Fatal(err)
+			}
+			finished := len(detail.Steps) == 2
+			for _, step := range detail.Steps {
+				finished = finished && step.To != nil
+			}
+			if finished {
+				cancel()
+				<-done
+				contents, err := os.ReadFile(workerIDs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				identities := map[string]bool{}
+				for _, identity := range strings.Fields(string(contents)) {
+					identities[identity] = true
+				}
+				if len(identities) != 2 || !identities["local/worker/01"] || !identities["local/worker/02"] {
+					t.Fatalf("configured workers did not execute in parallel: %q", contents)
+				}
+				return
+			}
+		}
+	}
+}
+
 func TestDecideContractAppliesWrappedStepMutation(t *testing.T) {
 	db, err := core.Open(filepath.Join(t.TempDir(), "worker.db"))
 	if err != nil {
@@ -397,7 +532,8 @@ func TestDecideStoresFingerprintAfterGraphMutationAndUsesConfiguredWorker(t *tes
 	if fingerprint != graphFingerprint(updated) || fingerprint == graphFingerprint(initial) {
 		t.Fatalf("stored fingerprint does not describe updated graph: stored=%s initial=%s updated=%s", fingerprint, graphFingerprint(initial), graphFingerprint(updated))
 	}
-	if len(updated.Steps) != 1 || updated.Steps[0].Creator != "agent-x" {
+	dispatcherIdentity := "agent-x/dispatcher/" + project.Project.ID
+	if len(updated.Steps) != 1 || updated.Steps[0].Creator != dispatcherIdentity {
 		t.Fatalf("step creator did not use configured worker: %+v", updated.Steps)
 	}
 	var leaseWorker sql.NullString
@@ -408,7 +544,7 @@ func TestDecideStoresFingerprintAfterGraphMutationAndUsesConfiguredWorker(t *tes
 		t.Fatalf("decide lease was not released: %q", leaseWorker.String)
 	}
 	var historyWorker string
-	if err := db.SQL.QueryRow(`SELECT worker FROM worker_task_history WHERE project_id=?`, project.Project.ID).Scan(&historyWorker); err != nil || historyWorker != "agent-x" {
+	if err := db.SQL.QueryRow(`SELECT worker FROM worker_task_history WHERE project_id=?`, project.Project.ID).Scan(&historyWorker); err != nil || historyWorker != dispatcherIdentity {
 		t.Fatalf("history worker=%q err=%v", historyWorker, err)
 	}
 }

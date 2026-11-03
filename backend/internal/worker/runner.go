@@ -17,15 +17,16 @@ import (
 	"hotmouse/backend/internal/core"
 )
 
-// Runner is one serialized Decide -> Execute loop. The optional command is a
-// local model/agent adapter: it receives a graph snapshot and task contract in
-// environment variables and returns one JSON contract on stdout.
+// Runner owns the project dispatchers and the configured pool of agent workers.
+// External commands receive a graph snapshot and task contract in environment
+// variables and return one JSON contract on stdout.
 type Runner struct {
-	DB       *core.DB
-	Interval time.Duration
-	logger   *log.Logger
-	locksMu  sync.Mutex
-	stepLock map[string]*sync.Mutex
+	DB            *core.DB
+	Interval      time.Duration
+	logger        *log.Logger
+	locksMu       sync.Mutex
+	stepLock      map[string]*sync.Mutex
+	workspaceLock map[string]*sync.Mutex
 }
 
 type workerConfig struct {
@@ -45,7 +46,7 @@ type workerConfig struct {
 const defaultWorkerCount = 4
 
 func New(db *core.DB) *Runner {
-	return &Runner{DB: db, Interval: time.Second, logger: log.New(io.Discard, "", log.LstdFlags), stepLock: map[string]*sync.Mutex{}}
+	return &Runner{DB: db, Interval: time.Second, logger: log.New(io.Discard, "", log.LstdFlags), stepLock: map[string]*sync.Mutex{}, workspaceLock: map[string]*sync.Mutex{}}
 }
 
 func (r *Runner) SetLogOutput(output io.Writer) {
@@ -286,7 +287,14 @@ func (r *Runner) ExecuteNow(ctx context.Context, project, step string) (core.Con
 	if err := r.DB.SQL.QueryRowContext(ctx, `SELECT description FROM steps WHERE project_id=? AND id=?`, project, step).Scan(&description); err != nil {
 		return core.ConcludeResult{}, err
 	}
-	return r.execute(ctx, project, step, description)
+	agentResult, err := r.executeForAgent(ctx, project, step, description, r.workerIdentity(1))
+	if err != nil {
+		return core.ConcludeResult{}, err
+	}
+	if agentResult.Step != nil && agentResult.Step.To != nil {
+		return agentResult, nil
+	}
+	return r.executeAsDispatcherCommit(ctx, project, step, description, r.dispatcherIdentity(project))
 }
 
 func (r *Runner) executeNext(ctx context.Context, identity string) {
@@ -302,29 +310,45 @@ func (r *Runner) executeNext(ctx context.Context, identity string) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for attempts := 0; attempts < 8; attempts++ {
 		var project, step, description string
-		var completed bool
-		err := r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description,s.to_fact_id IS NOT NULL FROM worker_execute_recovery x JOIN steps s ON s.project_id=x.project_id AND s.id=x.step_id JOIN projects p ON p.id=s.project_id WHERE p.status='active' AND s.abandoned=0 AND ((x.payload_json<>'' AND x.status IN ('running','commit_pending')) OR (x.status='summary_pending' AND x.session_id<>'' AND s.to_fact_id IS NULL)) AND (s.to_fact_id IS NOT NULL OR (s.worker IS NULL AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)))) ORDER BY x.created_at LIMIT 1`, now).Scan(&project, &step, &description, &completed)
+		err := r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM worker_execute_recovery x JOIN steps s ON s.project_id=x.project_id AND s.id=x.step_id JOIN projects p ON p.id=s.project_id WHERE p.status='active' AND s.abandoned=0 AND x.status='summary_pending' AND x.session_id<>'' AND s.to_fact_id IS NULL AND s.worker IS NULL AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)) ORDER BY x.created_at LIMIT 1`, now).Scan(&project, &step, &description)
 		if err == sql.ErrNoRows {
 			err = r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM steps s WHERE s.to_fact_id IS NULL AND s.abandoned=0 AND s.worker IS NULL AND s.project_id IN (SELECT id FROM projects WHERE status='active' AND decide_worker IS NULL) AND NOT EXISTS(SELECT 1 FROM routes rt WHERE rt.project_id=s.project_id AND rt.id=s.route_id AND rt.status='shelved') AND NOT EXISTS (SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id) AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)) ORDER BY s.priority DESC,s.created_at LIMIT 1`, now).Scan(&project, &step, &description)
 		}
 		if err != nil {
 			return
 		}
-		if !completed {
-			if _, err := r.DB.HeartbeatStep(ctx, project, step, identity); err != nil {
-				continue
-			}
+		if _, err := r.DB.HeartbeatStep(ctx, project, step, identity); err != nil {
+			continue
 		}
-		_, _ = r.executeAs(ctx, project, step, description, identity)
+		_, _ = r.executeForAgent(ctx, project, step, description, identity)
 		return
 	}
 }
 
 func (r *Runner) execute(parent context.Context, project, step, description string) (core.ConcludeResult, error) {
-	return r.executeAs(parent, project, step, description, r.workerName())
+	agentResult, err := r.executeForAgent(parent, project, step, description, r.workerIdentity(1))
+	if err != nil {
+		return core.ConcludeResult{}, err
+	}
+	if agentResult.Step != nil && agentResult.Step.To != nil {
+		return agentResult, nil
+	}
+	return r.executeAsDispatcherCommit(parent, project, step, description, r.dispatcherIdentity(project))
 }
 
 func (r *Runner) executeAs(parent context.Context, project, step, description, identity string) (core.ConcludeResult, error) {
+	return r.executeAsRole(parent, project, step, description, identity, false, "execute")
+}
+
+func (r *Runner) executeForAgent(parent context.Context, project, step, description, identity string) (core.ConcludeResult, error) {
+	return r.executeAsRole(parent, project, step, description, identity, true, "execute")
+}
+
+func (r *Runner) executeAsDispatcherCommit(parent context.Context, project, step, description, identity string) (core.ConcludeResult, error) {
+	return r.executeAsRole(parent, project, step, description, identity, false, "dispatch_commit")
+}
+
+func (r *Runner) executeAsRole(parent context.Context, project, step, description, identity string, deferGraphCommit bool, taskType string) (core.ConcludeResult, error) {
 	unlock := r.lockStep(project, step)
 	defer unlock()
 	started := time.Now().UTC().Format(time.RFC3339Nano)
@@ -332,7 +356,7 @@ func (r *Runner) executeAs(parent context.Context, project, step, description, i
 	if worker == "" {
 		worker = r.workerName()
 	}
-	history := r.historyStart(project, step, "execute", started, worker)
+	history := r.historyStart(project, step, taskType, started, worker)
 	checkpoint, err := r.loadExecuteRecovery(parent, project, step)
 	if err != nil {
 		r.historyFinish(history, "failed", err.Error())
@@ -380,7 +404,11 @@ func (r *Runner) executeAs(parent context.Context, project, step, description, i
 		return core.ConcludeResult{}, err
 	}
 	stopHeartbeat := r.keepStepAlive(leaseCtx, cancel, project, step, worker, history)
-	defer stopHeartbeat()
+	defer func() {
+		if stopHeartbeat != nil {
+			stopHeartbeat()
+		}
+	}()
 	if !recovery {
 		graph, err := r.DB.ModelContext(leaseCtx, project, "execute", step)
 		if err != nil {
@@ -477,13 +505,20 @@ func (r *Runner) executeAs(parent context.Context, project, step, description, i
 	}
 	conclusion.Worker = worker
 	if !recovery {
-		if err := r.saveExecuteRecovery(leaseCtx, project, step, output); err != nil {
+		if err := r.saveExecuteRecovery(leaseCtx, project, step, output, worker); err != nil {
 			r.markExecuteAttention(project, step)
 			r.releaseStep(project, step, worker)
 			r.historyFinish(history, "failed", err.Error())
 			r.recordTaskOutcome(project, "execute", "failed")
 			return core.ConcludeResult{}, err
 		}
+	}
+	if deferGraphCommit {
+		r.historyFinish(history, "submitted", conclusion.Description)
+		stopHeartbeat()
+		stopHeartbeat = nil
+		r.releaseStep(project, step, worker)
+		return core.ConcludeResult{}, nil
 	}
 	result, err := r.DB.ConcludeStep(leaseCtx, project, step, conclusion)
 	if err != nil {
@@ -642,12 +677,15 @@ func (r *Runner) nextDecideProject(ctx context.Context) string {
 }
 
 func (r *Runner) decideProject(parent context.Context, project string) {
-	r.decideProjectAs(parent, project, r.workerName())
+	r.decideProjectAs(parent, project, r.dispatcherIdentity(project))
 }
 
 func (r *Runner) dispatchProject(ctx context.Context, project string) {
 	var status string
 	if err := r.DB.SQL.QueryRowContext(ctx, `SELECT status FROM projects WHERE id=?`, project).Scan(&status); err != nil || status != "active" {
+		return
+	}
+	if r.commitNextStepResult(ctx, project) {
 		return
 	}
 	events, err := r.DB.PendingDecideEvents(ctx, project)
@@ -691,6 +729,16 @@ func (r *Runner) dispatchProject(ctx context.Context, project string) {
 		}
 	}
 	r.decideProjectAs(ctx, project, r.dispatcherIdentity(project))
+}
+
+func (r *Runner) commitNextStepResult(ctx context.Context, project string) bool {
+	var step, description string
+	err := r.DB.SQL.QueryRowContext(ctx, `SELECT s.id,s.description FROM worker_execute_recovery x JOIN steps s ON s.project_id=x.project_id AND s.id=x.step_id WHERE x.project_id=? AND x.status='commit_pending' AND x.payload_json<>'' AND s.to_fact_id IS NULL AND s.abandoned=0 ORDER BY x.created_at LIMIT 1`, project).Scan(&step, &description)
+	if err != nil {
+		return false
+	}
+	_, _ = r.executeAsDispatcherCommit(ctx, project, step, description, r.dispatcherIdentity(project))
+	return true
 }
 
 func (r *Runner) decideProjectAs(parent context.Context, project, worker string) {
@@ -802,7 +850,7 @@ func (r *Runner) decideProjectAs(parent context.Context, project, worker string)
 		r.recordTaskOutcome(project, "decide", "failed")
 		return
 	}
-	if err = applyDecide(r.DB, leaseCtx, project, detail, payload, r.workerName()); err != nil {
+	if err = applyDecide(r.DB, leaseCtx, project, detail, payload, worker); err != nil {
 		r.releaseDecide(project, worker)
 		status := "invalid_payload"
 		if isWorkerRejection(err) {
@@ -1175,6 +1223,8 @@ func (r *Runner) workspaceRoot(cfg workerConfig) (string, error) {
 }
 
 func (r *Runner) ensureWorkspace(project string, cfg workerConfig) (string, error) {
+	unlock := r.lockWorkspace(project)
+	defer unlock()
 	if filepath.Base(project) != project || project == "." || project == ".." {
 		return "", fmt.Errorf("invalid project workspace id")
 	}
@@ -1420,13 +1470,29 @@ func (r *Runner) lockStep(project, step string) func() {
 	return lock.Unlock
 }
 
+func (r *Runner) lockWorkspace(project string) func() {
+	r.locksMu.Lock()
+	lock := r.workspaceLock[project]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		r.workspaceLock[project] = lock
+	}
+	r.locksMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
 func (r *Runner) saveExecuteStarted(ctx context.Context, project, step, worker string) error {
 	_, err := r.DB.SQL.ExecContext(ctx, `INSERT INTO worker_execute_recovery(project_id,step_id,payload_json,status,worker_name,created_at) VALUES(?,?,?,'running',?,?) ON CONFLICT(project_id,step_id) DO NOTHING`, project, step, "", worker, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
 }
 
-func (r *Runner) saveExecuteRecovery(ctx context.Context, project, step string, payload []byte) error {
-	_, err := r.DB.SQL.ExecContext(ctx, `INSERT INTO worker_execute_recovery(project_id,step_id,payload_json,status,created_at) VALUES(?,?,?,'commit_pending',?) ON CONFLICT(project_id,step_id) DO UPDATE SET payload_json=excluded.payload_json,status='commit_pending',created_at=excluded.created_at`, project, step, string(payload), time.Now().UTC().Format(time.RFC3339Nano))
+func (r *Runner) saveExecuteRecovery(ctx context.Context, project, step string, payload []byte, worker ...string) error {
+	workerName := ""
+	if len(worker) > 0 {
+		workerName = worker[0]
+	}
+	_, err := r.DB.SQL.ExecContext(ctx, `INSERT INTO worker_execute_recovery(project_id,step_id,payload_json,status,worker_name,created_at) VALUES(?,?,?,'commit_pending',?,?) ON CONFLICT(project_id,step_id) DO UPDATE SET payload_json=excluded.payload_json,status='commit_pending',worker_name=excluded.worker_name,created_at=excluded.created_at`, project, step, string(payload), workerName, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
 }
 
