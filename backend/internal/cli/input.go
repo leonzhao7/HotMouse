@@ -218,6 +218,12 @@ func validateObject(value map[string]any, fields []field) error {
 			if _, ok := v.(map[string]any); !ok {
 				return invalid("%s must be an object", k)
 			}
+		case "result":
+			if m := object(v); m == nil {
+				return invalid("result must be an object")
+			} else if e := validateObject(m, []field{str("type", true), str("detail", false), {Name: "evidence", Kind: "object"}}); e != nil {
+				return e
+			}
 		case "finding":
 			if m, ok := v.(map[string]any); !ok {
 				return invalid("finding must be an object")

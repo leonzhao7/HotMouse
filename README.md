@@ -46,5 +46,6 @@ npm run dev
 - [后端与 Worker 配置](backend/README.md)
 - [完整命令行接口](docs/cli.md)
 - [HTTP 接口范围](docs/routes.md)
+- [紧凑上下文、路线调度与经验台账](docs/strategy.md)
 
 前端构建后可通过 `cd frontend && npm run build && npm start` 在 `127.0.0.1:4173` 运行，并同源代理后端 API。

@@ -137,7 +137,7 @@ func TestInterruptedExecuteRequiresAttentionInsteadOfReplayingExternalAction(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := `printf x >> "$HOTMOUSE_CALL_MARKER"; exit 1`
+	command := `if [ "$HOTMOUSE_TASK_TYPE" = execute ]; then printf x >> "$HOTMOUSE_CALL_MARKER"; fi; exit 1`
 	if _, err := db.SQL.Exec(`UPDATE worker_config SET name='agent-x',driver='command',command=?,environment_json=? WHERE id=1`, command, string(env)); err != nil {
 		t.Fatal(err)
 	}

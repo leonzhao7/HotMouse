@@ -3,6 +3,9 @@ package core
 type Fact struct {
 	ID          string `json:"id" yaml:"id"`
 	Description string `json:"description" yaml:"description"`
+	Title       string `json:"title,omitempty" yaml:"title,omitempty"`
+	Detail      string `json:"detail,omitempty" yaml:"detail,omitempty"`
+	ResultType  string `json:"result_type,omitempty" yaml:"result_type,omitempty"`
 }
 
 type Goal struct {
@@ -19,18 +22,20 @@ type Goal struct {
 }
 
 type Step struct {
-	ID              string   `json:"id" yaml:"id"`
-	From            []string `json:"from" yaml:"from"`
-	To              *string  `json:"to" yaml:"to"`
-	Description     string   `json:"description" yaml:"description"`
-	GoalID          *string  `json:"goal_id" yaml:"goal_id"`
-	Priority        int      `json:"priority" yaml:"priority"`
-	Creator         string   `json:"creator" yaml:"creator"`
-	Worker          *string  `json:"worker" yaml:"worker"`
-	LastHeartbeatAt *string  `json:"last_heartbeat_at" yaml:"last_heartbeat_at"`
-	CreatedAt       string   `json:"created_at" yaml:"created_at"`
-	ConcludedAt     *string  `json:"concluded_at" yaml:"concluded_at"`
-	Abandoned       bool     `json:"abandoned" yaml:"abandoned"`
+	ID              string           `json:"id" yaml:"id"`
+	From            []string         `json:"from" yaml:"from"`
+	To              *string          `json:"to" yaml:"to"`
+	Description     string           `json:"description" yaml:"description"`
+	GoalID          *string          `json:"goal_id" yaml:"goal_id"`
+	Priority        int              `json:"priority" yaml:"priority"`
+	Creator         string           `json:"creator" yaml:"creator"`
+	Worker          *string          `json:"worker" yaml:"worker"`
+	LastHeartbeatAt *string          `json:"last_heartbeat_at" yaml:"last_heartbeat_at"`
+	CreatedAt       string           `json:"created_at" yaml:"created_at"`
+	ConcludedAt     *string          `json:"concluded_at" yaml:"concluded_at"`
+	Abandoned       bool             `json:"abandoned" yaml:"abandoned"`
+	RouteID         *string          `json:"route_id,omitempty" yaml:"route_id,omitempty"`
+	Result          *ExecutionResult `json:"result,omitempty" yaml:"result,omitempty"`
 }
 
 type Finding struct {
@@ -88,6 +93,7 @@ type ProjectDetail struct {
 	Goals    []Goal    `json:"goals" yaml:"goals"`
 	Findings []Finding `json:"findings" yaml:"findings"`
 	Hints    []Hint    `json:"hints" yaml:"hints"`
+	Routes   []Route   `json:"routes" yaml:"routes"`
 }
 
 type CreateProject struct {
@@ -120,6 +126,7 @@ type CreateStep struct {
 	Priority    int      `json:"priority"`
 	Creator     string   `json:"creator"`
 	Worker      *string  `json:"worker"`
+	RouteID     *string  `json:"route_id"`
 }
 type UpdateStep struct {
 	Priority  *int    `json:"priority"`
@@ -143,9 +150,11 @@ type ClaimDecide struct {
 	Trigger string `json:"trigger"`
 }
 type Conclude struct {
-	Worker      string         `json:"worker"`
-	Description string         `json:"description"`
-	Finding     *CreateFinding `json:"finding"`
+	Worker      string           `json:"worker"`
+	Description string           `json:"description"`
+	Finding     *CreateFinding   `json:"finding"`
+	Title       string           `json:"title"`
+	Result      *ExecutionResult `json:"result"`
 }
 type Completion struct {
 	From        []string `json:"from"`

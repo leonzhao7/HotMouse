@@ -2071,6 +2071,7 @@ func Register(app *iris.Application, h *Handler) {
 	app.Get("/captcha", h.Captcha)
 	app.Put("/api/auth/password", h.ChangePassword)
 	app.Put("/auth/password", h.ChangePassword)
+	h.registerStrategy(app)
 	app.Get("/projects", h.ListProjects)
 	app.Post("/projects", h.CreateProject)
 	app.Get("/projects/{project_id:string}", h.GetProject)

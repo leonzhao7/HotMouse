@@ -54,6 +54,7 @@ import {
   SelectField,
   TextField,
 } from "../components/ui.jsx";
+import Strategy, { resultLabels } from "./Strategy.jsx";
 const Graph = lazy(() => import("../components/Graph.jsx"));
 
 const tabs = [
@@ -65,6 +66,10 @@ const tabs = [
   ["hints", "提示", Lightbulb],
   ["timeline", "时间线", Clock3],
   ["campaign", "项目综述", FileSearch],
+  ["routes", "路线与止损", GitBranch],
+  ["history", "历史检索", FileSearch],
+  ["experiences", "经验库", Lightbulb],
+  ["flags", "flag 台账", ShieldAlert],
 ];
 
 export default function Workspace({ id }) {
@@ -352,7 +357,14 @@ export default function Workspace({ id }) {
                 </Suspense>
               ) : (
                 <>
-                  {!["timeline", "campaign"].includes(tab) && (
+                  {![
+                    "timeline",
+                    "campaign",
+                    "routes",
+                    "history",
+                    "experiences",
+                    "flags",
+                  ].includes(tab) && (
                     <div className="workspace-list-toolbar">
                       <SearchInput
                         value={query}
@@ -425,6 +437,7 @@ export default function Workspace({ id }) {
                         "目标",
                         "Worker",
                         "优先级",
+                        "路线 / 结果",
                       ]}
                       count={data.steps.filter(matches).length}
                     >
@@ -456,6 +469,11 @@ export default function Workspace({ id }) {
                           <td>{step.worker || "—"}</td>
                           <td>
                             <code>P{step.priority}</code>
+                          </td>
+                          <td>
+                            <code>{step.route_id || "—"}</code>
+                            <br />
+                            {resultLabels[step.result?.type] || "—"}
                           </td>
                         </tr>
                       ))}
@@ -558,6 +576,17 @@ export default function Workspace({ id }) {
                         )}
                       </div>
                     </ResourceState>
+                  )}
+                  {["routes", "history", "experiences", "flags"].includes(
+                    tab,
+                  ) && (
+                    <Strategy
+                      key={tab}
+                      mode={tab}
+                      detail={data}
+                      base={base}
+                      refresh={refresh}
+                    />
                   )}
                   {tab === "campaign" && (
                     <ResourceState resource={campaign}>
@@ -732,11 +761,29 @@ function Inspector({
           </>
         )}
         <p className="inspector-description">{item.description}</p>
+        {item.title && type === "fact" && <h3>{item.title}</h3>}
+        {(item.result?.type || item.result_type) && (
+          <Badge tone="blue">
+            {resultLabels[item.result?.type || item.result_type]}
+          </Badge>
+        )}
+        {(item.detail || item.result?.detail) && (
+          <p className="inspector-description">
+            {item.detail || item.result.detail}
+          </p>
+        )}
+        {item.result?.evidence && (
+          <pre className="block-code">
+            {JSON.stringify(item.result.evidence, null, 2)}
+          </pre>
+        )}
         {type === "step" && (
           <>
             <dl>
               <dt>优先级</dt>
               <dd>P{item.priority}</dd>
+              <dt>路线</dt>
+              <dd>{item.route_id || "—"}</dd>
               <dt>创建人</dt>
               <dd>{item.creator}</dd>
               <dt>Worker</dt>
@@ -1060,6 +1107,9 @@ function WorkspaceModal({ kind, item, detail, base, actor, onClose, onSaved }) {
   const [factID, setFactID] = useState(item?.fact_id || "");
   const [findingData, setFindingData] = useState("{}");
   const [withFinding, setWithFinding] = useState(false);
+  const [resultType, setResultType] = useState("progress");
+  const [resultDetail, setResultDetail] = useState("");
+  const [routeID, setRouteID] = useState("");
   const titles = {
     title: "重命名项目",
     reopen: "重新打开项目",
@@ -1112,6 +1162,7 @@ function WorkspaceModal({ kind, item, detail, base, actor, onClose, onSaved }) {
         goal_id: goal || null,
         priority: Number(priority),
         creator: actor,
+        route_id: routeID || null,
       });
     else if (kind === "step-edit")
       await patch(endpoint, {
@@ -1124,6 +1175,7 @@ function WorkspaceModal({ kind, item, detail, base, actor, onClose, onSaved }) {
       await post(`${endpoint}/conclude`, {
         worker: worker.trim(),
         description: description.trim(),
+        result: { type: resultType, detail: resultDetail },
         ...(withFinding ? { finding } : {}),
       });
     else if (kind === "complete")
@@ -1316,12 +1368,62 @@ function WorkspaceModal({ kind, item, detail, base, actor, onClose, onSaved }) {
           hint="手动操作使用此名称标识租约和结果的来源。"
         />
       )}
+      {kind === "step" && (
+        <SelectField
+          label="路线"
+          value={routeID}
+          onChange={(e) => setRouteID(e.target.value)}
+        >
+          <option value="">按目标或来源自动关联</option>
+          {(detail.routes || [])
+            .filter((r) => r.status === "active")
+            .map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.id} · {r.title}
+              </option>
+            ))}
+        </SelectField>
+      )}
       {kind === "conclude" && (
         <>
+          <SelectField
+            label="结果类型"
+            value={resultType}
+            onChange={(e) => {
+              setResultType(e.target.value);
+              if (
+                [
+                  "environment_failure",
+                  "no_information",
+                  "needs_attention",
+                ].includes(e.target.value)
+              )
+                setWithFinding(false);
+            }}
+          >
+            {Object.entries(resultLabels)
+              .filter(([key]) => key !== "unclassified")
+              .map(([key, name]) => (
+                <option key={key} value={key}>
+                  {name}
+                </option>
+              ))}
+          </SelectField>
+          <TextField
+            label="详细证据"
+            multiline
+            value={resultDetail}
+            onChange={(e) => setResultDetail(e.target.value)}
+          />
           <label className="checkbox-field">
             <input
               type="checkbox"
               checked={withFinding}
+              disabled={[
+                "environment_failure",
+                "no_information",
+                "needs_attention",
+              ].includes(resultType)}
               onChange={(event) => setWithFinding(event.target.checked)}
             />
             同时记录一条发现（绑定新生成的结果事实）

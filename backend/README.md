@@ -38,3 +38,5 @@ Built-in `codex`, `claude`/`claudecode`, and `pi` drivers use local CLIs. Set `P
 Reports, report templates/attachments, Docker/container deployment, and multi-worker scheduling are intentionally outside this migration.
 
 Set `HOTMOUSE_AUTORUN=1` to start the serialized local worker loop. Without it, use the explicit `/api/projects/{project_id}/steps/{step_id}/execute` endpoint while developing or integrating another local trigger.
+
+Compact model contexts, structured execution outcomes, event-triggered Decide, route stop-loss controls, history/experience recall and flag records are described in [strategy.md](../docs/strategy.md). Existing databases migrate on startup; complete YAML exports remain available.

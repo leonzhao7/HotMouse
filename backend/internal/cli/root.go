@@ -111,6 +111,7 @@ func (a *app) command() *cobra.Command {
 	}
 	root.AddCommand(a.serveCommand(), a.versionCommand(), a.completionCommand(), a.configCommand(), a.authCommand())
 	a.graphCommands(root)
+	a.strategyCommands(root)
 	a.productCommands(root)
 	root.AddCommand(a.leaf("status", "查询服务、健康和 Worker 状态", 0, 0, "none", func(c *cobra.Command, _ []string) (any, error) {
 		service, e := a.get(c, "/healthz")

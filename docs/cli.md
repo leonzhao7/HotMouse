@@ -56,6 +56,8 @@ hotmouse
 │   ├── delete [PROJECT]
 │   ├── campaign [PROJECT]
 │   ├── timeline [PROJECT]
+│   ├── context [PROJECT]
+│   ├── recall [PROJECT]
 │   ├── export [PROJECT]
 │   └── wait [PROJECT]
 ├── goal
@@ -76,7 +78,22 @@ hotmouse
 │   ├── release <STEP>
 │   ├── conclude <STEP>
 │   └── execute <STEP>
+├── route
+│   ├── list
+│   ├── create
+│   ├── update <ROUTE>
+│   └── records
+├── experience
+│   ├── search
+│   ├── show <ID>
+│   └── create
+├── flag
+│   ├── list
+│   ├── capture
+│   ├── begin <FLAG>
+│   └── resolve <FLAG> <ATTEMPT>
 ├── decide
+│   ├── request
 │   ├── show
 │   ├── claim
 │   ├── heartbeat
@@ -783,3 +800,6 @@ backend/internal/worker/          已有服务内串行 Worker
 - 导出拒绝隐式覆盖；监看输出可解析，筛选不伪装成完整历史检索。
 
 自动化测试覆盖真实 HTTP 服务下的项目证据链、租约边界、配置更新、认证与 Profile 隔离、漏洞部分成功、输入校验、监看中断、导出覆盖和服务单实例退出。
+
+
+路线预算、结构化执行结果 `--result-file`、紧凑上下文、历史检索、经验库与 flag 台账的协议和示例见 [strategy.md](strategy.md)。

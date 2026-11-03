@@ -108,6 +108,10 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate worker recovery: %w", err)
 	}
+	if err := migrateStrategy(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate strategy and memory: %w", err)
+	}
 	absPath, _ := filepath.Abs(path)
 	return &DB{SQL: d, Path: absPath}, nil
 }

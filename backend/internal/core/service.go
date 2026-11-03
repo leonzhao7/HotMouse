@@ -12,7 +12,7 @@ import (
 )
 
 func nextID(tx *sql.Tx, project, kind, prefix string) (string, error) {
-	table := map[string]string{"fact": "facts", "goal": "goals", "step": "steps", "finding": "findings", "hint": "hints"}[kind]
+	table := map[string]string{"fact": "facts", "goal": "goals", "step": "steps", "finding": "findings", "hint": "hints", "route": "routes"}[kind]
 	floor := 0
 	if table != "" {
 		query := fmt.Sprintf(`SELECT COALESCE(MAX(CAST(substr(id,2) AS INTEGER)),0) FROM %s WHERE project_id=?`, table)
@@ -122,13 +122,13 @@ func (d *DB) getProjectTx(ctx context.Context, q queryer, id string) (ProjectDet
 		return ProjectDetail{}, err
 	}
 	out := ProjectDetail{Project: p, Facts: []Fact{}, Steps: []Step{}, Goals: []Goal{}, Findings: []Finding{}, Hints: []Hint{}}
-	rows, err := q.QueryContext(ctx, `SELECT id,description FROM facts WHERE project_id=? ORDER BY rowid`, id)
+	rows, err := q.QueryContext(ctx, `SELECT id,description,title,detail,result_type FROM facts WHERE project_id=? ORDER BY rowid`, id)
 	if err != nil {
 		return out, err
 	}
 	for rows.Next() {
 		var x Fact
-		if err = rows.Scan(&x.ID, &x.Description); err != nil {
+		if err = rows.Scan(&x.ID, &x.Description, &x.Title, &x.Detail, &x.ResultType); err != nil {
 			rows.Close()
 			return out, err
 		}
@@ -166,16 +166,17 @@ func (d *DB) getProjectTx(ctx context.Context, q queryer, id string) (ProjectDet
 	for i, goalID := range goalIDs {
 		out.Goals[i].From = goalSources(q, id, goalID)
 	}
-	rows, err = q.QueryContext(ctx, `SELECT id,to_fact_id,description,goal_id,priority,creator,worker,last_heartbeat_at,created_at,concluded_at,abandoned FROM steps WHERE project_id=? ORDER BY priority DESC,created_at`, id)
+	rows, err = q.QueryContext(ctx, `SELECT id,to_fact_id,description,goal_id,priority,creator,worker,last_heartbeat_at,created_at,concluded_at,abandoned,route_id,result_json FROM steps WHERE project_id=? ORDER BY priority DESC,created_at`, id)
 	if err != nil {
 		return out, err
 	}
 	var stepIDs []string
 	for rows.Next() {
 		var x Step
-		var to, g, w, h, co sql.NullString
+		var to, g, w, h, co, route sql.NullString
+		var resultJSON string
 		var ab int
-		if err = rows.Scan(&x.ID, &to, &x.Description, &g, &x.Priority, &x.Creator, &w, &h, &x.CreatedAt, &co, &ab); err != nil {
+		if err = rows.Scan(&x.ID, &to, &x.Description, &g, &x.Priority, &x.Creator, &w, &h, &x.CreatedAt, &co, &ab, &route, &resultJSON); err != nil {
 			rows.Close()
 			return out, err
 		}
@@ -184,6 +185,8 @@ func (d *DB) getProjectTx(ctx context.Context, q queryer, id string) (ProjectDet
 		x.Worker = nullable(w)
 		x.LastHeartbeatAt = nullable(h)
 		x.ConcludedAt = nullable(co)
+		x.RouteID = nullable(route)
+		x.Result = decodeResult(resultJSON)
 		x.Abandoned = ab != 0
 		stepIDs = append(stepIDs, x.ID)
 		out.Steps = append(out.Steps, x)
@@ -235,7 +238,8 @@ func (d *DB) getProjectTx(ctx context.Context, q queryer, id string) (ProjectDet
 		return out, err
 	}
 	rows.Close()
-	return out, nil
+	out.Routes, err = listRoutes(ctx, q, id)
+	return out, err
 }
 func nullable(v sql.NullString) *string {
 	if !v.Valid {
@@ -380,38 +384,61 @@ func (d *DB) HeartbeatDecide(ctx context.Context, project, worker string) (Proje
 
 func (d *DB) UpdateStep(ctx context.Context, project, id string, r UpdateStep) (Step, error) {
 	var out Step
-	err := tx(ctx, d, func(t *sql.Tx) error {
-		if _, err := checkActive(t, project); err != nil {
+	err := tx(ctx, d, func(t *sql.Tx) error { return d.updateStepTx(ctx, t, project, id, r, &out) })
+	return out, err
+}
+
+func (d *DB) updateStepTx(ctx context.Context, t *sql.Tx, project, id string, r UpdateStep, out *Step) error {
+	if _, err := checkActive(t, project); err != nil {
+		return err
+	}
+	var to, worker sql.NullString
+	var abandoned int
+	if err := t.QueryRow(`SELECT to_fact_id,worker,abandoned FROM steps WHERE project_id=? AND id=?`, project, id).Scan(&to, &worker, &abandoned); err != nil {
+		return err
+	}
+	var recovering int
+	if err := t.QueryRow(`SELECT count(*) FROM worker_execute_recovery WHERE project_id=? AND step_id=?`, project, id).Scan(&recovering); err != nil {
+		return err
+	}
+	if recovering > 0 {
+		return fmt.Errorf("step has an execution recovery checkpoint and cannot be updated")
+	}
+	if to.Valid || abandoned != 0 || worker.Valid {
+		return fmt.Errorf("closed, abandoned, or claimed steps cannot be updated")
+	}
+	if r.Abandoned != nil && !*r.Abandoned {
+		return fmt.Errorf("abandoned must be true when provided")
+	}
+	if r.GoalID != nil {
+		var status string
+		if err := t.QueryRow(`SELECT status FROM goals WHERE project_id=? AND id=?`, project, *r.GoalID).Scan(&status); err != nil {
 			return err
 		}
-		var to, worker sql.NullString
-		var abandoned int
-		if err := t.QueryRow(`SELECT to_fact_id,worker,abandoned FROM steps WHERE project_id=? AND id=?`, project, id).Scan(&to, &worker, &abandoned); err != nil {
+		if status != "active" {
+			return fmt.Errorf("goal %s is completed", *r.GoalID)
+		}
+	}
+	var newRoute any
+	if r.GoalID != nil {
+		var currentGoal sql.NullString
+		if err := t.QueryRow(`SELECT goal_id FROM steps WHERE project_id=? AND id=?`, project, id).Scan(&currentGoal); err != nil {
 			return err
 		}
-		if to.Valid || abandoned != 0 || worker.Valid {
-			return fmt.Errorf("closed, abandoned, or claimed steps cannot be updated")
-		}
-		if r.Abandoned != nil && !*r.Abandoned {
-			return fmt.Errorf("abandoned must be true when provided")
-		}
-		if r.GoalID != nil {
-			var status string
-			if err := t.QueryRow(`SELECT status FROM goals WHERE project_id=? AND id=?`, project, *r.GoalID).Scan(&status); err != nil {
+		if !currentGoal.Valid || currentGoal.String != *r.GoalID {
+			routeID, err := resolveRouteTx(t, project, CreateStep{GoalID: r.GoalID})
+			if err != nil {
 				return err
 			}
-			if status != "active" {
-				return fmt.Errorf("goal %s is completed", *r.GoalID)
-			}
+			newRoute = routeID
 		}
-		if _, err := t.Exec(`UPDATE steps SET priority=COALESCE(?,priority),goal_id=COALESCE(?,goal_id),abandoned=COALESCE(?,abandoned) WHERE project_id=? AND id=?`, r.Priority, r.GoalID, r.Abandoned, project, id); err != nil {
-			return err
-		}
-		var err error
-		out, err = d.stepTx(ctx, t, project, id)
+	}
+	if _, err := t.Exec(`UPDATE steps SET priority=COALESCE(?,priority),goal_id=COALESCE(?,goal_id),route_id=COALESCE(?,route_id),abandoned=COALESCE(?,abandoned) WHERE project_id=? AND id=?`, r.Priority, r.GoalID, newRoute, r.Abandoned, project, id); err != nil {
 		return err
-	})
-	return out, err
+	}
+	var err error
+	*out, err = d.stepTx(ctx, t, project, id)
+	return err
 }
 func (d *DB) ListProjects(ctx context.Context) ([]ProjectSummary, error) {
 	if _, err := d.SQL.ExecContext(ctx, `UPDATE steps SET worker=NULL WHERE to_fact_id IS NULL AND abandoned=0 AND worker IS NOT NULL AND last_heartbeat_at IS NOT NULL AND (julianday(?) - julianday(last_heartbeat_at))*86400 > (SELECT step_timeout FROM settings WHERE id=1)`, now()); err != nil {
@@ -510,72 +537,95 @@ func normalizeHint(value string) string {
 
 func (d *DB) CreateStep(ctx context.Context, p string, r CreateStep) (Step, error) {
 	var out Step
-	e := tx(ctx, d, func(t *sql.Tx) error {
-		if _, e := checkActive(t, p); e != nil {
+	err := tx(ctx, d, func(t *sql.Tx) error { return d.createStepTx(ctx, t, p, r, &out) })
+	return out, err
+}
+
+func (d *DB) createStepTx(ctx context.Context, t *sql.Tx, p string, r CreateStep, out *Step) error {
+	if _, e := checkActive(t, p); e != nil {
+		return e
+	}
+	if len(r.From) == 0 {
+		return fmt.Errorf("from must not be empty")
+	}
+	var err error
+	r.From, err = normalizeFactIDs(r.From)
+	if err != nil {
+		return err
+	}
+	if err := requireText("description", r.Description); err != nil {
+		return err
+	}
+	if err := requireText("creator", r.Creator); err != nil {
+		return err
+	}
+	if e := validateFacts(t, p, r.From); e != nil {
+		return e
+	}
+	if r.GoalID != nil {
+		var st string
+		if e := t.QueryRow(`SELECT status FROM goals WHERE project_id=? AND id=?`, p, *r.GoalID).Scan(&st); e != nil {
 			return e
 		}
-		if len(r.From) == 0 {
-			return fmt.Errorf("from must not be empty")
+		if st != "active" {
+			return fmt.Errorf("goal is completed")
 		}
-		var err error
-		r.From, err = normalizeFactIDs(r.From)
-		if err != nil {
+	}
+	id, e := nextID(t, p, "step", "s")
+	if e != nil {
+		return e
+	}
+	v := now()
+	var worker any
+	if r.Worker != nil {
+		value := clean(*r.Worker)
+		if err := requireText("worker", value); err != nil {
 			return err
 		}
-		if err := requireText("description", r.Description); err != nil {
+		worker = value
+	}
+	routeID, routeErr := resolveRouteTx(t, p, r)
+	if routeErr != nil {
+		return routeErr
+	}
+	if r.GoalID == nil {
+		var routeGoal sql.NullString
+		if err := t.QueryRow(`SELECT goal_id FROM routes WHERE project_id=? AND id=?`, p, routeID).Scan(&routeGoal); err != nil {
 			return err
 		}
-		if err := requireText("creator", r.Creator); err != nil {
-			return err
-		}
-		if e := validateFacts(t, p, r.From); e != nil {
-			return e
-		}
+		r.GoalID = nullable(routeGoal)
 		if r.GoalID != nil {
-			var st string
-			if e := t.QueryRow(`SELECT status FROM goals WHERE project_id=? AND id=?`, p, *r.GoalID).Scan(&st); e != nil {
-				return e
-			}
-			if st != "active" {
-				return fmt.Errorf("goal is completed")
-			}
-		}
-		id, e := nextID(t, p, "step", "s")
-		if e != nil {
-			return e
-		}
-		v := now()
-		var worker any
-		if r.Worker != nil {
-			value := clean(*r.Worker)
-			if err := requireText("worker", value); err != nil {
+			var status string
+			if err := t.QueryRow(`SELECT status FROM goals WHERE project_id=? AND id=?`, p, *r.GoalID).Scan(&status); err != nil {
 				return err
 			}
-			worker = value
-		}
-		if _, e = t.Exec(`INSERT INTO steps(id,project_id,description,goal_id,priority,creator,worker,last_heartbeat_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, id, p, clean(r.Description), r.GoalID, r.Priority, clean(r.Creator), worker, func() any {
-			if r.Worker != nil {
-				return v
+			if status != "active" {
+				return fmt.Errorf("route goal is completed")
 			}
-			return nil
-		}(), v); e != nil {
+		}
+	}
+
+	if _, e = t.Exec(`INSERT INTO steps(id,project_id,description,goal_id,priority,creator,worker,last_heartbeat_at,created_at,route_id) VALUES(?,?,?,?,?,?,?,?,?,?)`, id, p, clean(r.Description), r.GoalID, r.Priority, clean(r.Creator), worker, func() any {
+		if r.Worker != nil {
+			return v
+		}
+		return nil
+	}(), v, routeID); e != nil {
+		return e
+	}
+	for _, f := range r.From {
+		if _, e = t.Exec(`INSERT INTO step_sources(step_id,project_id,fact_id) VALUES(?,?,?)`, id, p, f); e != nil {
 			return e
 		}
-		for _, f := range r.From {
-			if _, e = t.Exec(`INSERT INTO step_sources(step_id,project_id,fact_id) VALUES(?,?,?)`, id, p, f); e != nil {
-				return e
-			}
-		}
-		s, e := d.stepTx(ctx, t, p, id)
-		out = s
-		return e
-	})
-	return out, e
+	}
+	s, e := d.stepTx(ctx, t, p, id)
+	*out = s
+	return e
 }
 func (d *DB) stepTx(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, p, id string) (Step, error) {
-	r, e := q.QueryContext(ctx, `SELECT id,to_fact_id,description,goal_id,priority,creator,worker,last_heartbeat_at,created_at,concluded_at,abandoned FROM steps WHERE project_id=? AND id=?`, p, id)
+	r, e := q.QueryContext(ctx, `SELECT id,to_fact_id,description,goal_id,priority,creator,worker,last_heartbeat_at,created_at,concluded_at,abandoned,route_id,result_json FROM steps WHERE project_id=? AND id=?`, p, id)
 	if e != nil {
 		return Step{}, e
 	}
@@ -584,9 +634,10 @@ func (d *DB) stepTx(ctx context.Context, q interface {
 		return Step{}, ErrNotFound
 	}
 	var x Step
-	var to, g, w, h, c sql.NullString
+	var to, g, w, h, c, route sql.NullString
+	var resultJSON string
 	var ab int
-	if e = r.Scan(&x.ID, &to, &x.Description, &g, &x.Priority, &x.Creator, &w, &h, &x.CreatedAt, &c, &ab); e != nil {
+	if e = r.Scan(&x.ID, &to, &x.Description, &g, &x.Priority, &x.Creator, &w, &h, &x.CreatedAt, &c, &ab, &route, &resultJSON); e != nil {
 		return x, e
 	}
 	x.To = nullable(to)
@@ -594,11 +645,19 @@ func (d *DB) stepTx(ctx context.Context, q interface {
 	x.Worker = nullable(w)
 	x.LastHeartbeatAt = nullable(h)
 	x.ConcludedAt = nullable(c)
+	x.RouteID = nullable(route)
+	x.Result = decodeResult(resultJSON)
 	x.Abandoned = ab != 0
+	if err := r.Close(); err != nil {
+		return x, err
+	}
 	x.From = stepSources(q, p, id)
 	return x, nil
 }
 func (d *DB) HeartbeatStep(ctx context.Context, p, id, worker string) (Step, error) {
+	if err := d.RefreshRouteLimits(ctx); err != nil {
+		return Step{}, err
+	}
 	var out Step
 	e := tx(ctx, d, func(t *sql.Tx) error {
 		if err := requireText("worker", worker); err != nil {
@@ -622,6 +681,15 @@ func (d *DB) HeartbeatStep(ctx context.Context, p, id, worker string) (Step, err
 		}
 		if current.Valid && current.String != worker {
 			return fmt.Errorf("step is currently claimed by %s", current.String)
+		}
+		if !current.Valid {
+			var shelved int
+			if err := t.QueryRow(`SELECT count(*) FROM steps s JOIN routes r ON r.id=s.route_id AND r.project_id=s.project_id WHERE s.project_id=? AND s.id=? AND r.status='shelved' AND NOT EXISTS(SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id)`, p, id).Scan(&shelved); err != nil {
+				return err
+			}
+			if shelved > 0 {
+				return fmt.Errorf("route is shelved")
+			}
 		}
 		if _, err := t.Exec(`UPDATE steps SET worker=?,last_heartbeat_at=? WHERE project_id=? AND id=?`, worker, now(), p, id); err != nil {
 			return err
@@ -677,6 +745,15 @@ func (d *DB) ConcludeStep(ctx context.Context, p, id string, r Conclude) (Conclu
 		}
 		r.Worker = clean(r.Worker)
 		r.Description = clean(r.Description)
+		if r.Result == nil {
+			r.Result = &ExecutionResult{Type: "unclassified"}
+		}
+		if err := r.Result.Validate(); err != nil {
+			return err
+		}
+		if r.Finding != nil && (r.Result.Type == "environment_failure" || r.Result.Type == "no_information" || r.Result.Type == "needs_attention") {
+			return fmt.Errorf("a %s result cannot assert a finding", r.Result.Type)
+		}
 		if _, e := checkActive(t, p); e != nil {
 			return e
 		}
@@ -704,17 +781,17 @@ func (d *DB) ConcludeStep(ctx context.Context, p, id string, r Conclude) (Conclu
 			return e
 		}
 		v := now()
-		if _, e = t.Exec(`INSERT INTO facts(id,project_id,description) VALUES(?,?,?)`, fid, p, clean(r.Description)); e != nil {
+		if _, e = t.Exec(`INSERT INTO facts(id,project_id,description,title,detail,result_type) VALUES(?,?,?,?,?,?)`, fid, p, clean(r.Description), clean(r.Title), r.Result.Detail, r.Result.Type); e != nil {
 			return e
 		}
-		if _, e = t.Exec(`UPDATE steps SET to_fact_id=?,concluded_at=?,worker=?,last_heartbeat_at=? WHERE project_id=? AND id=?`, fid, v, r.Worker, v, p, id); e != nil {
+		if _, e = t.Exec(`UPDATE steps SET to_fact_id=?,concluded_at=?,worker=?,last_heartbeat_at=?,result_json=? WHERE project_id=? AND id=?`, fid, v, r.Worker, v, jsonData(r.Result), p, id); e != nil {
 			return e
 		}
 		s, e := d.stepTx(ctx, t, p, id)
 		if e != nil {
 			return e
 		}
-		out.Fact = &Fact{ID: fid, Description: clean(r.Description)}
+		out.Fact = &Fact{ID: fid, Description: clean(r.Description), Title: clean(r.Title), Detail: r.Result.Detail, ResultType: r.Result.Type}
 		out.Step = &s
 		if r.Finding != nil {
 			f := r.Finding
@@ -752,8 +829,14 @@ func (d *DB) ConcludeStep(ctx context.Context, p, id string, r Conclude) (Conclu
 			if err := syncVulnerabilityTx(t, p, ff, id, r.Worker, v); err != nil {
 				return err
 			}
+			if err := syncFlagTx(t, p, ff); err != nil {
+				return err
+			}
+			if err := queueDecideTx(t, p, "finding", ff.ID); err != nil {
+				return err
+			}
 		}
-		return nil
+		return recordResultTx(t, p, id, *r.Result)
 	})
 	return out, e
 }
@@ -803,7 +886,13 @@ func (d *DB) CreateFinding(ctx context.Context, p string, r CreateFinding) (Find
 			return err
 		}
 		out = Finding{ID: id, Title: clean(r.Title), Description: clean(r.Description), Severity: r.Severity, Kind: r.Kind, Data: r.Data, FactID: r.FactID, CreatedAt: v}
-		return syncVulnerabilityTx(t, p, out, "", "", v)
+		if err := syncVulnerabilityTx(t, p, out, "", "", v); err != nil {
+			return err
+		}
+		if err := syncFlagTx(t, p, out); err != nil {
+			return err
+		}
+		return queueDecideTx(t, p, "finding", out.ID)
 	})
 	return out, err
 }
@@ -1005,6 +1094,15 @@ func (d *DB) completeGoal(ctx context.Context, p, g string, r Completion, legacy
 		if e := validateFacts(t, p, r.From); e != nil {
 			return e
 		}
+		for _, factID := range r.From {
+			var kind string
+			if err := t.QueryRow(`SELECT result_type FROM facts WHERE project_id=? AND id=?`, p, factID).Scan(&kind); err != nil {
+				return err
+			}
+			if kind == "environment_failure" || kind == "no_information" || kind == "needs_attention" {
+				return fmt.Errorf("fact %s is not goal completion evidence", factID)
+			}
+		}
 		if legacyProject {
 			if err := t.QueryRow(`SELECT id FROM goals WHERE project_id=? AND status='active' AND parent_goal_id IS NULL ORDER BY priority,created_at LIMIT 1`, p).Scan(&g); err != nil {
 				if err == sql.ErrNoRows {
@@ -1038,7 +1136,7 @@ func (d *DB) completeGoal(ctx context.Context, p, g string, r Completion, legacy
 		var priority int
 		_ = t.QueryRow(`SELECT priority FROM goals WHERE project_id=? AND id=?`, p, g).Scan(&priority)
 		out = Goal{ID: g, Description: desc, ParentGoalID: nullable(par), Status: "completed", Priority: priority, CreatedAt: created, CompletedAt: &v, CompletionDescription: &r.Description, CompletedBy: &r.Worker, From: r.From}
-		return nil
+		return queueDecideTx(t, p, "goal_completed", g)
 	})
 	if e == nil && d.WorkerMu.TryLock() {
 		defer d.WorkerMu.Unlock()
@@ -1051,35 +1149,37 @@ func (d *DB) completeGoal(ctx context.Context, p, g string, r Completion, legacy
 }
 func (d *DB) CreateGoal(ctx context.Context, p string, r CreateGoal) (Goal, error) {
 	var out Goal
-	e := tx(ctx, d, func(t *sql.Tx) error {
-		if _, e := checkActive(t, p); e != nil {
-			return e
-		}
-		if err := requireText("description", r.Description); err != nil {
-			return err
-		}
-		if err := requireText("creator", r.Creator); err != nil {
-			return err
-		}
-		if r.ParentGoalID != nil {
-			var st string
-			if e := t.QueryRow(`SELECT status FROM goals WHERE project_id=? AND id=?`, p, *r.ParentGoalID).Scan(&st); e != nil {
-				return e
-			}
-			if st != "active" {
-				return fmt.Errorf("parent goal is completed")
-			}
-		}
-		id, e := nextID(t, p, "goal", "g")
-		if e != nil {
-			return e
-		}
-		v := now()
-		_, e = t.Exec(`INSERT INTO goals(id,project_id,description,parent_goal_id,priority,created_at) VALUES(?,?,?,?,?,?)`, id, p, clean(r.Description), r.ParentGoalID, r.Priority, v)
-		out = Goal{ID: id, Description: clean(r.Description), ParentGoalID: r.ParentGoalID, Status: "active", Priority: r.Priority, CreatedAt: v, From: []string{}}
+	err := tx(ctx, d, func(t *sql.Tx) error { return d.createGoalTx(ctx, t, p, r, &out) })
+	return out, err
+}
+
+func (d *DB) createGoalTx(ctx context.Context, t *sql.Tx, p string, r CreateGoal, out *Goal) error {
+	if _, e := checkActive(t, p); e != nil {
 		return e
-	})
-	return out, e
+	}
+	if err := requireText("description", r.Description); err != nil {
+		return err
+	}
+	if err := requireText("creator", r.Creator); err != nil {
+		return err
+	}
+	if r.ParentGoalID != nil {
+		var st string
+		if e := t.QueryRow(`SELECT status FROM goals WHERE project_id=? AND id=?`, p, *r.ParentGoalID).Scan(&st); e != nil {
+			return e
+		}
+		if st != "active" {
+			return fmt.Errorf("parent goal is completed")
+		}
+	}
+	id, e := nextID(t, p, "goal", "g")
+	if e != nil {
+		return e
+	}
+	v := now()
+	_, e = t.Exec(`INSERT INTO goals(id,project_id,description,parent_goal_id,priority,created_at) VALUES(?,?,?,?,?,?)`, id, p, clean(r.Description), r.ParentGoalID, r.Priority, v)
+	*out = Goal{ID: id, Description: clean(r.Description), ParentGoalID: r.ParentGoalID, Status: "active", Priority: r.Priority, CreatedAt: v, From: []string{}}
+	return e
 }
 
 func (d *DB) UpdateGoal(ctx context.Context, p, id string, r UpdateGoal) (Goal, error) {
@@ -1144,6 +1244,12 @@ func (d *DB) DeleteGoal(ctx context.Context, p, id string) error {
 		if refs > 0 {
 			return fmt.Errorf("goal is still referenced by steps")
 		}
+		if err := t.QueryRow(`SELECT count(*) FROM routes WHERE project_id=? AND goal_id=?`, p, id).Scan(&refs); err != nil {
+			return err
+		}
+		if refs > 0 {
+			return fmt.Errorf("goal is still referenced by routes")
+		}
 		res, err := t.Exec(`DELETE FROM goals WHERE project_id=? AND id=?`, p, id)
 		if err != nil {
 			return err
@@ -1177,7 +1283,10 @@ func (d *DB) AddHint(ctx context.Context, p string, r CreateHint) (Hint, error) 
 		v := now()
 		_, e = t.Exec(`INSERT INTO hints(id,project_id,content,creator,created_at) VALUES(?,?,?,?,?)`, id, p, r.Content, r.Creator, v)
 		out = Hint{ID: id, Content: r.Content, Creator: r.Creator, CreatedAt: v}
-		return e
+		if e != nil {
+			return e
+		}
+		return queueDecideTx(t, p, "hint", id)
 	})
 	return out, e
 }
@@ -1383,6 +1492,9 @@ type exportProject struct {
 }
 
 type exportFact struct {
+	Title       string `yaml:"title,omitempty"`
+	Detail      string `yaml:"detail,omitempty"`
+	ResultType  string `yaml:"result_type,omitempty"`
 	ID          string `yaml:"id"`
 	Description string `yaml:"description"`
 }
@@ -1407,16 +1519,19 @@ type exportHint struct {
 }
 
 type exportStep struct {
-	From        []string `yaml:"from"`
-	To          *string  `yaml:"to"`
-	Description string   `yaml:"description"`
-	GoalID      *string  `yaml:"goal_id"`
-	Priority    int      `yaml:"priority"`
-	Creator     string   `yaml:"creator"`
-	Worker      *string  `yaml:"worker"`
-	Abandoned   bool     `yaml:"abandoned"`
-	CreatedAt   string   `yaml:"created_at"`
-	ConcludedAt *string  `yaml:"concluded_at"`
+	ID          string           `yaml:"id"`
+	RouteID     *string          `yaml:"route_id,omitempty"`
+	Result      *ExecutionResult `yaml:"result,omitempty"`
+	From        []string         `yaml:"from"`
+	To          *string          `yaml:"to"`
+	Description string           `yaml:"description"`
+	GoalID      *string          `yaml:"goal_id"`
+	Priority    int              `yaml:"priority"`
+	Creator     string           `yaml:"creator"`
+	Worker      *string          `yaml:"worker"`
+	Abandoned   bool             `yaml:"abandoned"`
+	CreatedAt   string           `yaml:"created_at"`
+	ConcludedAt *string          `yaml:"concluded_at"`
 }
 
 type exportFinding struct {
@@ -1431,12 +1546,15 @@ type exportFinding struct {
 }
 
 type exportDocument struct {
-	Project  exportProject   `yaml:"project"`
-	Goals    []exportGoal    `yaml:"goals,omitempty"`
-	Hints    []exportHint    `yaml:"hints,omitempty"`
-	Facts    []exportFact    `yaml:"facts"`
-	Steps    []exportStep    `yaml:"steps,omitempty"`
-	Findings []exportFinding `yaml:"findings,omitempty"`
+	Flags        []Flag          `yaml:"flags,omitempty"`
+	Routes       []Route         `yaml:"routes,omitempty"`
+	RouteRecords []RouteRecord   `yaml:"route_records,omitempty"`
+	Project      exportProject   `yaml:"project"`
+	Goals        []exportGoal    `yaml:"goals,omitempty"`
+	Hints        []exportHint    `yaml:"hints,omitempty"`
+	Facts        []exportFact    `yaml:"facts"`
+	Steps        []exportStep    `yaml:"steps,omitempty"`
+	Findings     []exportFinding `yaml:"findings,omitempty"`
 }
 
 func exportTimestamp(value string) string {
@@ -1455,7 +1573,7 @@ func (d *DB) ExportYAML(ctx context.Context, p string) (string, error) {
 	origin := ""
 	facts := make([]exportFact, 0, len(detail.Facts))
 	for _, fact := range detail.Facts {
-		facts = append(facts, exportFact{ID: fact.ID, Description: fact.Description})
+		facts = append(facts, exportFact{ID: fact.ID, Description: fact.Description, Title: fact.Title, Detail: fact.Detail, ResultType: fact.ResultType})
 		if fact.ID == "origin" {
 			origin = fact.Description
 		}
@@ -1472,13 +1590,21 @@ func (d *DB) ExportYAML(ctx context.Context, p string) (string, error) {
 	orderedSteps := append([]Step(nil), detail.Steps...)
 	sort.SliceStable(orderedSteps, func(i, j int) bool { return orderedSteps[i].CreatedAt < orderedSteps[j].CreatedAt })
 	for _, step := range orderedSteps {
-		steps = append(steps, exportStep{From: step.From, To: step.To, Description: step.Description, GoalID: step.GoalID, Priority: step.Priority, Creator: step.Creator, Worker: step.Worker, Abandoned: step.Abandoned, CreatedAt: exportTimestamp(step.CreatedAt), ConcludedAt: mapExportTime(step.ConcludedAt)})
+		steps = append(steps, exportStep{ID: step.ID, RouteID: step.RouteID, Result: step.Result, From: step.From, To: step.To, Description: step.Description, GoalID: step.GoalID, Priority: step.Priority, Creator: step.Creator, Worker: step.Worker, Abandoned: step.Abandoned, CreatedAt: exportTimestamp(step.CreatedAt), ConcludedAt: mapExportTime(step.ConcludedAt)})
 	}
 	findings := make([]exportFinding, 0, len(detail.Findings))
 	for _, finding := range detail.Findings {
 		findings = append(findings, exportFinding{ID: finding.ID, Title: finding.Title, Description: finding.Description, Severity: finding.Severity, Kind: finding.Kind, Data: finding.Data, FactID: finding.FactID, CreatedAt: exportTimestamp(finding.CreatedAt)})
 	}
-	doc := exportDocument{Project: exportProject{Title: detail.Project.Title, Origin: origin}, Goals: goals, Hints: hints, Facts: facts, Steps: steps, Findings: findings}
+	records, err := d.RouteRecords(ctx, p)
+	if err != nil {
+		return "", err
+	}
+	flags, err := d.ListFlags(ctx, p)
+	if err != nil {
+		return "", err
+	}
+	doc := exportDocument{Flags: flags, Routes: detail.Routes, RouteRecords: records, Project: exportProject{Title: detail.Project.Title, Origin: origin}, Goals: goals, Hints: hints, Facts: facts, Steps: steps, Findings: findings}
 	b, err := yaml.Marshal(doc)
 	return string(b), err
 }

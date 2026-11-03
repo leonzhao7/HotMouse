@@ -77,6 +77,9 @@ func (a *app) graphCommands(root *cobra.Command) {
 				if e != nil {
 					return nil, e
 				}
+				if resource == "fact" || resource == "step" || resource == "finding" {
+					return a.get(c, apiclient.Path("projects", p, plural, args[0]))
+				}
 				v, e := a.get(c, apiclient.Path("projects", p))
 				if e != nil {
 					return nil, e
@@ -100,7 +103,7 @@ func (a *app) graphCommands(root *cobra.Command) {
 			g.AddCommand(a.graphWrite("complete <GOAL>", "引用事实完成目标；最后一个目标可能结束项目", resource, "POST", true, "complete", completionSchema(), false))
 			g.AddCommand(a.graphWrite("delete <GOAL>", "删除未完成、无引用的子目标；顶层目标不可删除", resource, "DELETE", true, "", nil, true))
 		case "step":
-			create := []field{list("from", true), str("description", true), alias("goal_id", "goal"), number("priority"), str("creator", true), str("worker", false)}
+			create := []field{list("from", true), str("description", true), alias("goal_id", "goal"), number("priority"), str("creator", true), str("worker", false), alias("route_id", "route")}
 			g.AddCommand(a.graphWrite("create", "声明一个有事实来源的步骤；仅显式 worker 创建即认领", resource, "POST", false, "", create, false))
 			g.AddCommand(a.graphWrite("update <STEP>", "修改未认领开放步骤的目标或优先级", resource, "PATCH", true, "", []field{number("priority"), alias("goal_id", "goal")}, false))
 			abandon := a.leaf("abandon <STEP>", "放弃未认领开放步骤；不能恢复", 1, 1, "project", func(c *cobra.Command, args []string) (any, error) {
@@ -118,7 +121,8 @@ func (a *app) graphCommands(root *cobra.Command) {
 				}
 				g.AddCommand(a.graphWrite(action+" <STEP>", "执行租约操作；heartbeat 也可能原子认领", resource, "POST", true, suffix, []field{str("worker", true)}, false))
 			}
-			conclude := a.graphWrite("conclude <STEP>", "提交结论并生成 Fact，可同事务记录 Finding", resource, "POST", true, "conclude", []field{str("description", true), str("worker", true), {Name: "finding", Kind: "finding"}}, false)
+			conclude := a.graphWrite("conclude <STEP>", "提交结论并生成 Fact，可同事务记录 Finding", resource, "POST", true, "conclude", []field{str("description", true), str("title", false), str("worker", true), {Name: "result", Kind: "result"}, {Name: "finding", Kind: "finding"}}, false)
+			conclude.Flags().String("result-file", "", "结构化执行结果对象：type、detail、evidence")
 			conclude.Flags().String("finding-file", "", "嵌套 Finding 对象，不指定 fact_id")
 			g.AddCommand(conclude)
 			g.AddCommand(a.leaf("execute <STEP>", "由服务内配置的 Worker 执行；长任务请设置 --timeout", 1, 1, "project", func(c *cobra.Command, args []string) (any, error) {
@@ -145,6 +149,7 @@ func (a *app) graphCommands(root *cobra.Command) {
 			create.Flags().StringArray("evidence", nil, "追加到 data.evidence 的文本，可重复")
 			g.AddCommand(create)
 		case "decide":
+			g.AddCommand(a.graphWrite("request", "持久化排队一次中途重规划", "decide", "POST", false, "request", []field{str("reason", true)}, false))
 			g.AddCommand(a.leaf("show", "显示当前决定租约", 0, 0, "project", func(c *cobra.Command, _ []string) (any, error) {
 				p, e := a.project(c, nil)
 				if e != nil {
@@ -228,6 +233,21 @@ func (a *app) graphWrite(use, short, resource, method string, id bool, suffix st
 				}
 				b["finding"] = finding
 				if e = validateObject(b, schema); e != nil {
+					return nil, e
+				}
+			}
+			if c.Name() == "conclude" && c.Flags().Changed("result-file") {
+				file, _ := c.Flags().GetString("result-file")
+				data, e := a.readFile(file)
+				if e != nil {
+					return nil, e
+				}
+				result, e := decodeObject(data)
+				if e != nil {
+					return nil, e
+				}
+				b["result"] = result
+				if e := validateObject(b, schema); e != nil {
 					return nil, e
 				}
 			}
@@ -543,6 +563,7 @@ func (a *app) projectCommands() *cobra.Command {
 	wait.Flags().Duration("max-wait", 30*time.Minute, "等待总时限，与 HTTP timeout 不同")
 	wait.Flags().Duration("interval", 2*time.Second, "轮询间隔，最小 1s")
 	g.AddCommand(wait)
+	a.projectStrategyCommands(g)
 	return g
 }
 func (a *app) saveProject(p string) error {

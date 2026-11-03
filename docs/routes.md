@@ -5,13 +5,14 @@ The CLI commands and their route mappings are described in [cli.md](cli.md). Run
 Core routes:
 
 - `/projects` create/list/read/delete/title/status, complete/reopen, YAML export
-- project facts through project detail
+- project facts through project detail and `/projects/{id}/facts/{fact}`
 - `/projects/{id}/goals`, Goal update/delete/complete
 - `/projects/{id}/steps` and `/intents` create/update/heartbeat/release/conclude
 - `/projects/{id}/decide` and `/reason` claim/heartbeat/release
 - `/projects/{id}/findings`, hints, timeline and campaign synthesis
 - `/api/auth`, `/api/settings`, `/api/workers`, `/api/vulnerabilities`
 - `/api/templates`, `/api/audit`, `/api/notifications`
+- compact model context, history recall, route budgets and stop-loss records, Decide events, shared experiences and flag ledger: see [strategy.md](strategy.md)
 
 `GET /projects/{id}/export` serves the project graph YAML and timeline formats. `/api/templates` includes built-in templates and user-scoped custom templates using `tmpl_<uuid>` IDs. Vulnerability screenshot/evidence uploads, per-vulnerability reports, CSV/Markdown export and export-record routes, plus `/api/report-templates`, are outside the current scope. Vulnerability review and summaries are supported.
 

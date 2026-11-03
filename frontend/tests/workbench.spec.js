@@ -250,3 +250,117 @@ test("settings persist, notifications can be marked read, and expired sessions r
   await expect(page.getByRole("heading", { name: "登录工作台" })).toBeVisible();
   await expect(page.getByText("登录会话已过期，请重新登录。")).toBeVisible();
 });
+
+test("route loss records, history recall, shared experience and flag reconciliation", async ({
+  page,
+}) => {
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await register(page);
+  const projectID = await createProject(page, "UI strategy project");
+  await page.getByRole("tab", { name: "路线与止损" }).click();
+  await page.getByRole("button", { name: "添加路线", exact: true }).click();
+  let dialog = page.getByRole("dialog", { name: "添加路线" });
+  await dialog
+    .getByLabel("标题", { exact: true })
+    .fill("Bounded authentication route");
+  await dialog.getByLabel("关联目标").selectOption("g001");
+  await dialog.getByLabel("连续无信息上限").fill("1");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  const routeResponse = await page.request.get(`/projects/${projectID}/routes`);
+  const route = (await routeResponse.json())[0];
+  const stepResponse = await page.request.post(`/projects/${projectID}/steps`, {
+    data: {
+      from: ["origin"],
+      description: "inspect authentication",
+      goal_id: "g001",
+      route_id: route.id,
+      creator: "ui-test",
+    },
+  });
+  expect(stepResponse.ok()).toBe(true);
+  const step = await stepResponse.json();
+  await page.reload();
+  await page.getByRole("tab", { name: /^步骤/ }).click();
+  await page
+    .getByRole("button", {
+      name: new RegExp(`${step.id}.*inspect authentication`),
+    })
+    .click();
+  await page.getByRole("button", { name: "记录结果", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "记录步骤结果" });
+  await dialog
+    .getByLabel("结果事实描述")
+    .fill("No new authentication evidence");
+  await dialog.getByLabel("结果类型").selectOption("no_information");
+  await dialog
+    .getByLabel("详细证据")
+    .fill("Original evidence notes remain available");
+  await dialog.getByRole("button", { name: "提交结果", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.getByRole("tab", { name: "路线与止损" }).click();
+  await expect(page.getByText("已搁置", { exact: true })).toBeVisible();
+  await expect(page.getByText("搁置原因：no_information_limit")).toBeVisible();
+  await page.getByRole("button", { name: "调整路线" }).click();
+  dialog = page.getByRole("dialog", { name: "调整路线" });
+  await dialog.getByLabel("路线状态").selectOption("active");
+  await dialog.getByLabel("调整原因").fill("Use independent verified method");
+  await dialog.getByLabel("重新开启条件").fill("New evidence is available");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByText("可投入", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "历史检索" }).click();
+  await page
+    .getByPlaceholder("检索当前项目的历史与证据")
+    .fill("authentication");
+  await page
+    .getByRole("tabpanel", { name: "历史检索" })
+    .getByRole("button", { name: /f001.*No new authentication evidence/ })
+    .click();
+  dialog = page.getByRole("dialog", { name: "完整记录" });
+  await expect(dialog).toContainText(
+    "Original evidence notes remain available",
+  );
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("tab", { name: "经验库" }).click();
+  await page.getByRole("button", { name: "保存经验", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "保存经验" });
+  await dialog
+    .getByLabel("标题", { exact: true })
+    .fill("Authentication review method");
+  await dialog.getByLabel("适用条件").fill("Authorized login interface");
+  await dialog.getByLabel("已验证方法").fill("Compare recorded responses");
+  await dialog.getByLabel("失败条件").fill("Session state differs");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Authentication review method/ }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "flag 台账" }).click();
+  await page.getByRole("button", { name: "保存 flag", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "保存 flag" });
+  await dialog.getByLabel("flag", { exact: true }).fill("flag{ui-ledger}");
+  await dialog.getByLabel("来源事实").selectOption("origin");
+  await dialog.getByLabel("题目编号").fill("ui-challenge");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.getByRole("button", { name: "登记提交尝试" }).click();
+  await page.getByRole("button", { name: "核对并记录平台结果" }).click();
+  dialog = page.getByRole("dialog", { name: "记录平台结果" });
+  await dialog.getByLabel("平台结果").selectOption("submission_unknown");
+  await dialog.getByLabel("平台回复").fill("Request timed out");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole("button", { name: "登记提交尝试" })).toHaveCount(
+    0,
+  );
+  await page.getByRole("button", { name: "核对并记录平台结果" }).click();
+  dialog = page.getByRole("dialog", { name: "记录平台结果" });
+  await dialog.getByLabel("平台结果").selectOption("accepted");
+  await dialog.getByLabel("平台回复").fill("Platform confirmed acceptance");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByText("平台已接受", { exact: true })).toBeVisible();
+  expect(errors).toEqual([]);
+});

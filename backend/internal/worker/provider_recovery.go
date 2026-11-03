@@ -127,7 +127,7 @@ func (r *Runner) summarizeProvider(ctx context.Context, cfg workerConfig, projec
 	if detail.Project.Status != "active" {
 		return nil, fmt.Errorf("project is %s", detail.Project.Status)
 	}
-	graph, err := r.DB.ExportYAML(ctx, project)
+	graph, err := r.DB.ModelContext(ctx, project, "execute", step)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +160,7 @@ func (r *Runner) summarizeProvider(ctx context.Context, cfg workerConfig, projec
 			break
 		}
 		vars["HOTMOUSE_TASK_TYPE"] = "execute_conclude_format"
-		vars["HOTMOUSE_WORKER_PROMPT"] = `Repair only the previous summary's JSON serialization. Return exactly one complete raw JSON object: {"accepted":true,"data":{"description":"confirmed result","finding":{...}}}. Finding is optional; preserve all confirmed fields. Do not invent evidence or perform new actions. Close the outer envelope and all brackets; escape quotes. No Markdown or prose.`
+		vars["HOTMOUSE_WORKER_PROMPT"] = `Repair only the previous summary's JSON serialization. Return exactly one complete raw JSON object: {"accepted":true,"data":{"description":"confirmed result","result":{"type":"progress","detail":"evidence"},"finding":{...}}}. Finding is optional; preserve all confirmed fields including result. Do not invent evidence or perform new actions. Close the outer envelope and all brackets; escape quotes. No Markdown or prose.`
 	}
 	if x.attempts >= cfg.runtime.RecoveryAttempts || isWorkerRejection(err) {
 		x.status = "needs_attention"
@@ -174,8 +174,10 @@ func (r *Runner) summarizeProvider(ctx context.Context, cfg workerConfig, projec
 func summaryPrompt(graph, step, description, reason string) string {
 	return `The current Step was interrupted. Resume this session ONLY to summarize evidence already obtained. Do not execute commands, make network requests, change files, or repeat any prior action. If nothing was verified, say so and describe the execution limitation; do not present it as a confirmed target fact.
 Return exactly one complete raw JSON object with no Markdown:
-{"accepted":true,"data":{"description":"concise confirmed result or blocker","finding":{"kind":"security_vulnerability","title":"title","severity":"high","description":"evidence","data":{}}}}
+{"accepted":true,"data":{"description":"concise confirmed result or blocker","result":{"type":"progress","detail":"saved evidence"},"finding":{"kind":"security_vulnerability","title":"title","severity":"high","description":"evidence","data":{}}}}
 Finding is optional. Use {"accepted":false,"reason":"..."} when you cannot summarize.
 Only execution_timeout means a deadline was reached; output_limit means exhausted output allowance; invalid_response means parsing/schema failed; process_exit means the CLI exited unsuccessfully; cancelled means execution was interrupted. Do not relabel the reason or invent a network failure.
+Classify result.type as progress, negative, blocked, environment_failure, no_information or needs_attention based only on saved evidence. An interrupted process alone proves no target conclusion.
+
 Interruption reason: ` + reason + "\nStep: " + step + "\nDescription: " + description + "\nLatest FGS YAML:\n" + graph
 }
