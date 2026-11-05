@@ -373,6 +373,7 @@ func (r *Runner) executeAsRole(parent context.Context, project, step, descriptio
 		return core.ConcludeResult{}, err
 	}
 	var output []byte
+	provider := false
 	recovery := checkpoint != nil && len(checkpoint.payload) > 0
 	if recovery {
 		output = checkpoint.payload
@@ -439,8 +440,7 @@ func (r *Runner) executeAsRole(parent context.Context, project, step, descriptio
 			r.historyFinish(history, "disabled", "worker disabled")
 			return core.ConcludeResult{}, fmt.Errorf("worker disabled")
 		}
-		output = []byte(fmt.Sprintf("local worker completed step: %s", description))
-		provider := builtinProvider(cfg)
+		provider = builtinProvider(cfg)
 		if checkpoint != nil && !provider {
 			_, _ = r.DB.SQL.ExecContext(leaseCtx, `UPDATE worker_execute_recovery SET status='needs_attention' WHERE project_id=? AND step_id=?`, project, step)
 			r.releaseStep(project, step, worker)
@@ -468,6 +468,7 @@ func (r *Runner) executeAsRole(parent context.Context, project, step, descriptio
 			return core.ConcludeResult{}, workspaceErr
 		}
 		if cfg.command != "" || provider {
+			commandInvoked := false
 			if provider {
 				output, err = r.executeProvider(leaseCtx, cfg, workspace, project, step, description, graph, checkpoint)
 			} else {
@@ -477,10 +478,16 @@ func (r *Runner) executeAsRole(parent context.Context, project, step, descriptio
 					argv := []string{"sh", "-c", cfg.command}
 					r.logInvocation(cfg, project, step, "execute", argv)
 					process := runProcess(leaseCtx, argv, cfg.env, workspace, vars, time.Duration(cfg.runtime.ExecuteTimeoutSeconds)*time.Second, nil)
+					commandInvoked = true
 					output, err = process.stdout, process.err
 				}
 			}
 			if err != nil {
+				if !provider && commandInvoked {
+					if saveErr := r.saveStepResponse(project, step, output, err); saveErr != nil {
+						err = fmt.Errorf("%w; save execution response: %v", err, saveErr)
+					}
+				}
 				r.markExecuteAttention(project, step)
 				r.releaseStep(project, step, worker)
 				status, outcome := "failed", "unhealthy"
@@ -502,9 +509,20 @@ func (r *Runner) executeAsRole(parent context.Context, project, step, descriptio
 			r.historyFinish(history, "failed", "worker command is empty")
 			r.recordTaskOutcome(project, "execute", "failed")
 			return core.ConcludeResult{}, fmt.Errorf("worker command is empty")
+		} else {
+			output = []byte(fmt.Sprintf("local worker completed step: %s", description))
 		}
 	}
 	conclusion, err := parseExecute(output)
+	if !recovery && !provider {
+		if err := r.saveStepResponse(project, step, output, err); err != nil {
+			r.markExecuteAttention(project, step)
+			r.releaseStep(project, step, worker)
+			r.historyFinish(history, "failed", err.Error())
+			r.recordTaskOutcome(project, "execute", "failed")
+			return core.ConcludeResult{}, err
+		}
+	}
 	if err != nil {
 		if isWorkerRejection(err) {
 			r.clearExecuteRecovery(project, step)
@@ -1647,6 +1665,18 @@ func (r *Runner) lockWorkspace(project string) func() {
 	r.locksMu.Unlock()
 	lock.Lock()
 	return lock.Unlock
+}
+
+func (r *Runner) saveStepResponse(project, step string, output []byte, responseErr error) error {
+	// Preserve the execution answer even when its request has been cancelled.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	detail := ""
+	if responseErr != nil {
+		detail = responseErr.Error()
+	}
+	_, err := r.DB.SQL.ExecContext(ctx, `UPDATE steps SET llm_response=?,llm_response_recorded=1,llm_response_error=? WHERE project_id=? AND id=?`, string(output), detail, project, step)
+	return err
 }
 
 func (r *Runner) saveExecuteStarted(ctx context.Context, project, step, worker string) error {

@@ -99,9 +99,14 @@ func (r *Runner) executeProvider(ctx context.Context, cfg workerConfig, workspac
 	x.session = session
 	if err == nil {
 		err = validateProviderExecute(output)
-		if err == nil || isWorkerRejection(err) {
-			return output, nil
-		}
+	}
+	if saveErr := r.saveStepResponse(project, step, output, err); saveErr != nil {
+		x.status = "needs_attention"
+		_ = r.preserveProviderCheckpoint(project, step, x)
+		return nil, fmt.Errorf("save execution response: %w", saveErr)
+	}
+	if err == nil || isWorkerRejection(err) {
+		return output, nil
 	}
 	if x.session == "" {
 		return nil, err

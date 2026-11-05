@@ -2283,6 +2283,38 @@ td:first-child {
   max-height: 300px;
   font-size: 10px;
 }
+.step-response {
+  min-width: 230px;
+  max-width: 380px;
+}
+.step-response-preview {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.step-response-detail summary {
+  color: var(--blue);
+  font-size: 10px;
+  cursor: pointer;
+}
+.step-response-detail pre {
+  max-height: 360px;
+  font-size: 10px;
+}
+.step-response-error {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.inspector .step-response {
+  min-width: 0;
+  max-width: 100%;
+}
 .environment-rows {
   display: grid;
   gap: 8px;

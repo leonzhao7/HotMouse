@@ -1,12 +1,99 @@
 package worker
 
 import (
+	"encoding/json"
 	"hotmouse/backend/internal/core"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestClaudeExecutionResponseIsPreservedBeforeValidationAndSummary(t *testing.T) {
+	for _, test := range []struct {
+		name, response, wantError string
+	}{
+		{"plain_text", "I'll start by reading the existing decode artifacts to understand what was produced.", "JSON object not found"},
+		{"invalid_json", `{"accepted":true,"data":`, "invalid JSON response"},
+		{"invalid_schema", `{"accepted":true,"data":{"description":"initial answer","unexpected":true}}`, `unexpected execute data key "unexpected"`},
+		{"empty", "", "provider returned no completed assistant response"},
+		{"valid", "  {\"accepted\":true,\"data\":{\"description\":\"initial answer\"}}\n", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			script := `printf '%s\n' "$HOTMOUSE_TASK_TYPE" >> "$TEST_CALLS"
+if test "$HOTMOUSE_TASK_TYPE" = execute; then
+  cat "$TEST_DIR/original-event.json"
+else
+  printf '%s\n' '{"type":"result","is_error":false,"result":"{\"accepted\":true,\"data\":{\"description\":\"recovery summary only\"}}"}'
+fi`
+			db, project, step, marker := fakePi(t, script, core.DefaultWorkerRuntime())
+			directory := filepath.Dir(marker)
+			body, err := os.ReadFile(filepath.Join(directory, "pi"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(directory, "claude"), body, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			event, err := json.Marshal(map[string]any{"type": "result", "is_error": false, "result": test.response})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(directory, "original-event.json"), event, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+			if _, err := db.SQL.Exec("UPDATE worker_config SET driver='claude'"); err != nil {
+				t.Fatal(err)
+			}
+			runner := New(db)
+			_, executeErr := runner.executeForAgent(t.Context(), project, step, "bounded fixture", "local/worker/01")
+			if (executeErr != nil) != (test.wantError != "") {
+				t.Fatalf("execution error=%v wantError=%q", executeErr, test.wantError)
+			}
+			before, err := db.GetProject(t.Context(), project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := before.Steps[0]; !got.LLMResponseRecorded || got.LLMResponse != test.response || got.LLMResponseError != test.wantError {
+				t.Fatalf("execution response not preserved before summary: %+v", got)
+			}
+			if _, err := runner.executeAsDispatcherCommit(t.Context(), project, step, "bounded fixture", "local/dispatcher/"+project); err != nil {
+				t.Fatal(err)
+			}
+			path := db.Path
+			if err := db.SQL.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := core.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.SQL.Close()
+			after, err := reopened.GetProject(t.Context(), project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := after.Steps[0]; !got.LLMResponseRecorded || got.LLMResponse != test.response || got.LLMResponseError != test.wantError {
+				t.Fatalf("summary or database reopen replaced execution response: %+v", got)
+			}
+			if test.wantError != "" && after.Facts[1].Description != "recovery summary only" {
+				t.Fatalf("summary was not committed separately: %+v", after.Facts)
+			}
+			calls, err := os.ReadFile(marker)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCalls := "execute\n"
+			if test.wantError != "" {
+				wantCalls += "execute_conclude\n"
+			}
+			if string(calls) != wantCalls {
+				t.Fatalf("original action was replayed: %q", calls)
+			}
+		})
+	}
+}
 
 func TestCodexAndClaudeResumeOnlySummary(t *testing.T) {
 	for _, driver := range []string{"codex", "claude"} {

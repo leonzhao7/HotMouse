@@ -56,6 +56,7 @@ import {
   TextField,
 } from "../components/ui.jsx";
 import Strategy, { resultLabels } from "./Strategy.jsx";
+import StepResponse from "../components/StepResponse.jsx";
 const Graph = lazy(() => import("../components/Graph.jsx"));
 
 const tabs = [
@@ -446,6 +447,7 @@ export default function Workspace({ id }) {
                         "Worker",
                         "优先级",
                         "路线 / 结果",
+                        "LLM 返回",
                       ]}
                       count={data.steps.filter(matches).length}
                     >
@@ -482,6 +484,9 @@ export default function Workspace({ id }) {
                             <code>{step.route_id || "—"}</code>
                             <br />
                             {resultLabels[step.result?.type] || "—"}
+                          </td>
+                          <td>
+                            <StepResponse step={step} />
                           </td>
                         </tr>
                       ))}
@@ -787,6 +792,8 @@ function Inspector({
         )}
         {type === "step" && (
           <>
+            <h4>LLM 返回</h4>
+            <StepResponse step={item} />
             <dl>
               <dt>优先级</dt>
               <dd>P{item.priority}</dd>

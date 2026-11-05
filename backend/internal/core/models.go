@@ -22,20 +22,23 @@ type Goal struct {
 }
 
 type Step struct {
-	ID              string           `json:"id" yaml:"id"`
-	From            []string         `json:"from" yaml:"from"`
-	To              *string          `json:"to" yaml:"to"`
-	Description     string           `json:"description" yaml:"description"`
-	GoalID          *string          `json:"goal_id" yaml:"goal_id"`
-	Priority        int              `json:"priority" yaml:"priority"`
-	Creator         string           `json:"creator" yaml:"creator"`
-	Worker          *string          `json:"worker" yaml:"worker"`
-	LastHeartbeatAt *string          `json:"last_heartbeat_at" yaml:"last_heartbeat_at"`
-	CreatedAt       string           `json:"created_at" yaml:"created_at"`
-	ConcludedAt     *string          `json:"concluded_at" yaml:"concluded_at"`
-	Abandoned       bool             `json:"abandoned" yaml:"abandoned"`
-	RouteID         *string          `json:"route_id,omitempty" yaml:"route_id,omitempty"`
-	Result          *ExecutionResult `json:"result,omitempty" yaml:"result,omitempty"`
+	ID                  string           `json:"id" yaml:"id"`
+	From                []string         `json:"from" yaml:"from"`
+	To                  *string          `json:"to" yaml:"to"`
+	Description         string           `json:"description" yaml:"description"`
+	GoalID              *string          `json:"goal_id" yaml:"goal_id"`
+	Priority            int              `json:"priority" yaml:"priority"`
+	Creator             string           `json:"creator" yaml:"creator"`
+	Worker              *string          `json:"worker" yaml:"worker"`
+	LastHeartbeatAt     *string          `json:"last_heartbeat_at" yaml:"last_heartbeat_at"`
+	CreatedAt           string           `json:"created_at" yaml:"created_at"`
+	ConcludedAt         *string          `json:"concluded_at" yaml:"concluded_at"`
+	Abandoned           bool             `json:"abandoned" yaml:"abandoned"`
+	RouteID             *string          `json:"route_id,omitempty" yaml:"route_id,omitempty"`
+	Result              *ExecutionResult `json:"result,omitempty" yaml:"result,omitempty"`
+	LLMResponse         string           `json:"llm_response,omitempty" yaml:"llm_response,omitempty"`
+	LLMResponseRecorded bool             `json:"llm_response_recorded" yaml:"llm_response_recorded,omitempty"`
+	LLMResponseError    string           `json:"llm_response_error,omitempty" yaml:"llm_response_error,omitempty"`
 }
 
 type Finding struct {

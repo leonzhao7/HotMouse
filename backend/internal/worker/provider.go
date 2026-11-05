@@ -196,10 +196,10 @@ func providerResponse(driver string, stdout []byte) ([]byte, error) {
 			}
 		case "claudecode":
 			if event["type"] == "result" {
-				if event["is_error"] == true {
-					return nil, fmt.Errorf("Claude returned a provider error")
-				}
 				answer, _ = event["result"].(string)
+				if event["is_error"] == true {
+					return []byte(answer), fmt.Errorf("Claude returned a provider error")
+				}
 			}
 		case "pi":
 			if candidate, ok := event["message"].(map[string]any); ok && candidate["role"] == "assistant" {
@@ -217,27 +217,27 @@ func providerResponse(driver string, stdout []byte) ([]byte, error) {
 		}
 	}
 	if canonicalDriver(driver) == "pi" && message != nil {
-		stop, _ := message["stopReason"].(string)
-		if stop == "length" {
-			return nil, fmt.Errorf("provider output_limit")
-		}
-		if stop == "error" || stop == "toolUse" || stop == "aborted" || (message["errorMessage"] != nil && message["errorMessage"] != "") {
-			return nil, fmt.Errorf("provider response is incomplete")
-		}
 		if content, ok := message["content"].([]any); ok {
 			for _, block := range content {
 				if entry, ok := block.(map[string]any); ok && entry["type"] == "text" {
 					if part, ok := entry["text"].(string); ok {
-						answer += part + "\n"
+						answer += part
 					}
 				}
 			}
+		}
+		stop, _ := message["stopReason"].(string)
+		if stop == "length" {
+			return []byte(answer), fmt.Errorf("provider output_limit")
+		}
+		if stop == "error" || stop == "toolUse" || stop == "aborted" || (message["errorMessage"] != nil && message["errorMessage"] != "") {
+			return []byte(answer), fmt.Errorf("provider response is incomplete")
 		}
 	}
 	if strings.TrimSpace(answer) == "" {
 		return nil, fmt.Errorf("provider returned no completed assistant response")
 	}
-	return []byte(strings.TrimSpace(answer)), nil
+	return []byte(answer), nil
 }
 
 func validateProviderExecute(raw []byte) error {
@@ -296,17 +296,17 @@ func (r *Runner) runProvider(ctx context.Context, cfg workerConfig, phase, sessi
 		}
 	}
 	result := runProcess(runCtx, argv, cfg.env, workspace, vars, timeout, observe)
+	response, responseErr := providerResponse(cfg.driver, result.stdout)
 	if seen == "" && canonicalDriver(cfg.driver) == "codex" {
 		if match := codexSessionPattern.FindSubmatch(result.stderr); len(match) > 1 {
 			seen = string(match[1])
 		}
 	}
 	if checkpointErr != nil {
-		return nil, seen, result, fmt.Errorf("save provider session: %w", checkpointErr)
+		return response, seen, result, fmt.Errorf("save provider session: %w", checkpointErr)
 	}
 	if result.err != nil {
-		return nil, seen, result, fmt.Errorf("worker provider process: %w", result.err)
+		return response, seen, result, fmt.Errorf("worker provider process: %w", result.err)
 	}
-	response, err := providerResponse(cfg.driver, result.stdout)
-	return response, seen, result, err
+	return response, seen, result, responseErr
 }

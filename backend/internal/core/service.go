@@ -173,7 +173,7 @@ func (d *DB) getProjectTx(ctx context.Context, q queryer, id string) (ProjectDet
 	for i, goalID := range goalIDs {
 		out.Goals[i].From = goalSources(q, id, goalID)
 	}
-	rows, err = q.QueryContext(ctx, `SELECT id,to_fact_id,description,goal_id,priority,creator,worker,last_heartbeat_at,created_at,concluded_at,abandoned,route_id,result_json FROM steps WHERE project_id=? ORDER BY priority DESC,created_at`, id)
+	rows, err = q.QueryContext(ctx, `SELECT id,to_fact_id,description,goal_id,priority,creator,worker,last_heartbeat_at,created_at,concluded_at,abandoned,route_id,result_json,llm_response,llm_response_recorded,llm_response_error FROM steps WHERE project_id=? ORDER BY priority DESC,created_at`, id)
 	if err != nil {
 		return out, err
 	}
@@ -183,7 +183,7 @@ func (d *DB) getProjectTx(ctx context.Context, q queryer, id string) (ProjectDet
 		var to, g, w, h, co, route sql.NullString
 		var resultJSON string
 		var ab int
-		if err = rows.Scan(&x.ID, &to, &x.Description, &g, &x.Priority, &x.Creator, &w, &h, &x.CreatedAt, &co, &ab, &route, &resultJSON); err != nil {
+		if err = rows.Scan(&x.ID, &to, &x.Description, &g, &x.Priority, &x.Creator, &w, &h, &x.CreatedAt, &co, &ab, &route, &resultJSON, &x.LLMResponse, &x.LLMResponseRecorded, &x.LLMResponseError); err != nil {
 			rows.Close()
 			return out, err
 		}
@@ -646,7 +646,7 @@ func (d *DB) createStepTx(ctx context.Context, t *sql.Tx, p string, r CreateStep
 func (d *DB) stepTx(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, p, id string) (Step, error) {
-	r, e := q.QueryContext(ctx, `SELECT id,to_fact_id,description,goal_id,priority,creator,worker,last_heartbeat_at,created_at,concluded_at,abandoned,route_id,result_json FROM steps WHERE project_id=? AND id=?`, p, id)
+	r, e := q.QueryContext(ctx, `SELECT id,to_fact_id,description,goal_id,priority,creator,worker,last_heartbeat_at,created_at,concluded_at,abandoned,route_id,result_json,llm_response,llm_response_recorded,llm_response_error FROM steps WHERE project_id=? AND id=?`, p, id)
 	if e != nil {
 		return Step{}, e
 	}
@@ -658,7 +658,7 @@ func (d *DB) stepTx(ctx context.Context, q interface {
 	var to, g, w, h, c, route sql.NullString
 	var resultJSON string
 	var ab int
-	if e = r.Scan(&x.ID, &to, &x.Description, &g, &x.Priority, &x.Creator, &w, &h, &x.CreatedAt, &c, &ab, &route, &resultJSON); e != nil {
+	if e = r.Scan(&x.ID, &to, &x.Description, &g, &x.Priority, &x.Creator, &w, &h, &x.CreatedAt, &c, &ab, &route, &resultJSON, &x.LLMResponse, &x.LLMResponseRecorded, &x.LLMResponseError); e != nil {
 		return x, e
 	}
 	x.To = nullable(to)

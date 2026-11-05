@@ -77,6 +77,10 @@ func TestDispatcherCommitsAgentWorkerResultToProjectGraph(t *testing.T) {
 	if len(before.Facts) != 1 || before.Steps[0].To != nil {
 		t.Fatalf("agent worker mutated project graph: facts=%d step=%+v", len(before.Facts), before.Steps[0])
 	}
+	wantResponse := `{"accepted":true,"data":{"description":"confirmed","result":{"type":"progress","detail":"evidence"}}}`
+	if before.Steps[0].LLMResponse != wantResponse {
+		t.Fatalf("agent response was not saved before commit: %q", before.Steps[0].LLMResponse)
+	}
 	var status, worker string
 	if err := db.SQL.QueryRow(`SELECT status,worker_name FROM worker_execute_recovery WHERE project_id=? AND step_id=?`, project.Project.ID, step.ID).Scan(&status, &worker); err != nil || status != "commit_pending" || worker != "local/worker/01" {
 		t.Fatalf("saved agent result status=%q worker=%q err=%v", status, worker, err)
@@ -88,6 +92,17 @@ func TestDispatcherCommitsAgentWorkerResultToProjectGraph(t *testing.T) {
 	}
 	if len(after.Facts) != 2 || after.Steps[0].To == nil || after.Steps[0].Worker == nil || *after.Steps[0].Worker != "local/dispatcher/"+project.Project.ID {
 		t.Fatalf("dispatcher did not commit agent result: facts=%d step=%+v", len(after.Facts), after.Steps[0])
+	}
+	if after.Steps[0].LLMResponse != wantResponse {
+		t.Fatalf("dispatcher lost the original response: %q", after.Steps[0].LLMResponse)
+	}
+	var recoveryCount int
+	if err := db.SQL.QueryRow(`SELECT count(*) FROM worker_execute_recovery WHERE project_id=? AND step_id=?`, project.Project.ID, step.ID).Scan(&recoveryCount); err != nil || recoveryCount != 0 {
+		t.Fatalf("recovery row was not cleared after commit: count=%d err=%v", recoveryCount, err)
+	}
+	record, err := db.NodeDetail(t.Context(), project.Project.ID, "step", step.ID)
+	if err != nil || record.(core.Step).LLMResponse != wantResponse {
+		t.Fatalf("step detail lost the response: %+v err=%v", record, err)
 	}
 	var agentHistory, dispatcherHistory int
 	if err := db.SQL.QueryRow(`SELECT count(*) FROM worker_task_history WHERE project_id=? AND worker='local/worker/01' AND status='submitted'`, project.Project.ID).Scan(&agentHistory); err != nil || agentHistory != 1 {
@@ -274,6 +289,9 @@ func TestRejectedExecuteIsRecordedAndReleasesLease(t *testing.T) {
 	if after.Steps[0].Worker != nil {
 		t.Fatalf("rejected step lease was not released: %q", *after.Steps[0].Worker)
 	}
+	if after.Steps[0].LLMResponse != `{"accepted":false,"reason":"policy_refusal"}` {
+		t.Fatalf("rejection response was not retained: %q", after.Steps[0].LLMResponse)
+	}
 	New(db).RunOnce(ctx)
 	var historyCount int
 	if err := db.SQL.QueryRow(`SELECT count(*) FROM worker_task_history WHERE step_id=?`, step.ID).Scan(&historyCount); err != nil || historyCount != 1 {
@@ -424,6 +442,9 @@ func TestExecuteRecoveryReplaysCommittedPayloadWithoutRunningCommand(t *testing.
 	}
 	runner := New(db)
 	payload := []byte(`{"accepted":true,"data":{"description":"recovered confirmed fact"}}`)
+	if err := runner.saveStepResponse(project.Project.ID, step.ID, payload, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := runner.saveExecuteRecovery(ctx, project.Project.ID, step.ID, payload); err != nil {
 		t.Fatal(err)
 	}
@@ -443,6 +464,9 @@ func TestExecuteRecoveryReplaysCommittedPayloadWithoutRunningCommand(t *testing.
 	}
 	if after.Steps[0].To == nil || len(after.Facts) != 2 || after.Facts[1].Description != "recovered confirmed fact" {
 		t.Fatalf("recovery payload was not committed: facts=%+v steps=%+v", after.Facts, after.Steps)
+	}
+	if after.Steps[0].LLMResponse != string(payload) {
+		t.Fatalf("recovery lost the original response: %q", after.Steps[0].LLMResponse)
 	}
 	var recoveryCount int
 	if err := db.SQL.QueryRow(`SELECT count(*) FROM worker_execute_recovery WHERE project_id=? AND step_id=?`, project.Project.ID, step.ID).Scan(&recoveryCount); err != nil || recoveryCount != 0 {
@@ -474,6 +498,9 @@ func TestExecuteRecoveryClearsPayloadAfterConcludeCommittedBeforeRestart(t *test
 	}
 	runner := New(db)
 	payload := []byte(`{"accepted":true,"data":{"description":"already committed fact"}}`)
+	if err := runner.saveStepResponse(project.Project.ID, step.ID, payload, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := runner.saveExecuteRecovery(ctx, project.Project.ID, step.ID, payload); err != nil {
 		t.Fatal(err)
 	}
@@ -492,6 +519,9 @@ func TestExecuteRecoveryClearsPayloadAfterConcludeCommittedBeforeRestart(t *test
 	}
 	if len(after.Facts) != 2 || after.Facts[1].Description != "already committed fact" {
 		t.Fatalf("conclude replay duplicated or lost the fact: %+v", after.Facts)
+	}
+	if after.Steps[0].LLMResponse != string(payload) {
+		t.Fatalf("already committed step lost the recovered response: %q", after.Steps[0].LLMResponse)
 	}
 	var recoveryCount, historyCount int
 	var status string

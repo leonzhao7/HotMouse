@@ -105,6 +105,8 @@ test("project graph, manual step conclusion, finding review and goal completion"
     page.locator(".inspector").getByText("已结束", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "关闭详情" }).click();
+  const resultRow = page.getByRole("row").filter({ hasText: "s001" });
+  await expect(resultRow.locator("td").last()).toHaveText("未保存原始返回");
   await page.getByRole("tab", { name: /^发现/ }).click();
   await page.getByRole("button", { name: "记录发现" }).click();
   dialog = page.getByRole("dialog", { name: "记录发现" });
@@ -228,6 +230,166 @@ test("templates, Worker execution, secret preservation and real environment remo
   await page.getByRole("button", { name: "测试已保存配置" }).click();
   await expect(page.getByText("检查通过", { exact: true })).toBeVisible();
 });
+test("step list shows full LLM responses and retains them after refresh", async ({
+  page,
+}) => {
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await register(page);
+  const projectID = await createProject(page, "UI LLM response project");
+  const configuration = await (
+    await page.request.get("/api/workers/config")
+  ).json();
+  const rawResponse = JSON.stringify({
+    accepted: true,
+    data: {
+      description: "LLM confirmed the fixture response",
+      result: {
+        type: "progress",
+        detail: "Full model evidence\nSecond line of evidence",
+        evidence: {
+          response: "<script>window.llmResponseExecuted=true</script>",
+        },
+      },
+    },
+  });
+  const createStep = async (description) => {
+    const response = await page.request.post(`/projects/${projectID}/steps`, {
+      data: { from: ["origin"], description, creator: "ui-test" },
+    });
+    expect(response.ok()).toBe(true);
+    return response.json();
+  };
+  try {
+    const configured = await page.request.put("/api/workers/config", {
+      data: {
+        ...configuration,
+        driver: "command",
+        command: `printf '%s' '${rawResponse}'`,
+        enabled: true,
+      },
+    });
+    expect(configured.ok()).toBe(true);
+    const completed = await createStep("Inspect model output");
+    const pending = await createStep("Pending inspection");
+    const execution = await page.request.post(
+      `/api/projects/${projectID}/steps/${completed.id}/execute`,
+    );
+    expect(execution.ok()).toBe(true);
+    const executedStep = (await execution.json()).step;
+    expect(executedStep.llm_response).toBe(rawResponse);
+    expect(executedStep.llm_response_recorded).toBe(true);
+    await page.reload();
+    await page.getByRole("tab", { name: /^步骤/ }).click();
+    await expect(
+      page.getByRole("columnheader", { name: "LLM 返回", exact: true }),
+    ).toBeVisible();
+    const row = page.getByRole("row").filter({ hasText: completed.id });
+    await expect(row).toContainText("LLM confirmed the fixture response");
+    await expect(row.locator("pre")).not.toBeVisible();
+    await row.getByText("查看完整返回", { exact: true }).click();
+    expect(await row.locator("pre").textContent()).toBe(rawResponse);
+    await expect(row.locator("pre")).toContainText("Second line of evidence");
+    await expect(row.locator("pre")).toContainText(
+      "<script>window.llmResponseExecuted=true</script>",
+    );
+    expect(
+      await page.evaluate(() => window.llmResponseExecuted),
+    ).toBeUndefined();
+    const pendingRow = page.getByRole("row").filter({ hasText: pending.id });
+    await expect(pendingRow.locator("td").last()).toHaveText("尚未返回");
+    await row.getByRole("button", { name: /Inspect model output/ }).click();
+    const inspector = page.locator(".inspector");
+    await inspector.getByText("查看完整返回", { exact: true }).click();
+    await expect(inspector.locator(".step-response-detail pre")).toContainText(
+      "Second line of evidence",
+    );
+    await page.getByRole("button", { name: "关闭详情" }).click();
+    await page.reload();
+    await page.getByRole("tab", { name: /^步骤/ }).click();
+    await expect(row).toContainText("LLM confirmed the fixture response");
+    const detail = await (
+      await page.request.get(`/projects/${projectID}/steps/${completed.id}`)
+    ).json();
+    expect(detail.llm_response).toBe(rawResponse);
+    await row.getByText("查看完整返回", { exact: true }).click();
+    await page.screenshot({
+      path: "test-results/step-llm-response.png",
+      fullPage: true,
+      animations: "disabled",
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    expect(errors).toEqual([]);
+  } finally {
+    const restored = await page.request.put("/api/workers/config", {
+      data: configuration,
+    });
+    expect(restored.ok()).toBe(true);
+  }
+});
+
+test("LLM response column keeps the original reply separate from recovery results", async ({
+  page,
+}) => {
+  await register(page);
+  const projectID = await createProject(page, "UI original reply project");
+  const created = await page.request.post(`/projects/${projectID}/steps`, {
+    data: {
+      from: ["origin"],
+      description: "Read decode artifacts",
+      creator: "ui-test",
+    },
+  });
+  expect(created.ok()).toBe(true);
+  const step = await created.json();
+  const detail = await (
+    await page.request.get(`/projects/${projectID}`)
+  ).json();
+  const original =
+    "I'll start by reading the existing decode artifacts to understand what was produced.\n";
+  Object.assign(detail.steps[0], {
+    llm_response: original,
+    llm_response_recorded: true,
+    llm_response_error: "JSON object not found",
+    to: "f001",
+    result: { type: "environment_failure", detail: "Recovery summary only" },
+  });
+  detail.facts.push({ id: "f001", description: "Recovery summary only" });
+  await page.route(`**/projects/${projectID}`, (route) =>
+    route.fulfill({ json: detail }),
+  );
+  await page.reload();
+  await page.getByRole("tab", { name: /^步骤/ }).click();
+  const row = page.getByRole("row").filter({ hasText: step.id });
+  const responseCell = row.locator("td").last();
+  await expect(responseCell).toContainText(original.trim());
+  await expect(responseCell).toContainText("JSON object not found");
+  await expect(responseCell).not.toContainText("Recovery summary only");
+  await responseCell.getByText("查看完整返回", { exact: true }).click();
+  expect(await responseCell.locator("pre").textContent()).toBe(original);
+  await row.getByRole("button", { name: /Read decode artifacts/ }).click();
+  await expect(page.locator(".inspector")).toContainText(
+    "Recovery summary only",
+  );
+  await expect(page.locator(".inspector .step-response")).toContainText(
+    original.trim(),
+  );
+  await page.getByRole("button", { name: "关闭详情" }).click();
+  detail.steps[0].llm_response = "";
+  await page.getByRole("button", { name: "刷新", exact: true }).click();
+  await expect(responseCell).toContainText("返回为空");
+  await expect(responseCell).not.toContainText("Recovery summary only");
+  detail.steps[0].llm_response_recorded = false;
+  detail.steps[0].llm_response = "Legacy recovery summary";
+  await page.getByRole("button", { name: "刷新", exact: true }).click();
+  await expect(responseCell).toHaveText("未保存原始返回");
+});
+
 test("settings persist, notifications can be marked read, and expired sessions return to login", async ({
   page,
 }) => {
