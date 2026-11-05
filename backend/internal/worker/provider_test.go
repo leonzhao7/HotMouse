@@ -54,6 +54,7 @@ execute)
   wait
   ;;
 execute_conclude)
+  case "$HOTMOUSE_WORKER_ID" in */dispatcher/*) ;; *) exit 8;; esac
   case "$*" in *"--tools read --session session-timeout"*) ;; *) exit 9;; esac
   ` + piSummaryEvent + `
   ;;
@@ -114,6 +115,10 @@ if ! test -e "$TEST_DIR/summary-ready"; then exit 1; fi
 		t.Fatal(err)
 	}
 	defer reopened.SQL.Close()
+	// The interrupted step's retry deadline survives restart; simulate expiry.
+	if _, err := reopened.SQL.Exec(`UPDATE worker_execute_recovery SET retry_after='' WHERE project_id=? AND step_id=?`, project, step); err != nil {
+		t.Fatal(err)
+	}
 	New(reopened).RunOnce(t.Context())
 	detail, err := reopened.GetProject(t.Context(), project)
 	if err != nil || detail.Steps[0].To == nil {

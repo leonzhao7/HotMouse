@@ -15,6 +15,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Settings2,
   ShieldAlert,
   Target,
   Trash2,
@@ -143,6 +144,13 @@ export default function Workspace({ id }) {
                 </Button>
                 <Button icon={Edit3} onClick={() => edit("title")}>
                   重命名
+                </Button>
+                <Button
+                  icon={Settings2}
+                  onClick={() => edit("worker-limit")}
+                  disabled={!!busy}
+                >
+                  Worker 上限 {data.project.max_workers || 1}
                 </Button>
                 {data.project.status === "active" && (
                   <Button
@@ -1092,6 +1100,7 @@ function WorkspaceModal({ kind, item, detail, base, actor, onClose, onSaved }) {
         : "",
   );
   const [priority, setPriority] = useState(item?.priority || 0);
+  const [maxWorkers, setMaxWorkers] = useState(detail.project.max_workers || 1);
   const [parent, setParent] = useState(item?.parent_goal_id || "");
   const [goal, setGoal] = useState(item?.goal_id || "");
   const [from, setFrom] = useState(item?.from || []);
@@ -1112,6 +1121,7 @@ function WorkspaceModal({ kind, item, detail, base, actor, onClose, onSaved }) {
   const [routeID, setRouteID] = useState("");
   const titles = {
     title: "重命名项目",
+    "worker-limit": "项目 Worker 并发上限",
     reopen: "重新打开项目",
     goal: "添加目标",
     "goal-edit": "编辑目标",
@@ -1138,6 +1148,8 @@ function WorkspaceModal({ kind, item, detail, base, actor, onClose, onSaved }) {
     };
     if (kind === "title")
       await put(`${base}/title`, { title: description.trim() });
+    else if (kind === "worker-limit")
+      await put(`${base}/worker-limit`, { max_workers: Number(maxWorkers) });
     else if (kind === "reopen")
       await post(`${base}/reopen`, {
         description: description.trim(),
@@ -1279,25 +1291,35 @@ function WorkspaceModal({ kind, item, detail, base, actor, onClose, onSaved }) {
       {!["claim", "step-edit", "decide"].includes(kind) && (
         <TextField
           label={
-            kind === "title"
-              ? "项目名称"
-              : kind === "hint"
-                ? "提示内容"
-                : kind === "finding"
-                  ? "发现描述"
-                  : kind === "complete"
-                    ? "完成说明"
-                    : kind === "conclude"
-                      ? "结果事实描述"
-                      : kind === "reopen"
-                        ? "反馈 / 继续推进的原因"
-                        : "描述"
+            kind === "worker-limit"
+              ? "最大并发 Worker 数"
+              : kind === "title"
+                ? "项目名称"
+                : kind === "hint"
+                  ? "提示内容"
+                  : kind === "finding"
+                    ? "发现描述"
+                    : kind === "complete"
+                      ? "完成说明"
+                      : kind === "conclude"
+                        ? "结果事实描述"
+                        : kind === "reopen"
+                          ? "反馈 / 继续推进的原因"
+                          : "描述"
           }
           required
-          multiline={kind !== "title"}
+          type={kind === "worker-limit" ? "number" : undefined}
+          min={kind === "worker-limit" ? 1 : undefined}
+          max={kind === "worker-limit" ? 32 : undefined}
+          step={kind === "worker-limit" ? 1 : undefined}
+          multiline={kind !== "title" && kind !== "worker-limit"}
           autoFocus
-          value={description}
-          onChange={(event) => setDescription(event.target.value)}
+          value={kind === "worker-limit" ? maxWorkers : description}
+          onChange={(event) =>
+            kind === "worker-limit"
+              ? setMaxWorkers(Number(event.target.value))
+              : setDescription(event.target.value)
+          }
         />
       )}
       {["goal", "goal-edit", "step", "step-edit"].includes(kind) && (

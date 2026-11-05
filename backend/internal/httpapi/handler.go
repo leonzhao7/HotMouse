@@ -1518,6 +1518,20 @@ func (h *Handler) UpdateTitle(ctx iris.Context) {
 	}
 	ctx.JSON(v)
 }
+func (h *Handler) UpdateProjectWorkerLimit(ctx iris.Context) {
+	var request struct {
+		MaxWorkers int `json:"max_workers"`
+	}
+	if !read(ctx, &request) {
+		return
+	}
+	project, err := h.DB.SetProjectMaxWorkers(ctx.Request().Context(), ctx.Params().Get("project_id"), request.MaxWorkers)
+	if err != nil {
+		bad(ctx, err)
+		return
+	}
+	ctx.JSON(project)
+}
 func (h *Handler) UpdateStatus(ctx iris.Context) {
 	var r struct {
 		Status string `json:"status"`
@@ -2108,6 +2122,7 @@ func Register(app *iris.Application, h *Handler) {
 	app.Get("/projects/{project_id:string}", h.GetProject)
 	app.Delete("/projects/{project_id:string}", h.DeleteProject)
 	app.Put("/projects/{project_id:string}/title", h.UpdateTitle)
+	app.Put("/projects/{project_id:string}/worker-limit", h.UpdateProjectWorkerLimit)
 	app.Put("/projects/{project_id:string}/status", h.UpdateStatus)
 	app.Post("/projects/{project_id:string}/goals", h.CreateGoal)
 	app.Post("/projects/{project_id:string}/goals/{goal_id:string}/complete", h.CompleteGoal)

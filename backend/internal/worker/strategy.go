@@ -19,7 +19,7 @@ func (r *Runner) nextEventProject(ctx context.Context) string {
 		return ""
 	}
 	var project string
-	err := r.DB.SQL.QueryRowContext(ctx, `SELECT p.id FROM projects p JOIN decide_events e ON e.project_id=p.id WHERE p.status='active' AND e.handled_at IS NULL AND p.decide_worker IS NULL AND NOT EXISTS(SELECT 1 FROM worker_retry_state w WHERE w.project_id=p.id AND w.task_type='decide' AND julianday(w.retry_after)>julianday(?)) GROUP BY p.id ORDER BY MIN(e.id) LIMIT 1`, time.Now().UTC().Format(time.RFC3339Nano)).Scan(&project)
+	err := r.DB.SQL.QueryRowContext(ctx, `SELECT p.id FROM projects p JOIN decide_events e ON e.project_id=p.id WHERE p.status='active' AND e.handled_at IS NULL AND p.decide_worker IS NULL AND `+pendingResultsEventGuard+` AND NOT EXISTS(SELECT 1 FROM worker_retry_state w WHERE w.project_id=p.id AND w.task_type='decide' AND julianday(w.retry_after)>julianday(?)) GROUP BY p.id ORDER BY MIN(e.id) LIMIT 1`, time.Now().UTC().Format(time.RFC3339Nano)).Scan(&project)
 	if err != nil {
 		return ""
 	}

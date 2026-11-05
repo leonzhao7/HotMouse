@@ -106,6 +106,10 @@ func (d *DB) WorkspaceMarker(project string) string {
 	return project + "\n" + fmt.Sprintf("%x", sum[:]) + "\n"
 }
 
+func (d *DB) WorkerWorkspaceMarker(project, worker string) string {
+	return d.WorkspaceMarker(project) + worker + "\n"
+}
+
 func (d *DB) cleanupCompletedProjectWorkspace(ctx context.Context, projectID string) {
 	var root, action string
 	if err := d.SQL.QueryRowContext(ctx, `SELECT workspace_root,completed_action FROM worker_config WHERE id=1`).Scan(&root, &action); err != nil || action != "remove" {

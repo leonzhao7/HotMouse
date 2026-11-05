@@ -11,13 +11,15 @@ import (
 type executeCheckpoint struct {
 	payload                                              []byte
 	status, session, driver, identity, workspace, reason string
+	workerName                                           string
+	retryAfter                                           string
 	attempts                                             int
 }
 
 func (r *Runner) loadExecuteRecovery(ctx context.Context, project, step string) (*executeCheckpoint, error) {
 	var x executeCheckpoint
 	var payload string
-	err := r.DB.SQL.QueryRowContext(ctx, `SELECT payload_json,status,session_id,driver,worker_identity,workspace_dir,summary_attempts,interruption_reason FROM worker_execute_recovery WHERE project_id=? AND step_id=?`, project, step).Scan(&payload, &x.status, &x.session, &x.driver, &x.identity, &x.workspace, &x.attempts, &x.reason)
+	err := r.DB.SQL.QueryRowContext(ctx, `SELECT payload_json,status,session_id,driver,worker_identity,workspace_dir,summary_attempts,interruption_reason,worker_name,retry_after FROM worker_execute_recovery WHERE project_id=? AND step_id=?`, project, step).Scan(&payload, &x.status, &x.session, &x.driver, &x.identity, &x.workspace, &x.attempts, &x.reason, &x.workerName, &x.retryAfter)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -35,7 +37,7 @@ func (r *Runner) loadExecuteRecovery(ctx context.Context, project, step string) 
 }
 
 func (r *Runner) saveProviderCheckpoint(ctx context.Context, project, step string, x *executeCheckpoint) error {
-	res, err := r.DB.SQL.ExecContext(ctx, `UPDATE worker_execute_recovery SET status=?,session_id=?,driver=?,worker_identity=?,workspace_dir=?,summary_attempts=?,interruption_reason=? WHERE project_id=? AND step_id=?`, x.status, x.session, x.driver, x.identity, x.workspace, x.attempts, x.reason, project, step)
+	res, err := r.DB.SQL.ExecContext(ctx, `UPDATE worker_execute_recovery SET status=?,session_id=?,driver=?,worker_identity=?,workspace_dir=?,summary_attempts=?,interruption_reason=?,worker_name=?,retry_after=? WHERE project_id=? AND step_id=?`, x.status, x.session, x.driver, x.identity, x.workspace, x.attempts, x.reason, x.workerName, x.retryAfter, project, step)
 	if err != nil {
 		return err
 	}
@@ -56,16 +58,23 @@ func (r *Runner) executeProvider(ctx context.Context, cfg workerConfig, workspac
 	if workerIdentity == "" {
 		workerIdentity = r.workerName()
 	}
-	identity := providerIdentity(cfg, workerIdentity, workspace)
+	if x != nil && x.status == "summary_pending" {
+		if !strings.Contains(cfg.identity, "/dispatcher/") {
+			return nil, fmt.Errorf("only the project dispatcher can summarize interrupted work")
+		}
+	}
 	if x != nil {
-		if x.status != "summary_pending" || x.driver != canonicalDriver(cfg.driver) || x.identity != identity || x.workspace != workspace {
+		executionIdentity := providerIdentity(cfg, x.workerName, x.workspace)
+		identityMismatch := x.workerName != "" && x.identity != executionIdentity
+		if x.status != "summary_pending" || x.driver != canonicalDriver(cfg.driver) || identityMismatch {
 			x.status = "needs_attention"
 			_ = r.preserveProviderCheckpoint(project, step, x)
 			return nil, fmt.Errorf("provider recovery does not match current worker configuration")
 		}
-		return r.summarizeProvider(ctx, cfg, project, step, description, x)
+		return r.summarizeProvider(ctx, cfg, project, step, description, workspace, x)
 	}
-	x = &executeCheckpoint{status: "running", driver: canonicalDriver(cfg.driver), identity: identity, workspace: workspace}
+	identity := providerIdentity(cfg, workerIdentity, workspace)
+	x = &executeCheckpoint{status: "running", driver: canonicalDriver(cfg.driver), identity: identity, workspace: workspace, workerName: workerIdentity}
 	if x.driver == "claudecode" {
 		var err error
 		x.session, err = newSessionID()
@@ -114,10 +123,10 @@ func (r *Runner) executeProvider(ctx context.Context, cfg workerConfig, workspac
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	return r.summarizeProvider(ctx, cfg, project, step, description, x)
+	return nil, fmt.Errorf("execution interrupted; project dispatcher will summarize the saved session")
 }
 
-func (r *Runner) summarizeProvider(ctx context.Context, cfg workerConfig, project, step, description string, x *executeCheckpoint) ([]byte, error) {
+func (r *Runner) summarizeProvider(ctx context.Context, cfg workerConfig, project, step, description, workspace string, x *executeCheckpoint) ([]byte, error) {
 	if x.attempts >= cfg.runtime.RecoveryAttempts {
 		x.status = "needs_attention"
 		_ = r.preserveProviderCheckpoint(project, step, x)
@@ -140,11 +149,11 @@ func (r *Runner) summarizeProvider(ctx context.Context, cfg workerConfig, projec
 	if err := r.saveProviderCheckpoint(ctx, project, step, x); err != nil {
 		return nil, err
 	}
-	vars, err := r.commandVars(ctx, project, step, description, graph, "execute_conclude", cfg, x.workspace)
+	vars, err := r.commandVars(ctx, project, step, description, graph, "execute_conclude", cfg, workspace)
 	if err != nil {
 		return nil, err
 	}
-	vars["HOTMOUSE_WORKER_PROMPT"] = summaryPrompt(graph, step, description, x.reason) + "\n\nProject context:\n" + vars["HOTMOUSE_PROJECT_CONTEXT_YAML"]
+	vars["HOTMOUSE_WORKER_PROMPT"] = summaryPrompt(graph, step, description, x.reason) + vars["HOTMOUSE_WORKSPACE_ACCESS"] + "\n\nProject context:\n" + vars["HOTMOUSE_PROJECT_CONTEXT_YAML"]
 	summaryCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.runtime.ConcludeTimeoutSeconds)*time.Second)
 	defer cancel()
 	retries := 0
@@ -152,7 +161,7 @@ func (r *Runner) summarizeProvider(ctx context.Context, cfg workerConfig, projec
 		retries = cfg.runtime.FormatRetries
 	}
 	for attempt := 0; attempt <= retries; attempt++ {
-		output, _, _, runErr := r.runProvider(summaryCtx, cfg, "summary", x.session, x.workspace, vars, time.Duration(cfg.runtime.ConcludeTimeoutSeconds)*time.Second, nil)
+		output, _, _, runErr := r.runProvider(summaryCtx, cfg, "summary", x.session, workspace, vars, time.Duration(cfg.runtime.ConcludeTimeoutSeconds)*time.Second, nil)
 		err = runErr
 		if err == nil {
 			err = validateProviderExecute(output)
@@ -168,6 +177,8 @@ func (r *Runner) summarizeProvider(ctx context.Context, cfg workerConfig, projec
 	}
 	if x.attempts >= cfg.runtime.RecoveryAttempts || isWorkerRejection(err) {
 		x.status = "needs_attention"
+	} else {
+		x.retryAfter = time.Now().UTC().Add(summaryRetryDelay(x.attempts)).Format(time.RFC3339Nano)
 	}
 	if checkpointErr := r.preserveProviderCheckpoint(project, step, x); checkpointErr != nil {
 		return nil, checkpointErr

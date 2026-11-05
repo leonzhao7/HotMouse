@@ -68,6 +68,7 @@ type Project struct {
 	Title            string       `json:"title" yaml:"title"`
 	Status           string       `json:"status" yaml:"status"`
 	BootstrapEnabled bool         `json:"bootstrap_enabled" yaml:"bootstrap_enabled"`
+	MaxWorkers       int          `json:"max_workers" yaml:"max_workers"`
 	CreatedAt        string       `json:"created_at" yaml:"created_at"`
 	Decide           *DecideLease `json:"decide" yaml:"decide"`
 }
@@ -97,10 +98,11 @@ type ProjectDetail struct {
 }
 
 type CreateProject struct {
-	Title  string       `json:"title"`
-	Origin string       `json:"origin"`
-	Goal   string       `json:"goal"`
-	Hints  []CreateHint `json:"hints"`
+	Title      string       `json:"title"`
+	Origin     string       `json:"origin"`
+	Goal       string       `json:"goal"`
+	Hints      []CreateHint `json:"hints"`
+	MaxWorkers int          `json:"max_workers,omitempty"`
 }
 type CreateHint struct {
 	Content string `json:"content"`

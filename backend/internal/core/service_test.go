@@ -101,6 +101,41 @@ func TestExpiredStepLeaseCanBeReclaimedOnHeartbeat(t *testing.T) {
 	}
 }
 
+func TestProjectWorkerLimitDefaultsAndEnforcesClaims(t *testing.T) {
+	db := testDB(t)
+	project, err := db.CreateProject(t.Context(), CreateProject{Title: "limit", Origin: "target", Goal: "verify"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if project.Project.MaxWorkers != 1 {
+		t.Fatalf("default max workers=%d, want 1", project.Project.MaxWorkers)
+	}
+	first, err := db.CreateStep(t.Context(), project.Project.ID, CreateStep{From: []string{"origin"}, Description: "first", Creator: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.CreateStep(t.Context(), project.Project.ID, CreateStep{From: []string{"origin"}, Description: "second", Creator: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.HeartbeatStep(t.Context(), project.Project.ID, first.ID, "worker-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.HeartbeatStep(t.Context(), project.Project.ID, second.ID, "worker-b"); err == nil || !strings.Contains(err.Error(), "worker limit") {
+		t.Fatalf("second claim exceeded project worker limit: %v", err)
+	}
+	updated, err := db.SetProjectMaxWorkers(t.Context(), project.Project.ID, 2)
+	if err != nil || updated.MaxWorkers != 2 {
+		t.Fatalf("update project worker limit=%+v err=%v", updated, err)
+	}
+	if _, err := db.HeartbeatStep(t.Context(), project.Project.ID, second.ID, "worker-b"); err != nil {
+		t.Fatalf("claim after increasing project limit: %v", err)
+	}
+	if _, err := db.SetProjectMaxWorkers(t.Context(), project.Project.ID, 33); err == nil {
+		t.Fatal("accepted an out-of-range project worker limit")
+	}
+}
+
 func TestFailedLoginCounterCommitsBeforeError(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)

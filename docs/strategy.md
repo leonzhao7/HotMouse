@@ -21,6 +21,10 @@ hotmouse --project proj_001 project export --format yaml
 
 命令适配器的 `HOTMOUSE_MODEL_CONTEXT_YAML` 是紧凑上下文；原 `HOTMOUSE_GRAPH_YAML` 保留为它的兼容别名。需要旧完整图结构的自定义适配器应调用导出接口。`HOTMOUSE_WORKER_PROMPT` 已改为使用紧凑上下文。项目授权和范围 YAML 的合并机制继续生效；图、目标输出和检索内容作为数据使用。
 
+Worker 产物共享采用目录和提示词约定：每个 Worker 将全部新增数据、脚本、证据和输出保留在自己的项目子目录，浏览项目目录复用其它 Worker 的遗留文件，并保持这些文件不变。命令沿用宿主文件系统权限，HotMouse 不添加文件系统写权限隔离或 bubblewrap 依赖。`writable_directory` 表示当前 Worker 应存放产物的目录。
+
+规划上下文不提供 Dispatcher 的 `writable_directory`，而以 `step_output_directory: ${HOTMOUSE_WORKSPACE_DIR}` 表示尚未分配的执行目录。新增输出、解压目录和脚本路径在步骤描述中保留这个占位符，例如 `${HOTMOUSE_WORKSPACE_DIR}/zip_list.txt`；执行时只在当前步骤描述及其 `HOTMOUSE_STEP_DESCRIPTION` 中替换为实际 Worker 目录。图中已记录的事实和其它 Worker 的证据读取路径保持原样。执行提示要求旧步骤中指向其它目录的新增输出改存当前 Worker 的目录，并报告实际绝对路径；恢复总结只引用原始证据路径，不重新执行或迁移产物。
+
 ## 结构化执行结果
 
 执行结果独立于漏洞 Finding：
@@ -62,7 +66,7 @@ hotmouse --project proj_001 step conclude s001 \
 
 ## 事件触发的 Decide
 
-新进展、负面结果、目标阻碍、环境故障、目标完成、Finding、提示、flag 平台结果、路线止损和人工请求会产生持久化事件。Worker 先处理可恢复的总结或提交，再优先处理事件规划，然后领取新的步骤。因此队列未清空时也可以重新调整计划。
+新进展、负面结果、目标阻碍、环境故障、目标完成、Finding、提示、flag 平台结果、路线止损和人工请求会产生持久化事件。Dispatcher 优先提交已经保存的成功结果，然后处理尚未失败的总结。总结失败时，按步骤保存退避时间，先推进已有事实支持的独立步骤和由新结果触发的规划，再轮流重试失败的总结；正在执行的独立步骤也不会被总结重试占用。单纯中断且没有提交结果时，不因为总结被延后而额外调用 Decide；原有事件和图未变化检查继续生效。依赖仍通过已存在的 Fact 表达，不能用 Step 顺序或优先级代替依赖。
 
 Decide 可以通过 `step_updates` 调整优先级或放弃尚未领取的步骤，通过 `route_updates` 修改路线状态、预算和复核记录。整批图修改在同一事务中执行；一项无效更新会回滚整批。已领取、已结束以及带恢复检查点的步骤不能修改。路线搁置阻止新的执行领取，已经执行的结果及恢复总结可以继续提交。
 

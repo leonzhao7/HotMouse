@@ -191,6 +191,40 @@ func TestWorkerWorkspaceConfigAndLegacyUpdate(t *testing.T) {
 	}
 }
 
+func TestProjectWorkerLimitAPI(t *testing.T) {
+	t.Setenv("HOTMOUSE_AUTH_REQUIRED", "0")
+	db, err := core.Open(filepath.Join(t.TempDir(), "project-worker-limit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.SQL.Close()
+	project, err := db.CreateProject(t.Context(), core.CreateProject{Title: "limit", Origin: "target", Goal: "verify"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := iris.New()
+	Register(app, New(db))
+	if err := app.Build(); err != nil {
+		t.Fatal(err)
+	}
+	request := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest("PUT", "/projects/"+project.Project.ID+"/worker-limit", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		app.ServeHTTP(recorder, req)
+		return recorder
+	}
+	updated := request(`{"max_workers":3}`)
+	var response core.Project
+	if updated.Code != 200 || json.Unmarshal(updated.Body.Bytes(), &response) != nil || response.MaxWorkers != 3 {
+		t.Fatalf("project worker limit update status=%d body=%s project=%+v", updated.Code, updated.Body.String(), response)
+	}
+	if invalid := request(`{"max_workers":33}`); invalid.Code != 400 {
+		t.Fatalf("out-of-range project worker limit status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+}
+
 func TestConfiguredPiCLIUsedByWorkerHealth(t *testing.T) {
 	t.Setenv("HOTMOUSE_AUTH_REQUIRED", "0")
 	t.Setenv("PATH", t.TempDir())

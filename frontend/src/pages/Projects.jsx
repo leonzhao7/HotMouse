@@ -196,6 +196,7 @@ export function ProjectCreateModal({ template, onClose }) {
   const [hints, setHints] = useState(
     (template?.hints || []).map((item) => item.content).join("\n"),
   );
+  const [maxWorkers, setMaxWorkers] = useState(1);
   const [selected, setSelected] = useState(template?.id || "");
   const select = (value) => {
     setSelected(value);
@@ -219,6 +220,7 @@ export function ProjectCreateModal({ template, onClose }) {
           title: title.trim(),
           origin: origin.trim(),
           goal: goal.trim(),
+          max_workers: Number(maxWorkers),
           hints: hints
             .split("\n")
             .map((content) => content.trim())
@@ -267,6 +269,17 @@ export function ProjectCreateModal({ template, onClose }) {
         value={goal}
         onChange={(event) => setGoal(event.target.value)}
         placeholder="希望达成什么？如何判断目标已完成？"
+      />
+      <TextField
+        label="项目最大并发 Worker 数"
+        type="number"
+        min="1"
+        max="32"
+        step="1"
+        required
+        value={maxWorkers}
+        onChange={(event) => setMaxWorkers(Number(event.target.value))}
+        hint="项目 Dispatcher 始终独立负责规划和提交结果。"
       />
       <TextField
         label="提示（可选）"

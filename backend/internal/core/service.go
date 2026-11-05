@@ -36,7 +36,7 @@ func projectFrom(row interface{ Scan(...any) error }) (Project, error) {
 	var p Project
 	var boot int
 	var dw, dt, ds, dh sql.NullString
-	err := row.Scan(&p.ID, &p.Title, &p.Status, &boot, &p.CreatedAt, &dw, &dt, &ds, &dh)
+	err := row.Scan(&p.ID, &p.Title, &p.Status, &boot, &p.MaxWorkers, &p.CreatedAt, &dw, &dt, &ds, &dh)
 	if err != nil {
 		return p, err
 	}
@@ -49,7 +49,7 @@ func projectFrom(row interface{ Scan(...any) error }) (Project, error) {
 func queryProject(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, id string) (Project, error) {
-	return projectFrom(q.QueryRowContext(ctx, `SELECT id,title,status,bootstrap_enabled,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, id))
+	return projectFrom(q.QueryRowContext(ctx, `SELECT id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, id))
 }
 
 func (d *DB) CreateProject(ctx context.Context, req CreateProject) (ProjectDetail, error) {
@@ -62,6 +62,13 @@ func (d *DB) CreateProject(ctx context.Context, req CreateProject) (ProjectDetai
 	if err := requireText("goal", req.Goal); err != nil {
 		return ProjectDetail{}, err
 	}
+	maxWorkers := req.MaxWorkers
+	if maxWorkers == 0 {
+		maxWorkers = 1
+	}
+	if maxWorkers < 1 || maxWorkers > 32 {
+		return ProjectDetail{}, fmt.Errorf("max_workers must be between 1 and 32")
+	}
 	var out ProjectDetail
 	err := tx(ctx, d, func(t *sql.Tx) error {
 		nowv := now()
@@ -70,7 +77,7 @@ func (d *DB) CreateProject(ctx context.Context, req CreateProject) (ProjectDetai
 			return err
 		}
 		pid := fmt.Sprintf("proj_%03d", n)
-		if _, err := t.Exec(`INSERT INTO projects(id,title,created_at) VALUES(?,?,?)`, pid, clean(req.Title), nowv); err != nil {
+		if _, err := t.Exec(`INSERT INTO projects(id,title,max_workers,created_at) VALUES(?,?,?,?)`, pid, clean(req.Title), maxWorkers, nowv); err != nil {
 			return err
 		}
 		if _, err := t.Exec(`INSERT INTO facts(id,project_id,description) VALUES('origin',?,?)`, pid, clean(req.Origin)); err != nil {
@@ -310,6 +317,20 @@ func (d *DB) GetProjectMeta(ctx context.Context, id string) (Project, error) {
 	return p, err
 }
 
+func (d *DB) SetProjectMaxWorkers(ctx context.Context, id string, maxWorkers int) (Project, error) {
+	if maxWorkers < 1 || maxWorkers > 32 {
+		return Project{}, fmt.Errorf("max_workers must be between 1 and 32")
+	}
+	res, err := d.SQL.ExecContext(ctx, `UPDATE projects SET max_workers=? WHERE id=?`, maxWorkers, id)
+	if err != nil {
+		return Project{}, err
+	}
+	if count, _ := res.RowsAffected(); count == 0 {
+		return Project{}, ErrNotFound
+	}
+	return d.GetProjectMeta(ctx, id)
+}
+
 func (d *DB) expireLeases(ctx context.Context, project string) error {
 	var stepTimeout, decideTimeout int
 	if err := d.SQL.QueryRowContext(ctx, `SELECT step_timeout,decide_timeout FROM settings WHERE id=1`).Scan(&stepTimeout, &decideTimeout); err != nil {
@@ -376,7 +397,7 @@ func (d *DB) HeartbeatDecide(ctx context.Context, project, worker string) (Proje
 			return err
 		}
 		var err error
-		out, err = projectFrom(t.QueryRow(`SELECT id,title,status,bootstrap_enabled,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, project))
+		out, err = projectFrom(t.QueryRow(`SELECT id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, project))
 		return err
 	})
 	return out, err
@@ -447,7 +468,7 @@ func (d *DB) ListProjects(ctx context.Context) ([]ProjectSummary, error) {
 	if _, err := d.SQL.ExecContext(ctx, `UPDATE projects SET decide_worker=NULL,decide_trigger=NULL,decide_started_at=NULL,decide_last_heartbeat_at=NULL WHERE decide_worker IS NOT NULL AND decide_last_heartbeat_at IS NOT NULL AND (julianday(?) - julianday(decide_last_heartbeat_at))*86400 > (SELECT decide_timeout FROM settings WHERE id=1)`, now()); err != nil {
 		return nil, err
 	}
-	rows, e := d.SQL.QueryContext(ctx, `SELECT id,title,status,bootstrap_enabled,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects ORDER BY created_at`)
+	rows, e := d.SQL.QueryContext(ctx, `SELECT id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects ORDER BY created_at`)
 	if e != nil {
 		return nil, e
 	}
@@ -484,7 +505,7 @@ func (d *DB) ListProjects(ctx context.Context) ([]ProjectSummary, error) {
 }
 
 func checkActive(t *sql.Tx, id string) (Project, error) {
-	p, e := projectFrom(t.QueryRow(`SELECT id,title,status,bootstrap_enabled,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, id))
+	p, e := projectFrom(t.QueryRow(`SELECT id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, id))
 	if e == sql.ErrNoRows {
 		return p, ErrNotFound
 	}
@@ -655,6 +676,14 @@ func (d *DB) stepTx(ctx context.Context, q interface {
 	return x, nil
 }
 func (d *DB) HeartbeatStep(ctx context.Context, p, id, worker string) (Step, error) {
+	return d.heartbeatStep(ctx, p, id, worker, "agent")
+}
+
+func (d *DB) HeartbeatStepAsDispatcher(ctx context.Context, p, id, worker string) (Step, error) {
+	return d.heartbeatStep(ctx, p, id, worker, "dispatcher")
+}
+
+func (d *DB) heartbeatStep(ctx context.Context, p, id, worker, role string) (Step, error) {
 	if err := d.RefreshRouteLimits(ctx); err != nil {
 		return Step{}, err
 	}
@@ -671,9 +700,10 @@ func (d *DB) HeartbeatStep(ctx context.Context, p, id, worker string) (Step, err
 			return err
 		}
 		var current sql.NullString
+		var currentRole string
 		var concluded sql.NullString
 		var ab int
-		if e := t.QueryRow(`SELECT worker,concluded_at,abandoned FROM steps WHERE project_id=? AND id=?`, p, id).Scan(&current, &concluded, &ab); e != nil {
+		if e := t.QueryRow(`SELECT worker,worker_role,concluded_at,abandoned FROM steps WHERE project_id=? AND id=?`, p, id).Scan(&current, &currentRole, &concluded, &ab); e != nil {
 			return e
 		}
 		if concluded.Valid || ab != 0 {
@@ -682,7 +712,25 @@ func (d *DB) HeartbeatStep(ctx context.Context, p, id, worker string) (Step, err
 		if current.Valid && current.String != worker {
 			return fmt.Errorf("step is currently claimed by %s", current.String)
 		}
+		if current.Valid && currentRole != role {
+			return fmt.Errorf("step lease role cannot be changed while claimed")
+		}
 		if !current.Valid {
+			if role == "agent" {
+				var maxWorkers, activeWorkers, alreadyAssigned int
+				if err := t.QueryRow(`SELECT max_workers FROM projects WHERE id=?`, p).Scan(&maxWorkers); err != nil {
+					return err
+				}
+				if err := t.QueryRow(`SELECT count(DISTINCT worker),COALESCE(MAX(worker=?),0) FROM steps WHERE project_id=? AND to_fact_id IS NULL AND abandoned=0 AND worker IS NOT NULL AND worker_role='agent'`, worker, p).Scan(&activeWorkers, &alreadyAssigned); err != nil {
+					return err
+				}
+				if alreadyAssigned != 0 {
+					return fmt.Errorf("worker already has an active step in this project")
+				}
+				if activeWorkers >= maxWorkers {
+					return fmt.Errorf("project worker limit reached (%d)", maxWorkers)
+				}
+			}
 			var shelved int
 			if err := t.QueryRow(`SELECT count(*) FROM steps s JOIN routes r ON r.id=s.route_id AND r.project_id=s.project_id WHERE s.project_id=? AND s.id=? AND r.status='shelved' AND NOT EXISTS(SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id)`, p, id).Scan(&shelved); err != nil {
 				return err
@@ -691,7 +739,7 @@ func (d *DB) HeartbeatStep(ctx context.Context, p, id, worker string) (Step, err
 				return fmt.Errorf("route is shelved")
 			}
 		}
-		if _, err := t.Exec(`UPDATE steps SET worker=?,last_heartbeat_at=? WHERE project_id=? AND id=?`, worker, now(), p, id); err != nil {
+		if _, err := t.Exec(`UPDATE steps SET worker=?,worker_role=?,last_heartbeat_at=? WHERE project_id=? AND id=?`, worker, role, now(), p, id); err != nil {
 			return err
 		}
 		var err error
@@ -1316,7 +1364,7 @@ func (d *DB) SetProjectStatus(ctx context.Context, p, status string) (Project, e
 			}
 		}
 		var err error
-		out, err = projectFrom(t.QueryRow(`SELECT id,title,status,bootstrap_enabled,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, p))
+		out, err = projectFrom(t.QueryRow(`SELECT id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, p))
 		return err
 	})
 	return out, e
@@ -1349,7 +1397,7 @@ func (d *DB) ClaimDecide(ctx context.Context, p string, r ClaimDecide) (Project,
 			return err
 		}
 		var err error
-		out, err = projectFrom(t.QueryRow(`SELECT id,title,status,bootstrap_enabled,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, p))
+		out, err = projectFrom(t.QueryRow(`SELECT id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, p))
 		return err
 	})
 	return out, e
@@ -1472,7 +1520,7 @@ func (d *DB) Reopen(ctx context.Context, p string, r Reopen) (ReopenResult, erro
 		if e != nil {
 			return e
 		}
-		pp, e := projectFrom(t.QueryRow(`SELECT id,title,status,bootstrap_enabled,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, p))
+		pp, e := projectFrom(t.QueryRow(`SELECT id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, p))
 		if e != nil {
 			return e
 		}

@@ -261,13 +261,24 @@ func validateProviderExecute(raw []byte) error {
 }
 
 func (r *Runner) runProvider(ctx context.Context, cfg workerConfig, phase, session, workspace string, vars map[string]string, timeout time.Duration, onSession func(string) error) ([]byte, string, processResult, error) {
-	argv, err := providerArgv(cfg, phase, session, workspace, vars["HOTMOUSE_WORKER_PROMPT"])
+	stateWorkspace := workspace
+	if writable := vars["HOTMOUSE_WORKSPACE_DIR"]; phase == "summary" && writable != "" && writable != workspace {
+		stateWorkspace = writable
+		if canonicalDriver(cfg.driver) == "pi" {
+			var err error
+			session, err = copyLegacyPiSessions(workspace, writable, session)
+			if err != nil {
+				return nil, session, processResult{}, err
+			}
+		}
+	}
+	argv, err := providerArgv(cfg, phase, session, stateWorkspace, vars["HOTMOUSE_WORKER_PROMPT"])
 	if err != nil {
 		return nil, session, processResult{}, err
 	}
 	r.logInvocation(cfg, vars["HOTMOUSE_PROJECT_ID"], vars["HOTMOUSE_STEP_ID"], vars["HOTMOUSE_TASK_TYPE"]+"/"+phase, argv)
 	if canonicalDriver(cfg.driver) == "pi" && cfg.env["PI_MODEL"] != "" && cfg.env["PI_BASE_URL"] != "" && cfg.env["PI_API_KEY"] != "" && cfg.env["PI_PROVIDER_API"] != "" {
-		vars["PI_CODING_AGENT_DIR"] = filepath.Join(workspace, ".hotmouse", "pi-agent")
+		vars["PI_CODING_AGENT_DIR"] = filepath.Join(stateWorkspace, ".hotmouse", "pi-agent")
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

@@ -243,7 +243,8 @@ func (r *Runner) RunOnce(ctx context.Context) {
 	}
 	var project, step, description string
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	err := r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM worker_execute_recovery x JOIN steps s ON s.project_id=x.project_id AND s.id=x.step_id JOIN projects p ON p.id=s.project_id WHERE p.status='active' AND s.abandoned=0 AND ((x.payload_json<>'' AND x.status IN ('running','commit_pending')) OR (x.status='summary_pending' AND x.session_id<>'' AND s.to_fact_id IS NULL)) AND (s.to_fact_id IS NOT NULL OR (s.worker IS NULL AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)))) ORDER BY x.created_at LIMIT 1`, now).Scan(&project, &step, &description)
+	project, step, description, err := r.nextStepCommit(ctx, "")
+	recovery := err == nil
 	if err == sql.ErrNoRows {
 		if eventProject := r.nextEventProject(ctx); eventProject != "" {
 			r.decideProject(ctx, eventProject)
@@ -252,7 +253,11 @@ func (r *Runner) RunOnce(ctx context.Context) {
 		err = r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM steps s WHERE s.to_fact_id IS NULL AND s.abandoned=0 AND s.worker IS NULL AND s.project_id IN (SELECT id FROM projects WHERE status='active' AND decide_worker IS NULL) AND NOT EXISTS(SELECT 1 FROM routes rt WHERE rt.project_id=s.project_id AND rt.id=s.route_id AND rt.status='shelved') AND NOT EXISTS (SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id) AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)) ORDER BY s.priority DESC,s.created_at LIMIT 1`, now).Scan(&project, &step, &description)
 	}
 	if err == nil {
-		_, _ = r.execute(ctx, project, step, description)
+		if recovery {
+			_, _ = r.executeAsDispatcherCommit(ctx, project, step, description, r.dispatcherIdentity(project))
+		} else {
+			_, _ = r.execute(ctx, project, step, description)
+		}
 		return
 	}
 	rows, err := r.DB.SQL.QueryContext(ctx, `SELECT DISTINCT s.project_id FROM steps s JOIN projects p ON p.id=s.project_id WHERE p.status='active' AND s.to_fact_id IS NULL AND s.abandoned=0`)
@@ -289,6 +294,10 @@ func (r *Runner) ExecuteNow(ctx context.Context, project, step string) (core.Con
 	}
 	agentResult, err := r.executeForAgent(ctx, project, step, description, r.workerIdentity(1))
 	if err != nil {
+		var status string
+		if queryErr := r.DB.SQL.QueryRowContext(ctx, `SELECT status FROM worker_execute_recovery WHERE project_id=? AND step_id=?`, project, step).Scan(&status); queryErr == nil && status == "summary_pending" {
+			return r.executeAsDispatcherCommit(ctx, project, step, description, r.dispatcherIdentity(project))
+		}
 		return core.ConcludeResult{}, err
 	}
 	if agentResult.Step != nil && agentResult.Step.To != nil {
@@ -310,10 +319,7 @@ func (r *Runner) executeNext(ctx context.Context, identity string) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for attempts := 0; attempts < 8; attempts++ {
 		var project, step, description string
-		err := r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM worker_execute_recovery x JOIN steps s ON s.project_id=x.project_id AND s.id=x.step_id JOIN projects p ON p.id=s.project_id WHERE p.status='active' AND s.abandoned=0 AND x.status='summary_pending' AND x.session_id<>'' AND s.to_fact_id IS NULL AND s.worker IS NULL AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)) ORDER BY x.created_at LIMIT 1`, now).Scan(&project, &step, &description)
-		if err == sql.ErrNoRows {
-			err = r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM steps s WHERE s.to_fact_id IS NULL AND s.abandoned=0 AND s.worker IS NULL AND s.project_id IN (SELECT id FROM projects WHERE status='active' AND decide_worker IS NULL) AND NOT EXISTS(SELECT 1 FROM routes rt WHERE rt.project_id=s.project_id AND rt.id=s.route_id AND rt.status='shelved') AND NOT EXISTS (SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id) AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)) ORDER BY s.priority DESC,s.created_at LIMIT 1`, now).Scan(&project, &step, &description)
-		}
+		err := r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM steps s JOIN projects p ON p.id=s.project_id WHERE s.to_fact_id IS NULL AND s.abandoned=0 AND s.worker IS NULL AND p.status='active' AND p.decide_worker IS NULL AND (SELECT count(*) FROM steps active WHERE active.project_id=p.id AND active.to_fact_id IS NULL AND active.abandoned=0 AND active.worker IS NOT NULL AND active.worker_role='agent')<p.max_workers AND NOT EXISTS(SELECT 1 FROM routes rt WHERE rt.project_id=s.project_id AND rt.id=s.route_id AND rt.status='shelved') AND NOT EXISTS (SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id) AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)) ORDER BY s.priority DESC,s.created_at LIMIT 1`, now).Scan(&project, &step, &description)
 		if err != nil {
 			return
 		}
@@ -328,6 +334,10 @@ func (r *Runner) executeNext(ctx context.Context, identity string) {
 func (r *Runner) execute(parent context.Context, project, step, description string) (core.ConcludeResult, error) {
 	agentResult, err := r.executeForAgent(parent, project, step, description, r.workerIdentity(1))
 	if err != nil {
+		var status string
+		if queryErr := r.DB.SQL.QueryRowContext(parent, `SELECT status FROM worker_execute_recovery WHERE project_id=? AND step_id=?`, project, step).Scan(&status); queryErr == nil && status == "summary_pending" {
+			return r.executeAsDispatcherCommit(parent, project, step, description, r.dispatcherIdentity(project))
+		}
 		return core.ConcludeResult{}, err
 	}
 	if agentResult.Step != nil && agentResult.Step.To != nil {
@@ -399,11 +409,15 @@ func (r *Runner) executeAsRole(parent context.Context, project, step, descriptio
 	}
 	leaseCtx, cancel := context.WithCancel(parent)
 	defer cancel()
-	if _, err := r.DB.HeartbeatStep(leaseCtx, project, step, worker); err != nil {
+	claimStep := r.DB.HeartbeatStep
+	if taskType == "dispatch_commit" {
+		claimStep = r.DB.HeartbeatStepAsDispatcher
+	}
+	if _, err := claimStep(leaseCtx, project, step, worker); err != nil {
 		r.historyFinish(history, "claim_failed", err.Error())
 		return core.ConcludeResult{}, err
 	}
-	stopHeartbeat := r.keepStepAlive(leaseCtx, cancel, project, step, worker, history)
+	stopHeartbeat := r.keepStepAlive(leaseCtx, cancel, project, step, worker, history, taskType == "dispatch_commit")
 	defer func() {
 		if stopHeartbeat != nil {
 			stopHeartbeat()
@@ -442,7 +456,10 @@ func (r *Runner) executeAsRole(parent context.Context, project, step, descriptio
 				return core.ConcludeResult{}, err
 			}
 		}
-		workspace, workspaceErr := r.ensureWorkspace(project, cfg)
+		workspace, workspaceErr := r.ensureWorkspace(project, cfg, worker)
+		if checkpoint != nil && checkpoint.status == "summary_pending" && checkpoint.workspace != "" {
+			workspace, workspaceErr = r.recoveryWorkspace(project, cfg, checkpoint, workspace)
+		}
 		if workspaceErr != nil {
 			r.markExecuteAttention(project, step)
 			r.releaseStep(project, step, worker)
@@ -471,7 +488,9 @@ func (r *Runner) executeAsRole(parent context.Context, project, step, descriptio
 					var recoveryStatus string
 					_ = r.DB.SQL.QueryRow(`SELECT status FROM worker_execute_recovery WHERE project_id=? AND step_id=?`, project, step).Scan(&recoveryStatus)
 					if recoveryStatus == "summary_pending" {
-						status, outcome = "summary_pending", "failed"
+						status, outcome = "summary_pending", "released"
+					} else if recoveryStatus == "needs_attention" {
+						outcome = "released"
 					}
 				}
 				r.historyFinish(history, status, err.Error())
@@ -676,6 +695,16 @@ func (r *Runner) nextDecideProject(ctx context.Context) string {
 	return ""
 }
 
+// A needs_attention checkpoint is deliberately excluded from the set of
+// executable steps that keeps a project in the execute phase. Its evidence
+// remains visible in the decision model, but after recovery is exhausted the
+// dispatcher must be able to ask the LLM for an alternative route.
+func (r *Runner) stepNeedsAttention(ctx context.Context, project, step string) bool {
+	var attention bool
+	err := r.DB.SQL.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM worker_execute_recovery WHERE project_id=? AND step_id=? AND status='needs_attention')`, project, step).Scan(&attention)
+	return err != nil || attention
+}
+
 func (r *Runner) decideProject(parent context.Context, project string) {
 	r.decideProjectAs(parent, project, r.dispatcherIdentity(project))
 }
@@ -686,6 +715,9 @@ func (r *Runner) dispatchProject(ctx context.Context, project string) {
 		return
 	}
 	if r.commitNextStepResult(ctx, project) {
+		return
+	}
+	if r.waitForResultBeforeDecide(ctx, project) {
 		return
 	}
 	events, err := r.DB.PendingDecideEvents(ctx, project)
@@ -715,7 +747,7 @@ func (r *Runner) dispatchProject(ctx context.Context, project string) {
 		}
 	}
 	for _, step := range detail.Steps {
-		if step.To == nil && !step.Abandoned && (step.RouteID == nil || !shelved[*step.RouteID]) {
+		if step.To == nil && !step.Abandoned && !r.stepNeedsAttention(ctx, project, step.ID) && (step.RouteID == nil || !shelved[*step.RouteID]) {
 			return
 		}
 	}
@@ -732,8 +764,7 @@ func (r *Runner) dispatchProject(ctx context.Context, project string) {
 }
 
 func (r *Runner) commitNextStepResult(ctx context.Context, project string) bool {
-	var step, description string
-	err := r.DB.SQL.QueryRowContext(ctx, `SELECT s.id,s.description FROM worker_execute_recovery x JOIN steps s ON s.project_id=x.project_id AND s.id=x.step_id WHERE x.project_id=? AND x.status='commit_pending' AND x.payload_json<>'' AND s.to_fact_id IS NULL AND s.abandoned=0 ORDER BY x.created_at LIMIT 1`, project).Scan(&step, &description)
+	_, step, description, err := r.nextStepCommit(ctx, project)
 	if err != nil {
 		return false
 	}
@@ -798,7 +829,7 @@ func (r *Runner) decideProjectAs(parent context.Context, project, worker string)
 		}
 	}
 	var payload []byte
-	workspace, workspaceErr := r.ensureWorkspace(project, cfg)
+	workspace, workspaceErr := r.ensureWorkspace(project, cfg, worker)
 	if workspaceErr != nil {
 		r.releaseDecide(project, worker)
 		r.historyFinish(history, "failed", workspaceErr.Error())
@@ -903,6 +934,7 @@ Step readiness and scheduling:
 - Every proposed step must be executable now. Its from array must cite existing project facts that establish all prerequisites; do not treat planned actions as established facts.
 - Multiple steps in one response must be independently executable. Defer a dependent step until its prerequisite result is recorded as a fact, then cite that fact in from.
 - Larger Step priority numbers execute first. Use equal priorities for equally urgent steps. Priority, step IDs and array order do not establish dependencies.
+- Execution workers are assigned later. Express new output paths in step descriptions as the literal ${HOTMOUSE_WORKSPACE_DIR}/<relative-path>; never substitute this planning session's cwd or another worker's directory. Keep existing input/evidence paths as absolute read-only references.
 
 Set route_id to an existing route; continuing from a result automatically inherits its route. Review decide_events, route budgets and shelved reasons before adding work. Use route_updates to shelve or reopen an existing route with a reason, reopen_condition and next_direction; increase exhausted budgets before reopening. Do not invent fact, goal, or step IDs. Update only steps marked can_update. Claimed, closed or recovering steps cannot be changed. Do not replace a needs_attention step with the same external action; preserve its evidence and checkpoint for human review. If there are no open steps, do not return an empty data object.
 
@@ -1222,7 +1254,11 @@ func (r *Runner) workspaceRoot(cfg workerConfig) (string, error) {
 	return root, nil
 }
 
-func (r *Runner) ensureWorkspace(project string, cfg workerConfig) (string, error) {
+func (r *Runner) ensureWorkspace(project string, cfg workerConfig, identities ...string) (string, error) {
+	identity := r.workerIdentity(1)
+	if len(identities) > 0 && strings.TrimSpace(identities[0]) != "" {
+		identity = strings.TrimSpace(identities[0])
+	}
 	unlock := r.lockWorkspace(project)
 	defer unlock()
 	if filepath.Base(project) != project || project == "." || project == ".." {
@@ -1276,7 +1312,101 @@ func (r *Runner) ensureWorkspace(project string, cfg workerConfig) (string, erro
 	} else {
 		return "", readErr
 	}
-	return dir, nil
+	workersDir := filepath.Join(dir, "workers")
+	if err := ensureOwnedDirectory(workersDir); err != nil {
+		return "", fmt.Errorf("create worker workspace pool: %w", err)
+	}
+	workerDir := filepath.Join(workersDir, workspaceDirectoryName(identity))
+	createdWorkerDir, err := ensureOwnedDirectoryWithStatus(workerDir)
+	if err != nil {
+		return "", fmt.Errorf("create worker workspace: %w", err)
+	}
+	workerMarker := filepath.Join(workerDir, ".hotmouse-worker")
+	workerMarkerInfo, workerMarkerErr := os.Lstat(workerMarker)
+	if workerMarkerErr == nil && !workerMarkerInfo.Mode().IsRegular() {
+		return "", fmt.Errorf("worker workspace marker is not a regular file")
+	}
+	if b, readErr := os.ReadFile(workerMarker); readErr == nil {
+		if string(b) != r.DB.WorkerWorkspaceMarker(project, identity) {
+			return "", fmt.Errorf("worker workspace marker belongs to another worker")
+		}
+	} else if os.IsNotExist(readErr) {
+		entries, readDirErr := os.ReadDir(workerDir)
+		if readDirErr != nil {
+			return "", readDirErr
+		}
+		if !createdWorkerDir || len(entries) != 0 {
+			return "", fmt.Errorf("worker workspace exists without a HotMouse marker")
+		}
+		if err := os.WriteFile(workerMarker, []byte(r.DB.WorkerWorkspaceMarker(project, identity)), 0o600); err != nil {
+			return "", err
+		}
+	} else {
+		return "", readErr
+	}
+	return workerDir, nil
+}
+
+func workspaceDirectoryName(identity string) string {
+	sum := sha256.Sum256([]byte(identity))
+	return fmt.Sprintf("worker-%x", sum[:8])
+}
+
+func (r *Runner) recoveryWorkspace(project string, cfg workerConfig, checkpoint *executeCheckpoint, current string) (string, error) {
+	if checkpoint.workspace == current {
+		return current, nil
+	}
+	root, err := r.workspaceRoot(cfg)
+	if err != nil {
+		return "", err
+	}
+	legacy := filepath.Join(root, project)
+	checkpointPath := filepath.Clean(checkpoint.workspace)
+	if checkpointPath == legacy {
+		info, err := os.Lstat(legacy)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("provider recovery workspace is unavailable")
+		}
+		marker, err := os.ReadFile(filepath.Join(legacy, ".hotmouse-project"))
+		if err != nil || string(marker) != r.DB.WorkspaceMarker(project) {
+			return "", fmt.Errorf("provider recovery workspace ownership check failed")
+		}
+		return legacy, nil
+	}
+	if checkpoint.workerName == "" || checkpointPath != filepath.Join(legacy, "workers", workspaceDirectoryName(checkpoint.workerName)) {
+		return "", fmt.Errorf("provider recovery workspace no longer matches the worker")
+	}
+	info, err := os.Lstat(checkpointPath)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("provider recovery workspace is unavailable")
+	}
+	marker, err := os.ReadFile(filepath.Join(checkpointPath, ".hotmouse-worker"))
+	if err != nil || string(marker) != r.DB.WorkerWorkspaceMarker(project, checkpoint.workerName) {
+		return "", fmt.Errorf("provider recovery worker ownership check failed")
+	}
+	return checkpointPath, nil
+}
+
+func ensureOwnedDirectory(path string) error {
+	_, err := ensureOwnedDirectoryWithStatus(path)
+	return err
+}
+
+func ensureOwnedDirectoryWithStatus(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return false, fmt.Errorf("workspace path is not a real directory")
+		}
+		return false, nil
+	}
+	if !os.IsNotExist(err) {
+		return false, err
+	}
+	if err := os.Mkdir(path, 0o755); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *Runner) logInvocation(cfg workerConfig, project, step, task string, argv []string) {
@@ -1339,14 +1469,47 @@ func (r *Runner) commandVars(ctx context.Context, project, step, description, gr
 		"HOTMOUSE_CONTRACT_VERSION":   "1",
 		"HOTMOUSE_WORKER_ID":          cfg.identity,
 	}
+	if workspace != "" {
+		writable := workspace
+		projectDir, err := projectDirectory(workspace)
+		if err != nil && taskType == "execute_conclude" && filepath.Base(workspace) == project {
+			// Legacy sessions ran at the project root. Preserve that cwd for
+			// resume, but keep new runtime state in the dispatcher's subtree.
+			projectDir = workspace
+			writable, err = r.ensureWorkspace(project, cfg, cfg.identity)
+		}
+		if err != nil {
+			return nil, err
+		}
+		vars["HOTMOUSE_WORKSPACE_DIR"] = writable
+		vars["HOTMOUSE_PROJECT_DIR"] = projectDir
+		if taskType == "execute" {
+			// Bind only this step's planned output placeholder. Graph facts and
+			// peer input paths retain their original locations for file handoff.
+			description = strings.ReplaceAll(description, stepOutputDirectory, writable)
+			vars["HOTMOUSE_STEP_DESCRIPTION"] = description
+		}
+		stateDir := filepath.Join(writable, ".hotmouse")
+		if err := ensureOwnedDirectory(stateDir); err != nil {
+			return nil, err
+		}
+		tmp := filepath.Join(stateDir, "tmp")
+		if err := ensureOwnedDirectory(tmp); err != nil {
+			return nil, err
+		}
+		vars["TMPDIR"], vars["TMP"], vars["TEMP"] = tmp, tmp, tmp
+		access, err := workspaceAccess(projectDir, writable, taskType)
+		if err != nil {
+			return nil, err
+		}
+		vars["HOTMOUSE_WORKSPACE_ACCESS"] = access
+	}
 	if taskType == "execute" {
 		vars["HOTMOUSE_WORKER_PROMPT"] = executePrompt(graph, step, description)
 	} else {
 		vars["HOTMOUSE_WORKER_PROMPT"] = decidePrompt(graph)
 	}
-	if workspace != "" {
-		vars["HOTMOUSE_WORKSPACE_DIR"] = workspace
-	}
+	vars["HOTMOUSE_WORKER_PROMPT"] += vars["HOTMOUSE_WORKSPACE_ACCESS"]
 	if root, err := r.workspaceRoot(cfg); err == nil {
 		vars["HOTMOUSE_WORKSPACE_ROOT"] = root
 	}
@@ -1373,9 +1536,13 @@ func (r *Runner) commandVars(ctx context.Context, project, step, description, gr
 	return vars, nil
 }
 
-func (r *Runner) keepStepAlive(ctx context.Context, cancel context.CancelFunc, p, s, worker string, history int64) func() {
+func (r *Runner) keepStepAlive(ctx context.Context, cancel context.CancelFunc, p, s, worker string, history int64, dispatcher bool) func() {
 	return r.heartbeat(ctx, cancel, func() error {
-		if _, err := r.DB.HeartbeatStep(ctx, p, s, worker); err != nil {
+		claimStep := r.DB.HeartbeatStep
+		if dispatcher {
+			claimStep = r.DB.HeartbeatStepAsDispatcher
+		}
+		if _, err := claimStep(ctx, p, s, worker); err != nil {
 			return err
 		}
 		_, err := r.DB.SQL.ExecContext(ctx, `UPDATE worker_task_history SET last_activity_at=? WHERE id=? AND finished_at IS NULL`, time.Now().UTC().Format(time.RFC3339Nano), history)

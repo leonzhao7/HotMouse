@@ -22,11 +22,11 @@ CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), step_ti
 INSERT OR IGNORE INTO settings(id) VALUES(1);
 CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0);
 INSERT OR IGNORE INTO counters(name,value) VALUES('project',0);
-CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','stopped','completed')), bootstrap_enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, decide_worker TEXT, decide_trigger TEXT, decide_started_at TEXT, decide_last_heartbeat_at TEXT);
+CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','stopped','completed')), bootstrap_enabled INTEGER NOT NULL DEFAULT 1, max_workers INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, decide_worker TEXT, decide_trigger TEXT, decide_started_at TEXT, decide_last_heartbeat_at TEXT);
 CREATE TABLE IF NOT EXISTS facts (id TEXT NOT NULL, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, description TEXT NOT NULL, PRIMARY KEY(id,project_id));
 CREATE TABLE IF NOT EXISTS goals (id TEXT NOT NULL, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, description TEXT NOT NULL, parent_goal_id TEXT, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','completed')), priority INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, completed_at TEXT, completion_description TEXT, completed_by TEXT, PRIMARY KEY(id,project_id), FOREIGN KEY(parent_goal_id,project_id) REFERENCES goals(id,project_id));
 CREATE TABLE IF NOT EXISTS goal_sources (goal_id TEXT NOT NULL, project_id TEXT NOT NULL, fact_id TEXT NOT NULL, PRIMARY KEY(goal_id,project_id,fact_id), FOREIGN KEY(goal_id,project_id) REFERENCES goals(id,project_id) ON DELETE CASCADE, FOREIGN KEY(fact_id,project_id) REFERENCES facts(id,project_id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS steps (id TEXT NOT NULL, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, to_fact_id TEXT, description TEXT NOT NULL, goal_id TEXT, priority INTEGER NOT NULL DEFAULT 0, creator TEXT NOT NULL, worker TEXT, last_heartbeat_at TEXT, created_at TEXT NOT NULL, concluded_at TEXT, abandoned INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(id,project_id), FOREIGN KEY(goal_id,project_id) REFERENCES goals(id,project_id));
+CREATE TABLE IF NOT EXISTS steps (id TEXT NOT NULL, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, to_fact_id TEXT, description TEXT NOT NULL, goal_id TEXT, priority INTEGER NOT NULL DEFAULT 0, creator TEXT NOT NULL, worker TEXT, worker_role TEXT NOT NULL DEFAULT 'agent' CHECK(worker_role IN ('agent','dispatcher')), last_heartbeat_at TEXT, created_at TEXT NOT NULL, concluded_at TEXT, abandoned INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(id,project_id), FOREIGN KEY(goal_id,project_id) REFERENCES goals(id,project_id));
 CREATE TABLE IF NOT EXISTS step_sources (step_id TEXT NOT NULL, project_id TEXT NOT NULL, fact_id TEXT NOT NULL, PRIMARY KEY(step_id,project_id,fact_id), FOREIGN KEY(step_id,project_id) REFERENCES steps(id,project_id) ON DELETE CASCADE, FOREIGN KEY(fact_id,project_id) REFERENCES facts(id,project_id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS findings (id TEXT NOT NULL, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, title TEXT NOT NULL, description TEXT NOT NULL, severity TEXT NOT NULL DEFAULT 'info', kind TEXT NOT NULL DEFAULT 'finding', data_json TEXT NOT NULL DEFAULT '{}', fact_id TEXT, created_at TEXT NOT NULL, PRIMARY KEY(id,project_id), FOREIGN KEY(fact_id,project_id) REFERENCES facts(id,project_id));
 CREATE TABLE IF NOT EXISTS vulnerabilities (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, finding_id TEXT NOT NULL, fact_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL, severity TEXT NOT NULL CHECK(severity IN ('critical','high','medium','low')), status TEXT NOT NULL DEFAULT 'confirmed' CHECK(status IN ('confirmed','ignored')), discovered_at TEXT NOT NULL, source_step_id TEXT, source_worker TEXT, source_fact_ids_json TEXT NOT NULL DEFAULT '[]', evidence_json TEXT NOT NULL DEFAULT '[]');
@@ -93,6 +93,9 @@ func Open(path string) (*DB, error) {
 	_, _ = d.Exec(`ALTER TABLE worker_config ADD COLUMN context_root TEXT NOT NULL DEFAULT ''`)
 	_, _ = d.Exec(`ALTER TABLE worker_config ADD COLUMN runtime_json TEXT NOT NULL DEFAULT '{}'`)
 	_, _ = d.Exec(`ALTER TABLE worker_config ADD COLUMN worker_count INTEGER NOT NULL DEFAULT 4`)
+	_, _ = d.Exec(`ALTER TABLE projects ADD COLUMN max_workers INTEGER NOT NULL DEFAULT 1`)
+	_, _ = d.Exec(`ALTER TABLE steps ADD COLUMN worker_role TEXT NOT NULL DEFAULT 'agent' CHECK(worker_role IN ('agent','dispatcher'))`)
+	_, _ = d.Exec(`UPDATE steps SET worker_role='dispatcher' WHERE worker LIKE '%/dispatcher/%'`)
 	if err := migrateUserIDs(d); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("migrate auth user IDs: %w", err)
@@ -108,6 +111,10 @@ func Open(path string) (*DB, error) {
 	if err := migrateExecuteRecovery(d); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("migrate worker recovery: %w", err)
+	}
+	if err := addColumnIfMissing(d, "worker_execute_recovery", "retry_after", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate worker recovery retry: %w", err)
 	}
 	if err := migrateStrategy(d); err != nil {
 		d.Close()

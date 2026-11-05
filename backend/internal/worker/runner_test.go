@@ -122,6 +122,9 @@ func TestRunnerStartsConfiguredParallelAgentWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.SQL.Exec(`UPDATE projects SET max_workers=2 WHERE id=?`, project.Project.ID); err != nil {
+		t.Fatal(err)
+	}
 	for _, description := range []string{"inspect one", "inspect two"} {
 		if _, err := db.CreateStep(t.Context(), project.Project.ID, core.CreateStep{From: []string{"origin"}, Description: description, Creator: "test"}); err != nil {
 			t.Fatal(err)
@@ -603,7 +606,8 @@ func TestExecuteUsesPerProjectWorkspaceAndContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := New(db).ExecuteNow(context.Background(), project.Project.ID, step.ID); err != nil {
+	runner := New(db)
+	if _, err := runner.ExecuteNow(context.Background(), project.Project.ID, step.ID); err != nil {
 		t.Fatal(err)
 	}
 	lines, err := os.ReadFile(marker)
@@ -611,15 +615,23 @@ func TestExecuteUsesPerProjectWorkspaceAndContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	parts := strings.Split(strings.TrimSpace(string(lines)), "\n")
-	expected := filepath.Join(workspaceRoot, project.Project.ID)
+	expected := filepath.Join(workspaceRoot, project.Project.ID, "workers", workspaceDirectoryName("local/worker/01"))
 	if len(parts) != 3 || parts[0] != expected || parts[1] != expected {
 		t.Fatalf("command workspace values=%q expected=%q", parts, expected)
 	}
 	if parts[2] != contextFile {
 		t.Fatalf("context path=%q expected=%q", parts[2], contextFile)
 	}
-	if _, err := os.Stat(filepath.Join(expected, ".hotmouse-project")); err != nil {
-		t.Fatalf("workspace marker missing: %v", err)
+	if _, err := os.Stat(filepath.Join(workspaceRoot, project.Project.ID, ".hotmouse-project")); err != nil {
+		t.Fatalf("project workspace marker missing: %v", err)
+	}
+	otherWorkspace, err := runner.ensureWorkspace(project.Project.ID, runner.config(context.Background()), "local/worker/02")
+	if err != nil || otherWorkspace == expected {
+		t.Fatalf("workers did not receive isolated workspaces: first=%q second=%q err=%v", expected, otherWorkspace, err)
+	}
+	dispatcherWorkspace, err := runner.ensureWorkspace(project.Project.ID, runner.config(context.Background()), runner.dispatcherIdentity(project.Project.ID))
+	if err != nil || dispatcherWorkspace == expected || dispatcherWorkspace == otherWorkspace {
+		t.Fatalf("dispatcher did not receive an isolated workspace: agent1=%q agent2=%q dispatcher=%q err=%v", expected, otherWorkspace, dispatcherWorkspace, err)
 	}
 	mergedContext, err := os.ReadFile(contextMarker)
 	if err != nil || !strings.Contains(string(mergedContext), "project-policy") || !strings.Contains(string(mergedContext), "project-host") || !strings.Contains(string(mergedContext), "target") {
