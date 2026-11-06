@@ -124,11 +124,11 @@ export default function Workers() {
           hint="含需要恢复的任务"
         />
         <Metric
-          title="需要人工关注"
+          title="执行失败的步骤"
           value={observation.data?.summary.attention_steps}
           icon={Monitor}
           tone="red"
-          hint={`${observation.data?.summary.summary_pending_steps || 0} 个待总结步骤`}
+          hint={`${observation.data?.summary.summary_pending_steps || 0} 个恢复中步骤`}
         />
       </div>
       <div className="worker-page-grid">

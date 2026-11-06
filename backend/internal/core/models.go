@@ -39,6 +39,7 @@ type Step struct {
 	LLMResponse         string           `json:"llm_response,omitempty" yaml:"llm_response,omitempty"`
 	LLMResponseRecorded bool             `json:"llm_response_recorded" yaml:"llm_response_recorded,omitempty"`
 	LLMResponseError    string           `json:"llm_response_error,omitempty" yaml:"llm_response_error,omitempty"`
+	RecoveryStatus      string           `json:"recovery_status,omitempty" yaml:"recovery_status,omitempty"`
 }
 
 type Finding struct {
@@ -70,6 +71,7 @@ type Project struct {
 	ID               string       `json:"id" yaml:"id"`
 	Title            string       `json:"title" yaml:"title"`
 	Status           string       `json:"status" yaml:"status"`
+	FailureReason    string       `json:"failure_reason,omitempty" yaml:"failure_reason,omitempty"`
 	BootstrapEnabled bool         `json:"bootstrap_enabled" yaml:"bootstrap_enabled"`
 	MaxWorkers       int          `json:"max_workers" yaml:"max_workers"`
 	CreatedAt        string       `json:"created_at" yaml:"created_at"`

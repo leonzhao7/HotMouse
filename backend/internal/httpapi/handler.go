@@ -420,7 +420,7 @@ func (h *Handler) SettingsHealth(ctx iris.Context) {
 	}
 	alerts := []iris.Map{}
 	if recoveryAttention > 0 {
-		alerts = append(alerts, iris.Map{"level": "warning", "title": "Worker steps need attention", "detail": fmt.Sprintf("%d interrupted or unrecoverable Execute step(s) are held to prevent repeating external actions.", recoveryAttention)})
+		alerts = append(alerts, iris.Map{"level": "warning", "title": "Worker step execution failed", "detail": fmt.Sprintf("%d interrupted or unrecoverable Execute step(s) could not be completed.", recoveryAttention)})
 	}
 	if idleHours < 1 {
 		idleHours = 12

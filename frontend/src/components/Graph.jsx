@@ -23,6 +23,7 @@ export default function Graph({ detail, selection, onSelect }) {
       green: dark ? "#65cf85" : "#238a48",
       blue: dark ? "#81b5ff" : "#3779bc",
       amber: dark ? "#dfb66c" : "#b98324",
+      red: dark ? "#ff7a7a" : "#c43d3d",
     };
     const cy = cytoscape({
       container: container.current,
@@ -90,6 +91,14 @@ export default function Graph({ detail, selection, onSelect }) {
             "border-width": 2.5,
           },
         },
+        {
+          selector: 'node[status="failed"]',
+          style: {
+            "border-color": colors.red,
+            "border-style": "solid",
+            "border-width": 2.5,
+          },
+        },
         { selector: 'node[status="abandoned"]', style: { opacity: 0.45 } },
         {
           selector: "edge",
@@ -130,6 +139,13 @@ export default function Graph({ detail, selection, onSelect }) {
             "line-color": colors.blue,
             "target-arrow-color": colors.blue,
             width: 2,
+          },
+        },
+        {
+          selector: 'edge[status="failed"]',
+          style: {
+            "line-color": colors.red,
+            "target-arrow-color": colors.red,
           },
         },
         {

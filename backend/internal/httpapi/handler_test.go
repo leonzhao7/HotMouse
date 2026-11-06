@@ -837,7 +837,7 @@ func TestSettingsHealthSurfacesInterruptedExecuteRecovery(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &health); err != nil {
 		t.Fatal(err)
 	}
-	if response.Code != 200 || health.Summary.Status != "warning" || health.Stats.RecoveryAttention != 1 || len(health.Alerts) == 0 || health.Alerts[0].Title != "Worker steps need attention" {
+	if response.Code != 200 || health.Summary.Status != "warning" || health.Stats.RecoveryAttention != 1 || len(health.Alerts) == 0 || health.Alerts[0].Title != "Worker step execution failed" {
 		t.Fatalf("interrupted execution was not visible in health: status=%d body=%s", response.Code, response.Body.String())
 	}
 	var observability struct {

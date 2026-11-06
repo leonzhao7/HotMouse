@@ -275,7 +275,7 @@ func recordResultTx(t *sql.Tx, project, step string, result ExecutionResult) err
 			return err
 		}
 		if result.Type == "needs_attention" {
-			if err := shelveRouteTx(t, project, route.String, "needs_attention", result.Detail, "Review the saved evidence and checkpoint"); err != nil {
+			if err := shelveRouteTx(t, project, route.String, "needs_attention", result.Detail, "Try an independent route; fail the project if none can advance the goal"); err != nil {
 				return err
 			}
 		}

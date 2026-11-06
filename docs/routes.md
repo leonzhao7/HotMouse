@@ -18,6 +18,10 @@ Core routes:
 
 Each active project has one Dispatcher for planning, recovery summaries, and committing Agent Worker results. Agent Workers execute steps only. Each worker identity receives a separate cwd under its project's marked workspace and gets `HOTMOUSE_PROJECT_ID`, `HOTMOUSE_STEP_ID`, `HOTMOUSE_STEP_DESCRIPTION`, `HOTMOUSE_WORKSPACE_DIR`, and (when configured) project context variables. `max_workers` on a project defaults to 1, is configurable from 1 to 32 via project creation or `PUT /projects/{id}/worker-limit`, and is enforced transactionally during step claims. Global pool size remains configured through `/api/workers/config`. Empty command uses the mock driver. `completed_action=remove` deletes only workspaces carrying the matching `.hotmouse-project` marker.
 
+After a successful decision, an active project with remaining goals is marked `failed` when the current graph has no executable steps, pending decisions, or in-flight recovery work. The failure reason is included in project details. `project resume` clears the failure and queues a fresh decision.
+
+Planning also stops after three consecutive provider failures, timeouts, rejections, or invalid decisions for the same graph and event batch when no executable or recovering work remains. Counts survive restarts; new input or a successful decision resets the allowance. Pending events from failed planning do not keep the project active indefinitely.
+
 The worker connection test and health summary currently verify local command or CLI availability (`--version` for built-in providers). Provider credentials, model access and network reachability are not validated here. For Pi, `PI_CLI` can name the executable used by provider execution and local CLI health checks.
 
 Lease expiry is observable protocol behavior. Project list/detail, Campaign, and project graph YAML/timeline exports reclaim expired Step and Decide leases. The product timeline, project title/delete, Step patch, and native Goal completion do not reclaim leases. Status changes, legacy project completion, and reopen reclaim only Decide leases; stopping/completing a project also clears open Step workers.

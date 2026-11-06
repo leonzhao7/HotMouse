@@ -72,6 +72,10 @@ test("step state prioritizes conclusions, then abandonment, then ownership", () 
     "concluded",
   );
   assert.equal(stepStatus({ abandoned: true, worker: "local" }), "abandoned");
+  assert.equal(
+    stepStatus({ recovery_status: "needs_attention" }),
+    "failed",
+  );
   assert.equal(stepStatus({ worker: "local" }), "working");
   assert.equal(stepStatus({}), "pending");
 });

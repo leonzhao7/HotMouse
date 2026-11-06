@@ -101,6 +101,28 @@ func TestExpiredStepLeaseCanBeReclaimedOnHeartbeat(t *testing.T) {
 	}
 }
 
+func TestProjectStepsExposeRecoveryStatus(t *testing.T) {
+	db := testDB(t)
+	project, err := db.CreateProject(t.Context(), CreateProject{Title: "recovery", Origin: "target", Goal: "verify"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	step, err := db.CreateStep(t.Context(), project.Project.ID, CreateStep{From: []string{"origin"}, Description: "inspect", Creator: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO worker_execute_recovery(project_id,step_id,status,created_at) VALUES(?,?,'needs_attention',?)`, project.Project.ID, step.ID, now()); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := db.GetProject(t.Context(), project.Project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Steps) != 1 || detail.Steps[0].RecoveryStatus != "needs_attention" {
+		t.Fatalf("step recovery status not exposed: %+v", detail.Steps)
+	}
+}
+
 func TestProjectWorkerLimitDefaultsAndEnforcesClaims(t *testing.T) {
 	db := testDB(t)
 	project, err := db.CreateProject(t.Context(), CreateProject{Title: "limit", Origin: "target", Goal: "verify"})

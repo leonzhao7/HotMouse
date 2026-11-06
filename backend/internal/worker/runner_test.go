@@ -353,7 +353,7 @@ func TestInterruptedExecuteRequiresAttentionInsteadOfReplayingExternalAction(t *
 	if err := db.SQL.QueryRow(`SELECT count(*) FROM worker_task_history WHERE step_id=?`, step.ID).Scan(&historyCount); err != nil || historyCount != 1 {
 		t.Fatalf("operator-attention task was retried: history=%d err=%v", historyCount, err)
 	}
-	if _, err := runner.ExecuteNow(ctx, project.Project.ID, step.ID); err == nil || !strings.Contains(err.Error(), "operator attention") {
+	if _, err := runner.ExecuteNow(ctx, project.Project.ID, step.ID); err == nil || !strings.Contains(err.Error(), "cannot be replayed") {
 		t.Fatalf("interrupted task was not blocked from explicit replay: %v", err)
 	}
 	calls, err = os.ReadFile(marker)
@@ -730,5 +730,50 @@ func TestCompletedWorkspaceRemovalRequiresMarker(t *testing.T) {
 	runner.cleanupCompletedWorkspaces(context.Background())
 	if _, err := os.Stat(crashedWorkspace); !os.IsNotExist(err) {
 		t.Fatalf("completed workspace was not recovered after worker restart window: %v", err)
+	}
+}
+
+func TestDispatcherFailsStalledProjectAfterLastDecision(t *testing.T) {
+	db, err := core.Open(filepath.Join(t.TempDir(), "stalled-project.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.SQL.Close()
+	project, err := db.CreateProject(t.Context(), core.CreateProject{Title: "stalled", Origin: "target", Goal: "verify"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	step, err := db.CreateStep(t.Context(), project.Project.ID, core.CreateStep{From: []string{"origin"}, Description: "inspect", Creator: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`UPDATE routes SET status='shelved' WHERE project_id=? AND id=?`, project.Project.ID, *step.RouteID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO worker_execute_recovery(project_id,step_id,status,created_at) VALUES(?,?,'needs_attention',?)`, project.Project.ID, step.ID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`UPDATE decide_events SET handled_at=? WHERE project_id=?`, time.Now().UTC().Format(time.RFC3339Nano), project.Project.ID); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := db.GetProject(t.Context(), project.Project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := graphFingerprint(detail)
+	withoutRecovery := detail
+	withoutRecovery.Steps = append([]core.Step(nil), detail.Steps...)
+	withoutRecovery.Steps[0].RecoveryStatus = ""
+	if graphFingerprint(withoutRecovery) != fingerprint {
+		t.Fatal("recovery display metadata changed the decision fingerprint")
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO worker_decide_state(project_id,fingerprint,updated_at) VALUES(?,?,?)`, project.Project.ID, fingerprint, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	runner := New(db)
+	runner.dispatchProject(t.Context(), project.Project.ID)
+	updated, err := db.GetProject(t.Context(), project.Project.ID)
+	if err != nil || updated.Project.Status != "failed" || updated.Project.FailureReason == "" {
+		t.Fatalf("dispatcher left a stalled project active: project=%+v err=%v", updated.Project, err)
 	}
 }

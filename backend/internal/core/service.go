@@ -32,11 +32,14 @@ func nextID(tx *sql.Tx, project, kind, prefix string) (string, error) {
 	}
 	return fmt.Sprintf("%s%03d", prefix, n), nil
 }
+
+const projectSelectColumns = `id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at,failure_reason`
+
 func projectFrom(row interface{ Scan(...any) error }) (Project, error) {
 	var p Project
 	var boot int
 	var dw, dt, ds, dh sql.NullString
-	err := row.Scan(&p.ID, &p.Title, &p.Status, &boot, &p.MaxWorkers, &p.CreatedAt, &dw, &dt, &ds, &dh)
+	err := row.Scan(&p.ID, &p.Title, &p.Status, &boot, &p.MaxWorkers, &p.CreatedAt, &dw, &dt, &ds, &dh, &p.FailureReason)
 	if err != nil {
 		return p, err
 	}
@@ -49,7 +52,7 @@ func projectFrom(row interface{ Scan(...any) error }) (Project, error) {
 func queryProject(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, id string) (Project, error) {
-	return projectFrom(q.QueryRowContext(ctx, `SELECT id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, id))
+	return projectFrom(q.QueryRowContext(ctx, `SELECT `+projectSelectColumns+` FROM projects WHERE id=?`, id))
 }
 
 func (d *DB) CreateProject(ctx context.Context, req CreateProject) (ProjectDetail, error) {
@@ -173,7 +176,7 @@ func (d *DB) getProjectTx(ctx context.Context, q queryer, id string) (ProjectDet
 	for i, goalID := range goalIDs {
 		out.Goals[i].From = goalSources(q, id, goalID)
 	}
-	rows, err = q.QueryContext(ctx, `SELECT id,to_fact_id,description,goal_id,priority,creator,worker,last_heartbeat_at,created_at,concluded_at,abandoned,route_id,result_json,llm_response,llm_response_recorded,llm_response_error FROM steps WHERE project_id=? ORDER BY priority DESC,created_at`, id)
+	rows, err = q.QueryContext(ctx, `SELECT id,to_fact_id,description,goal_id,priority,creator,worker,last_heartbeat_at,created_at,concluded_at,abandoned,route_id,result_json,llm_response,llm_response_recorded,llm_response_error,COALESCE((SELECT status FROM worker_execute_recovery x WHERE x.project_id=steps.project_id AND x.step_id=steps.id),'') FROM steps WHERE project_id=? ORDER BY priority DESC,created_at`, id)
 	if err != nil {
 		return out, err
 	}
@@ -183,7 +186,7 @@ func (d *DB) getProjectTx(ctx context.Context, q queryer, id string) (ProjectDet
 		var to, g, w, h, co, route sql.NullString
 		var resultJSON string
 		var ab int
-		if err = rows.Scan(&x.ID, &to, &x.Description, &g, &x.Priority, &x.Creator, &w, &h, &x.CreatedAt, &co, &ab, &route, &resultJSON, &x.LLMResponse, &x.LLMResponseRecorded, &x.LLMResponseError); err != nil {
+		if err = rows.Scan(&x.ID, &to, &x.Description, &g, &x.Priority, &x.Creator, &w, &h, &x.CreatedAt, &co, &ab, &route, &resultJSON, &x.LLMResponse, &x.LLMResponseRecorded, &x.LLMResponseError, &x.RecoveryStatus); err != nil {
 			rows.Close()
 			return out, err
 		}
@@ -397,7 +400,7 @@ func (d *DB) HeartbeatDecide(ctx context.Context, project, worker string) (Proje
 			return err
 		}
 		var err error
-		out, err = projectFrom(t.QueryRow(`SELECT id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, project))
+		out, err = projectFrom(t.QueryRow(`SELECT `+projectSelectColumns+` FROM projects WHERE id=?`, project))
 		return err
 	})
 	return out, err
@@ -468,7 +471,7 @@ func (d *DB) ListProjects(ctx context.Context) ([]ProjectSummary, error) {
 	if _, err := d.SQL.ExecContext(ctx, `UPDATE projects SET decide_worker=NULL,decide_trigger=NULL,decide_started_at=NULL,decide_last_heartbeat_at=NULL WHERE decide_worker IS NOT NULL AND decide_last_heartbeat_at IS NOT NULL AND (julianday(?) - julianday(decide_last_heartbeat_at))*86400 > (SELECT decide_timeout FROM settings WHERE id=1)`, now()); err != nil {
 		return nil, err
 	}
-	rows, e := d.SQL.QueryContext(ctx, `SELECT id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects ORDER BY created_at`)
+	rows, e := d.SQL.QueryContext(ctx, `SELECT `+projectSelectColumns+` FROM projects ORDER BY created_at`)
 	if e != nil {
 		return nil, e
 	}
@@ -492,7 +495,7 @@ func (d *DB) ListProjects(ctx context.Context) ([]ProjectSummary, error) {
 		_ = d.SQL.QueryRow(`SELECT count(*) FROM facts WHERE project_id=?`, p.ID).Scan(&s.FactCount)
 		_ = d.SQL.QueryRow(`SELECT count(*) FROM steps WHERE project_id=?`, p.ID).Scan(&s.StepCount)
 		_ = d.SQL.QueryRow(`SELECT count(*) FROM steps WHERE project_id=? AND concluded_at IS NULL AND worker IS NOT NULL AND abandoned=0`, p.ID).Scan(&s.WorkingStepCount)
-		_ = d.SQL.QueryRow(`SELECT count(*) FROM steps WHERE project_id=? AND concluded_at IS NULL AND worker IS NULL AND abandoned=0`, p.ID).Scan(&s.UnclaimedStepCount)
+		_ = d.SQL.QueryRow(`SELECT count(*) FROM steps s LEFT JOIN routes r ON r.project_id=s.project_id AND r.id=s.route_id WHERE s.project_id=? AND s.to_fact_id IS NULL AND s.worker IS NULL AND s.abandoned=0 AND COALESCE(r.status,'active')<>'shelved' AND NOT EXISTS(SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id)`, p.ID).Scan(&s.UnclaimedStepCount)
 		_ = d.SQL.QueryRow(`SELECT count(*) FROM goals WHERE project_id=?`, p.ID).Scan(&s.GoalCount)
 		_ = d.SQL.QueryRow(`SELECT count(*) FROM findings WHERE project_id=?`, p.ID).Scan(&s.FindingCount)
 		_ = d.SQL.QueryRow(`SELECT count(*) FROM hints WHERE project_id=?`, p.ID).Scan(&s.HintCount)
@@ -505,7 +508,7 @@ func (d *DB) ListProjects(ctx context.Context) ([]ProjectSummary, error) {
 }
 
 func checkActive(t *sql.Tx, id string) (Project, error) {
-	p, e := projectFrom(t.QueryRow(`SELECT id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, id))
+	p, e := projectFrom(t.QueryRow(`SELECT `+projectSelectColumns+` FROM projects WHERE id=?`, id))
 	if e == sql.ErrNoRows {
 		return p, ErrNotFound
 	}
@@ -646,7 +649,7 @@ func (d *DB) createStepTx(ctx context.Context, t *sql.Tx, p string, r CreateStep
 func (d *DB) stepTx(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, p, id string) (Step, error) {
-	r, e := q.QueryContext(ctx, `SELECT id,to_fact_id,description,goal_id,priority,creator,worker,last_heartbeat_at,created_at,concluded_at,abandoned,route_id,result_json,llm_response,llm_response_recorded,llm_response_error FROM steps WHERE project_id=? AND id=?`, p, id)
+	r, e := q.QueryContext(ctx, `SELECT id,to_fact_id,description,goal_id,priority,creator,worker,last_heartbeat_at,created_at,concluded_at,abandoned,route_id,result_json,llm_response,llm_response_recorded,llm_response_error,COALESCE((SELECT status FROM worker_execute_recovery x WHERE x.project_id=steps.project_id AND x.step_id=steps.id),'') FROM steps WHERE project_id=? AND id=?`, p, id)
 	if e != nil {
 		return Step{}, e
 	}
@@ -658,7 +661,7 @@ func (d *DB) stepTx(ctx context.Context, q interface {
 	var to, g, w, h, c, route sql.NullString
 	var resultJSON string
 	var ab int
-	if e = r.Scan(&x.ID, &to, &x.Description, &g, &x.Priority, &x.Creator, &w, &h, &x.CreatedAt, &c, &ab, &route, &resultJSON, &x.LLMResponse, &x.LLMResponseRecorded, &x.LLMResponseError); e != nil {
+	if e = r.Scan(&x.ID, &to, &x.Description, &g, &x.Priority, &x.Creator, &w, &h, &x.CreatedAt, &c, &ab, &route, &resultJSON, &x.LLMResponse, &x.LLMResponseRecorded, &x.LLMResponseError, &x.RecoveryStatus); e != nil {
 		return x, e
 	}
 	x.To = nullable(to)
@@ -1354,7 +1357,7 @@ func (d *DB) SetProjectStatus(ctx context.Context, p, status string) (Project, e
 		if status != "active" && status != "stopped" {
 			return fmt.Errorf("invalid status")
 		}
-		if _, e := t.Exec(`UPDATE projects SET status=?,decide_worker=CASE WHEN ?='stopped' THEN NULL ELSE decide_worker END,decide_trigger=CASE WHEN ?='stopped' THEN NULL ELSE decide_trigger END,decide_started_at=CASE WHEN ?='stopped' THEN NULL ELSE decide_started_at END,decide_last_heartbeat_at=CASE WHEN ?='stopped' THEN NULL ELSE decide_last_heartbeat_at END WHERE id=?`, status, status, status, status, status, p); e != nil {
+		if _, e := t.Exec(`UPDATE projects SET status=?,failure_reason='',decide_worker=CASE WHEN ?='stopped' THEN NULL ELSE decide_worker END,decide_trigger=CASE WHEN ?='stopped' THEN NULL ELSE decide_trigger END,decide_started_at=CASE WHEN ?='stopped' THEN NULL ELSE decide_started_at END,decide_last_heartbeat_at=CASE WHEN ?='stopped' THEN NULL ELSE decide_last_heartbeat_at END WHERE id=?`, status, status, status, status, status, p); e != nil {
 			return e
 		}
 		if status == "stopped" {
@@ -1363,12 +1366,24 @@ func (d *DB) SetProjectStatus(ctx context.Context, p, status string) (Project, e
 				return e
 			}
 		}
+		if status == "active" && cur != "active" {
+			if _, e := t.Exec(`DELETE FROM worker_decide_state WHERE project_id=?`, p); e != nil {
+				return e
+			}
+			if _, e := t.Exec(`DELETE FROM worker_retry_state WHERE project_id=? AND task_type='decide'`, p); e != nil {
+				return e
+			}
+			if err := queueDecideTx(t, p, "project_resumed", ""); err != nil {
+				return err
+			}
+		}
 		var err error
-		out, err = projectFrom(t.QueryRow(`SELECT id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, p))
+		out, err = projectFrom(t.QueryRow(`SELECT `+projectSelectColumns+` FROM projects WHERE id=?`, p))
 		return err
 	})
 	return out, e
 }
+
 func (d *DB) ClaimDecide(ctx context.Context, p string, r ClaimDecide) (Project, error) {
 	var out Project
 	e := tx(ctx, d, func(t *sql.Tx) error {
@@ -1397,7 +1412,7 @@ func (d *DB) ClaimDecide(ctx context.Context, p string, r ClaimDecide) (Project,
 			return err
 		}
 		var err error
-		out, err = projectFrom(t.QueryRow(`SELECT id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, p))
+		out, err = projectFrom(t.QueryRow(`SELECT `+projectSelectColumns+` FROM projects WHERE id=?`, p))
 		return err
 	})
 	return out, e
@@ -1520,7 +1535,7 @@ func (d *DB) Reopen(ctx context.Context, p string, r Reopen) (ReopenResult, erro
 		if e != nil {
 			return e
 		}
-		pp, e := projectFrom(t.QueryRow(`SELECT id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at FROM projects WHERE id=?`, p))
+		pp, e := projectFrom(t.QueryRow(`SELECT `+projectSelectColumns+` FROM projects WHERE id=?`, p))
 		if e != nil {
 			return e
 		}

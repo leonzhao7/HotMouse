@@ -22,7 +22,7 @@ export const resultLabels = {
   blocked: "目标侧阻碍",
   environment_failure: "执行环境失败",
   no_information: "无新增信息",
-  needs_attention: "需要人工介入",
+  needs_attention: "失败",
   unclassified: "未分类",
 };
 const flagLabels = {

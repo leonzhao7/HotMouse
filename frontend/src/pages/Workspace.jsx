@@ -2,6 +2,7 @@ import { lazy, Suspense, useState } from "react";
 import {
   ArrowLeft,
   Check,
+  CircleX,
   Clock3,
   Download,
   Edit3,
@@ -174,7 +175,7 @@ export default function Workspace({ id }) {
                     停止
                   </Button>
                 )}
-                {data.project.status === "stopped" && (
+                {["stopped", "failed"].includes(data.project.status) && (
                   <Button
                     icon={Play}
                     tone="primary"
@@ -187,7 +188,7 @@ export default function Workspace({ id }) {
                       )
                     }
                   >
-                    恢复运行
+                    {data.project.status === "failed" ? "继续推进" : "恢复运行"}
                   </Button>
                 )}
                 {data.project.status === "completed" && (
@@ -261,6 +262,17 @@ export default function Workspace({ id }) {
               待执行
             </div>
             <div>
+              <CircleX size={15} />
+              <strong>
+                {
+                  data.steps.filter(
+                    (step) => stepStatus(step) === "failed",
+                  ).length
+                }
+              </strong>{" "}
+              失败
+            </div>
+            <div>
               <Play size={15} />
               <strong>
                 {
@@ -284,8 +296,10 @@ export default function Workspace({ id }) {
             />
             <span>
               {data.project.decide
-                ? `Decide 由 ${data.project.decide.worker} 认领 · ${data.project.decide.trigger}`
-                : "Decide 当前无租约"}
+                ? `正在规划下一步 · 开始于 ${formatTime(data.project.decide.started_at)}`
+                : active
+                  ? "自动调度中"
+                  : label(data.project.status)}
             </span>
             {active && (
               <Button className="subtle" onClick={() => edit("decide")}>
@@ -340,7 +354,9 @@ export default function Workspace({ id }) {
             <div className="notice">
               {data.project.status === "stopped"
                 ? "项目已停止，恢复运行后可继续添加目标、步骤和发现。"
-                : "项目已完成，重新打开后可继续推进。"}
+                : data.project.status === "failed"
+                  ? `项目失败：${data.project.failure_reason || "没有可继续执行的步骤。"}`
+                  : "项目已完成，重新打开后可继续推进。"}
             </div>
           )}
           {busy?.startsWith("execute:") && (

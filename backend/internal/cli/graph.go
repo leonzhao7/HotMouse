@@ -280,7 +280,7 @@ func (a *app) projectCommands() *cobra.Command {
 	g := group("project", "管理项目生命周期、图、Campaign 和导出")
 	listCmd := a.leaf("list", "列出全局项目；查询会回收过期租约", 0, 0, "none", func(c *cobra.Command, _ []string) (any, error) {
 		status, _ := c.Flags().GetString("status")
-		if status != "" && !oneOf(status, "active", "stopped", "completed") {
+		if status != "" && !oneOf(status, "active", "stopped", "completed", "failed") {
 			return nil, invalid("invalid project status")
 		}
 		v, e := a.get(c, "/projects")
@@ -522,7 +522,7 @@ func (a *app) projectCommands() *cobra.Command {
 		until, _ := c.Flags().GetString("until")
 		maxWait, _ := c.Flags().GetDuration("max-wait")
 		interval, _ := c.Flags().GetDuration("interval")
-		if !oneOf(until, "completed", "stopped") || maxWait <= 0 || interval < time.Second {
+		if !oneOf(until, "completed", "failed", "stopped") || maxWait <= 0 || interval < time.Second {
 			return nil, invalid("invalid wait condition, max-wait or interval")
 		}
 		ctx, cancel := context.WithTimeout(c.Context(), maxWait)
@@ -543,7 +543,7 @@ func (a *app) projectCommands() *cobra.Command {
 			if status == until {
 				return v, nil
 			}
-			if status == "completed" || status == "stopped" {
+			if status == "completed" || status == "stopped" || status == "failed" {
 				return nil, apiclient.Failure(5, "project entered unexpected terminal state: "+status)
 			}
 			fmt.Fprintf(a.errOut, "%s: %s (waiting for %s)\n", p, status, until)
@@ -559,7 +559,7 @@ func (a *app) projectCommands() *cobra.Command {
 			}
 		}
 	})
-	wait.Flags().String("until", "completed", "completed 或 stopped")
+	wait.Flags().String("until", "completed", "completed、failed 或 stopped")
 	wait.Flags().Duration("max-wait", 30*time.Minute, "等待总时限，与 HTTP timeout 不同")
 	wait.Flags().Duration("interval", 2*time.Second, "轮询间隔，最小 1s")
 	g.AddCommand(wait)

@@ -348,7 +348,7 @@ auth status 的会话通过 me 验证，mode=session、user 为用户对象；�
 
 | 命令 | 参数 / 返回 |
 | --- | --- |
-| `project list` | `--status active\|stopped\|completed`、`--query TEXT`、`--limit N`；返回 ProjectSummary 数组 |
+| `project list` | `--status active\|stopped\|completed\|failed`、`--query TEXT`、`--limit N`；返回 ProjectSummary 数组 |
 | `project show [PROJECT]` | 返回完整 ProjectDetail：project、facts、goals、steps、findings、hints；支持监看 |
 | `project create` | `--title TEXT --origin TEXT --goal TEXT` 必填；`--hint TEXT` 可重复、`--creator NAME`、`--template ID`、`--use`；支持 `--file`，返回 ProjectDetail |
 | `project use PROJECT` | 验证并保存默认项目；返回 `{project, server}` |
@@ -360,7 +360,7 @@ auth status 的会话通过 me 验证，mode=session、user 为用户对象；�
 | `project campaign [PROJECT]` | 返回服务端 Campaign 汇总原始对象；支持监看 |
 | `project timeline [PROJECT]` | 返回事件数组；`--since RFC3339`、`--limit N` 为客户端过滤；支持监看 |
 | `project export [PROJECT]` | `--format yaml\|timeline` 默认 yaml；`--out PATH`、`--overwrite` |
-| `project wait [PROJECT]` | `--until completed\|stopped` 默认 completed、`--max-wait 30m`、`--interval 2s`；返回满足条件时的 ProjectDetail |
+| `project wait [PROJECT]` | `--until completed\|stopped\|failed` 默认 completed、`--max-wait 30m`、`--interval 2s`；返回满足条件时的 ProjectDetail |
 
 创建时 title、origin、goal 都不能是空文本。使用模板时先读取模板，在客户端展开为创建请求：显式 title/origin/goal 覆盖模板对应字段，显式 hints 追加到模板 hints。模板正文中的 `[URL]` 等占位符不做自动替换，应通过 `--origin` / `--goal` 明确提供内容。`--file` 与 `--template` 互斥。
 
@@ -368,9 +368,9 @@ creator 默认取命令参数、`HOTMOUSE_CREATOR`、profile.creator，最后为
 
 `project complete` 对应已有兼容接口，由服务选择一个 active 顶层目标完成，不能用它强制设置项目为 completed。完整项目只有在所有目标均 completed 后才自动结束。确定目标的脚本优先使用 `goal complete GOAL`；不额外提供会绕过证据链的 `project update --status completed`。
 
-`project reopen` 仅适用于 completed 项目，会重新激活目标，并生成外部反馈 Step 和 Fact。stopped 项目使用 `resume`。删除当前默认项目成功后清除本地默认值；删除不额外承诺清理 Worker 工作目录。
+`project reopen` 仅适用于 completed 项目，会重新激活目标，并生成外部反馈 Step 和 Fact。stopped 项目使用 `resume`；failed 项目可用 `resume` 清除失败状态并重新触发规划。删除当前默认项目成功后清除本地默认值；删除不额外承诺清理 Worker 工作目录。
 
-`project wait` 只观察，不启动 Worker：等待 completed 时遇到 stopped 退出 5，超时退出 6；等待 stopped 时遇到 completed 退出 5。每个 HTTP 请求仍使用全局 timeout。成功前进度写入 stderr，stdout 只输出最终结果。
+`project wait` 只观察，不启动 Worker：等待 completed 时遇到 stopped 或 failed 退出 5；等待 stopped 时遇到 completed 或 failed 退出 5；等待 failed 时遇到 completed 或 stopped 退出 5。超时退出 6。每个 HTTP 请求仍使用全局 timeout。成功前进度写入 stderr，stdout 只输出最终结果。
 
 `project export` 将后端原生 YAML 或 timeline 文本写入 stdout 或 `--out` 文件，不使用通用 JSON 包装，拒绝 `--output`、`--select` 和 `--watch`。`--out -` 等同 stdout；文件已存在时必须提供 `--overwrite`，`--yes` 不代替此参数。文件写入采用临时文件加原子替换。
 

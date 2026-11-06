@@ -170,6 +170,7 @@ export default function Dashboard() {
             {[
               ["active", "运行中"],
               ["completed", "已完成"],
+              ["failed", "失败"],
               ["stopped", "已停止"],
             ].map(([key, name]) => (
               <div key={key}>
@@ -221,7 +222,7 @@ export default function Dashboard() {
             </div>
             {(summary?.attention_steps || 0) > 0 && (
               <a className="notice amber" href="#/workers">
-                {summary.attention_steps} 个步骤需要人工关注
+                {summary.attention_steps} 个步骤执行失败
               </a>
             )}
             <div className="panel-bottom">

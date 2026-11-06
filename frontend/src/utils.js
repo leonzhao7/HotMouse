@@ -13,6 +13,7 @@ export const labels = {
   info: "信息",
   confirmed: "已确认",
   ignored: "已忽略",
+  failed: "失败",
   idle: "空闲",
   busy: "忙碌",
   offline: "离线",
@@ -24,7 +25,6 @@ export const labels = {
   in_progress: "推进中",
   blocked: "待推进",
   success: "成功",
-  failed: "失败",
   rejected: "已拒绝",
   released: "已释放",
   step_declaration: "声明步骤",
@@ -48,6 +48,7 @@ export const tones = {
   info: "muted",
   confirmed: "green",
   ignored: "muted",
+  failed: "red",
   idle: "green",
   busy: "blue",
   offline: "red",
@@ -59,7 +60,6 @@ export const tones = {
   in_progress: "blue",
   blocked: "amber",
   success: "green",
-  failed: "red",
   rejected: "amber",
   released: "muted",
 };
@@ -68,9 +68,11 @@ export const stepStatus = (step) =>
     ? "concluded"
     : step.abandoned
       ? "abandoned"
-      : step.worker
-        ? "working"
-        : "pending";
+      : step.recovery_status === "needs_attention"
+        ? "failed"
+        : step.worker
+          ? "working"
+          : "pending";
 export const formatTime = (value) =>
   value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "—";
 export const shortTime = (value) =>

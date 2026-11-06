@@ -63,6 +63,7 @@ export default function Projects() {
             ["active", "运行中"],
             ["stopped", "已停止"],
             ["completed", "已完成"],
+            ["failed", "失败"],
           ].map(([key, name]) => (
             <button
               key={key}

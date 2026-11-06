@@ -42,6 +42,9 @@ func migrateStrategy(d *sql.DB) error {
 		{"steps", "llm_response_recorded", `INTEGER NOT NULL DEFAULT 0`},
 		{"steps", "llm_response_error", `TEXT NOT NULL DEFAULT ''`},
 		{"worker_task_history", "last_activity_at", `TEXT`},
+		{"projects", "failure_reason", `TEXT NOT NULL DEFAULT ''`},
+		{"worker_retry_state", "graph_fingerprint", `TEXT NOT NULL DEFAULT ''`},
+		{"worker_retry_state", "event_through", `INTEGER NOT NULL DEFAULT 0`},
 	} {
 		if err := addColumn(d, col.table, col.name, col.decl); err != nil {
 			return err

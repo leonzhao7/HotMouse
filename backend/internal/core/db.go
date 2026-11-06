@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), step_ti
 INSERT OR IGNORE INTO settings(id) VALUES(1);
 CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0);
 INSERT OR IGNORE INTO counters(name,value) VALUES('project',0);
-CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','stopped','completed')), bootstrap_enabled INTEGER NOT NULL DEFAULT 1, max_workers INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, decide_worker TEXT, decide_trigger TEXT, decide_started_at TEXT, decide_last_heartbeat_at TEXT);
+CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','stopped','completed','failed')), failure_reason TEXT NOT NULL DEFAULT '', bootstrap_enabled INTEGER NOT NULL DEFAULT 1, max_workers INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, decide_worker TEXT, decide_trigger TEXT, decide_started_at TEXT, decide_last_heartbeat_at TEXT);
 CREATE TABLE IF NOT EXISTS facts (id TEXT NOT NULL, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, description TEXT NOT NULL, PRIMARY KEY(id,project_id));
 CREATE TABLE IF NOT EXISTS goals (id TEXT NOT NULL, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, description TEXT NOT NULL, parent_goal_id TEXT, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','completed')), priority INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, completed_at TEXT, completion_description TEXT, completed_by TEXT, PRIMARY KEY(id,project_id), FOREIGN KEY(parent_goal_id,project_id) REFERENCES goals(id,project_id));
 CREATE TABLE IF NOT EXISTS goal_sources (goal_id TEXT NOT NULL, project_id TEXT NOT NULL, fact_id TEXT NOT NULL, PRIMARY KEY(goal_id,project_id,fact_id), FOREIGN KEY(goal_id,project_id) REFERENCES goals(id,project_id) ON DELETE CASCADE, FOREIGN KEY(fact_id,project_id) REFERENCES facts(id,project_id) ON DELETE CASCADE);
@@ -119,6 +119,10 @@ func Open(path string) (*DB, error) {
 	if err := migrateStrategy(d); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("migrate strategy and memory: %w", err)
+	}
+	if err := migrateProjectFailure(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate project failure state: %w", err)
 	}
 	absPath, _ := filepath.Abs(path)
 	return &DB{SQL: d, Path: absPath}, nil
