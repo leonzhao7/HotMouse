@@ -197,7 +197,7 @@ Return exactly one complete raw JSON object with no Markdown:
 {"accepted":true,"data":{"description":"concise confirmed result or blocker","result":{"type":"progress","detail":"saved evidence"},"finding":{"kind":"security_vulnerability","title":"title","severity":"high","description":"evidence","data":{}}}}
 Finding is optional. Use {"accepted":false,"reason":"..."} when you cannot summarize.
 Only execution_timeout means a deadline was reached; output_limit means exhausted output allowance; invalid_response means parsing/schema failed; process_exit means the CLI exited unsuccessfully; cancelled means execution was interrupted. Do not relabel the reason or invent a network failure.
-Classify result.type as progress, negative, blocked, environment_failure, no_information or needs_attention based only on saved evidence. needs_attention means this route cannot continue and the planner should try another route; do not request operator intervention. An interrupted process alone proves no target conclusion.
+Classify result.type as progress, negative, blocked, environment_failure, no_information or needs_attention based only on saved evidence. needs_attention means this route cannot continue; its shelving immediately fails the project and stops automatic planning. Preserve the evidence; do not request operator intervention. An interrupted process alone proves no target conclusion.
 
 Interruption reason: ` + reason + "\nStep: " + step + "\nDescription: " + description + "\nLatest FGS YAML:\n" + graph
 }

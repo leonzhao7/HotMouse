@@ -1368,7 +1368,7 @@ func (d *DB) SetProjectStatus(ctx context.Context, p, status string) (Project, e
 			return e
 		}
 		if status == "stopped" {
-			if _, e := t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),status='pending',analysis_json='',failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='' WHERE project_id=?`, p); e != nil {
+			if _, e := t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),preprocessing_json='{"status":"pending"}',status='pending',analysis_json='',failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='' WHERE project_id=?`, p); e != nil {
 				return e
 			}
 			_, e := t.Exec(`UPDATE steps SET worker=NULL WHERE project_id=? AND concluded_at IS NULL`, p)
@@ -1377,7 +1377,7 @@ func (d *DB) SetProjectStatus(ctx context.Context, p, status string) (Project, e
 			}
 		}
 		if status == "active" && cur != "active" {
-			if _, e := t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),status='pending',analysis_json='',failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='' WHERE project_id=?`, p); e != nil {
+			if _, e := t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),preprocessing_json='{"status":"pending"}',status='pending',analysis_json='',failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='' WHERE project_id=?`, p); e != nil {
 				return e
 			}
 			if _, e := t.Exec(`DELETE FROM worker_decide_state WHERE project_id=?`, p); e != nil {
@@ -1546,7 +1546,7 @@ func (d *DB) Reopen(ctx context.Context, p string, r Reopen) (ReopenResult, erro
 		}
 		_, e = t.Exec(`UPDATE projects SET status='active',decide_worker=NULL,decide_trigger=NULL,decide_started_at=NULL,decide_last_heartbeat_at=NULL WHERE id=?`, p)
 		if e == nil {
-			_, e = t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),status='pending',analysis_json='',failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='' WHERE project_id=?`, p)
+			_, e = t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),preprocessing_json='{"status":"pending"}',status='pending',analysis_json='',failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='' WHERE project_id=?`, p)
 		}
 		if e != nil {
 			return e

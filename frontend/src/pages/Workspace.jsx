@@ -265,9 +265,8 @@ export default function Workspace({ id }) {
               <CircleX size={15} />
               <strong>
                 {
-                  data.steps.filter(
-                    (step) => stepStatus(step) === "failed",
-                  ).length
+                  data.steps.filter((step) => stepStatus(step) === "failed")
+                    .length
                 }
               </strong>{" "}
               失败
@@ -290,6 +289,37 @@ export default function Workspace({ id }) {
               创建于 {formatTime(data.project.created_at)}
             </span>
           </div>
+          {active && data.target_probe?.status === "pending" && (
+            <div className="notice amber">正在分析初始事实并识别题目目标。</div>
+          )}
+          {active &&
+            data.target_probe?.status === "ready" &&
+            data.target_probe?.preprocessing?.status === "pending" && (
+              <div className="notice amber">
+                正在预处理目标首页，获取完整响应头和响应正文。
+              </div>
+            )}
+          {data.target_probe?.preprocessing?.status === "ready" && (
+            <div className="notice blue">
+              <span>
+                Web 首页预处理已完成 ·{" "}
+                {data.target_probe.preprocessing.pages?.length || 0} 个入口
+                {data.target_probe.preprocessing.pages?.some(
+                  (page) => page.error,
+                ) && " · 部分请求失败，详情已保存"}
+              </span>
+              <Button
+                onClick={() =>
+                  setSelection({
+                    type: "fact",
+                    id: data.target_probe.preprocessing.fact_id,
+                  })
+                }
+              >
+                查看首页响应
+              </Button>
+            </div>
+          )}
           <div className="workspace-lease">
             <span
               className={`status-dot ${data.project.decide ? "blue" : "muted"}`}

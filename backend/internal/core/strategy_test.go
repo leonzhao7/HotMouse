@@ -120,6 +120,9 @@ func TestRouteLossLimitsAndEnvironmentEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := detail.Routes[0]
+	if detail.Project.Status != "failed" || !strings.Contains(detail.Project.FailureReason, "no_information_limit") {
+		t.Fatalf("route stop-loss did not fail project: %+v", detail.Project)
+	}
 	if got.Status != "shelved" || got.NoProgressCount != 2 || got.NegativeCount != 1 || got.EnvironmentFailureCount != 1 || got.ProgressCount != 0 {
 		t.Fatalf("route counts: %+v", got)
 	}
@@ -133,6 +136,10 @@ func TestRouteLossLimitsAndEnvironmentEvidence(t *testing.T) {
 	reopened, err := db.UpdateRoute(t.Context(), p, route.ID, UpdateRoute{Status: &active, Reason: "different method", ReopenCondition: "new credentials", NextDirection: "validate credentials"})
 	if err != nil || reopened.NoProgressCount != 0 {
 		t.Fatalf("reopen: %+v %v", reopened, err)
+	}
+	meta, err := db.GetProjectMeta(t.Context(), p)
+	if err != nil || meta.Status != "failed" {
+		t.Fatal("repairing a route automatically resumed the project")
 	}
 	records, err := db.RouteRecords(t.Context(), p)
 	if err != nil || len(records) != 2 || records[0].Reason != "no_information_limit" || records[1].Action != "reopened" {
@@ -170,6 +177,9 @@ func TestInvestmentIsIdempotentAndSurvivesRestart(t *testing.T) {
 	}
 	if before.Routes[0].InvestedMilliseconds < 2000 || before.Routes[0].EnvironmentFailureCount != 1 || before.Routes[0].Status != "shelved" {
 		t.Fatalf("investment: %+v", before.Routes)
+	}
+	if before.Project.Status != "failed" || !strings.Contains(before.Project.FailureReason, "budget_exhausted") {
+		t.Fatal("budget exhaustion did not fail project")
 	}
 	// Retention cleanup must not erase cumulative route investment.
 	if _, err := db.SQL.Exec(`DELETE FROM worker_task_history WHERE id=?`, id); err != nil {
@@ -209,12 +219,16 @@ func TestDecisionPlanRollsBackAndProtectsRecovery(t *testing.T) {
 	priority := 10
 	goal := "g001"
 	plan := DecisionPlan{Steps: []CreateStep{{From: []string{"origin"}, Description: "new step", GoalID: &goal, Creator: "test"}}, Goals: []CreateGoal{{Description: "new goal", Creator: "test"}}, StepUpdates: []PlanStepUpdate{{ID: step.ID, Change: UpdateStep{Priority: &priority}}}}
-	if err := db.ApplyDecisionPlan(t.Context(), p, "test", plan); err == nil {
-		t.Fatal("updated claimed step")
+	if err := db.ApplyDecisionPlan(t.Context(), p, "test", plan); err != nil {
+		t.Fatal(err)
 	}
 	detail, _ := db.GetProject(t.Context(), p)
-	if len(detail.Steps) != 1 || len(detail.Goals) != 1 {
-		t.Fatalf("partial plan: %+v", detail)
+	if len(detail.Steps) != 2 || len(detail.Goals) != 2 {
+		t.Fatalf("remaining plan was not committed: %+v", detail)
+	}
+	protected, err := db.stepTx(t.Context(), db.SQL, p, step.ID)
+	if err != nil || protected.Priority != 0 || protected.Worker == nil || *protected.Worker != "other" {
+		t.Fatalf("claimed step changed: %+v err=%v", protected, err)
 	}
 	if _, err := db.ReleaseStep(t.Context(), p, step.ID, "other"); err != nil {
 		t.Fatal(err)
@@ -222,8 +236,16 @@ func TestDecisionPlanRollsBackAndProtectsRecovery(t *testing.T) {
 	if _, err := db.SQL.Exec(`INSERT INTO worker_execute_recovery(project_id,step_id,payload_json,status,created_at) VALUES(?,?,'{}','commit_pending',?)`, p, step.ID, now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ApplyDecisionPlan(t.Context(), p, "test", plan); err == nil {
-		t.Fatal("updated a recovering step")
+	plan.Steps[0].Description = "another new step"
+	if err := db.ApplyDecisionPlan(t.Context(), p, "test", plan); err != nil {
+		t.Fatal(err)
+	}
+	protected, err = db.stepTx(t.Context(), db.SQL, p, step.ID)
+	if err != nil || protected.Priority != 0 || protected.RecoveryStatus != "commit_pending" {
+		t.Fatalf("plan changed recovery checkpoint: %+v err=%v", protected, err)
+	}
+	if _, err := db.UpdateStep(t.Context(), p, step.ID, UpdateStep{Priority: &priority}); err == nil {
+		t.Fatal("direct update bypassed recovery protection")
 	}
 	// Even when an earlier valid update runs, a bad later new step rolls it back.
 	fresh := strategyStep(t, db, p, nil)

@@ -94,7 +94,7 @@ func (r *Runner) ensureTargetProbe(ctx context.Context, project string) (bool, e
 	}
 	if state.Status == "ready" && state.Analysis != nil && state.Analysis.Required {
 		var scope string
-		cfg := r.config(ctx)
+		cfg := r.dispatcherConfig(ctx)
 		if cfg.contextRoot != "" {
 			var origin, goal string
 			if err := r.DB.SQL.QueryRowContext(ctx, `SELECT description FROM facts WHERE project_id=? AND id='origin'`, project).Scan(&origin); err != nil {
@@ -114,7 +114,7 @@ func (r *Runner) ensureTargetProbe(ctx context.Context, project string) (bool, e
 		}
 	}
 	if state.Status == "pending" {
-		cfg := r.config(ctx)
+		cfg := r.dispatcherConfig(ctx)
 		if !cfg.enabled {
 			return false, fmt.Errorf("worker disabled")
 		}

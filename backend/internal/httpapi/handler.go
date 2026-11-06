@@ -415,8 +415,24 @@ func (h *Handler) SettingsHealth(ctx iris.Context) {
 	if workerReady {
 		online = 1
 	}
+	dispatcherReady := workerReady
+	dispatcherSummary := "shared Worker provider"
+	var dispatcherJSON string
+	if err := h.DB.SQL.QueryRow(`SELECT dispatcher_json FROM worker_config WHERE id=1`).Scan(&dispatcherJSON); err == nil {
+		var dispatcher *core.DispatcherConfig
+		if err := json.Unmarshal([]byte(dispatcherJSON), &dispatcher); err != nil {
+			dispatcherReady = false
+		} else if dispatcher != nil {
+			payload, _ := json.Marshal(dispatcher.Environment)
+			dispatcherReady = localWorkerReady(enabled != 0, dispatcher.Driver, dispatcher.Command, string(payload))
+			dispatcherSummary = dispatcher.Driver
+			if dispatcher.Model != "" {
+				dispatcherSummary += " / " + dispatcher.Model
+			}
+		}
+	}
 	status := "ok"
-	if !workerReady {
+	if !workerReady || !dispatcherReady {
 		if active > 0 {
 			status = "error"
 		} else {
@@ -470,7 +486,7 @@ func (h *Handler) SettingsHealth(ctx iris.Context) {
 	var workerCount int
 	_ = h.DB.SQL.QueryRow(`SELECT worker_count FROM worker_config WHERE id=1`).Scan(&workerCount)
 	checks := []iris.Map{{"key": "server", "label": "API service", "status": "ok", "summary": "product API is reachable", "detail": "Project, dispatcher, worker and settings APIs are served by this process."}, {"key": "database", "label": "SQLite database", "status": "ok", "summary": fmt.Sprintf("%d projects and %d vulnerabilities", projects, vulns), "detail": fmt.Sprintf("%d users and %d audit entries.", users, audit)}, {"key": "dispatcher", "label": "Project Dispatcher", "status": func() string {
-		if !workerReady {
+		if !dispatcherReady {
 			if active > 0 {
 				return "error"
 			}
@@ -478,19 +494,19 @@ func (h *Handler) SettingsHealth(ctx iris.Context) {
 		}
 		return "ok"
 	}(), "summary": func() string {
-		if !workerReady {
+		if !dispatcherReady {
 			if enabled == 0 {
 				return "worker disabled"
 			}
-			if workerBinaryName != "" {
-				return workerBinaryName + " is not available on PATH"
-			}
-			return "worker command is not available"
+			return "dispatcher CLI or command is not available: " + dispatcherSummary
 		}
-		return fmt.Sprintf("one dispatcher per project; %d agent workers configured", workerCount)
+		return fmt.Sprintf("one dispatcher per project (%s); %d agent workers configured", dispatcherSummary, workerCount)
 	}(), "detail": "Dispatcher maintains project facts and planning; agent workers execute steps."}, authCheck, retentionCheck}
 	if !workerReady && active > 0 {
 		alerts = append(alerts, iris.Map{"level": "danger", "title": "Active projects have no available worker", "detail": "The local worker is disabled or its configured command is unavailable."})
+	}
+	if !dispatcherReady && active > 0 {
+		alerts = append(alerts, iris.Map{"level": "danger", "title": "Active projects have no available dispatcher", "detail": "The Dispatcher provider is disabled or its configured CLI is unavailable."})
 	}
 	if len(alerts) > 0 && status == "ok" {
 		status = "warning"
@@ -501,7 +517,7 @@ func (h *Handler) SettingsHealth(ctx iris.Context) {
 	if retentionStatus == "warning" && status == "ok" {
 		status = "warning"
 	}
-	ctx.JSON(iris.Map{"generated_at": nowString(), "summary": iris.Map{"status": status, "server_reachable": true, "dispatcher_reachable": workerReady, "active_projects": active, "online_workers": online * workerCount, "offline_workers": func() int {
+	ctx.JSON(iris.Map{"generated_at": nowString(), "summary": iris.Map{"status": status, "server_reachable": true, "dispatcher_reachable": dispatcherReady, "active_projects": active, "online_workers": online * workerCount, "offline_workers": func() int {
 		if enabled != 0 && !workerReady {
 			return 1
 		}
@@ -612,10 +628,10 @@ func (h *Handler) Campaign(ctx iris.Context) {
 }
 
 func (h *Handler) WorkerConfig(ctx iris.Context) {
-	var name, driver, command, env, updated, workspaceRoot, completedAction, contextRoot, runtimeJSON string
+	var name, driver, command, env, updated, workspaceRoot, completedAction, contextRoot, runtimeJSON, dispatcherJSON string
 	var enabled int
 	var workerCount int
-	e := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT name,driver,command,environment_json,enabled,updated_at,workspace_root,completed_action,context_root,runtime_json,worker_count FROM worker_config WHERE id=1`).Scan(&name, &driver, &command, &env, &enabled, &updated, &workspaceRoot, &completedAction, &contextRoot, &runtimeJSON, &workerCount)
+	e := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT name,driver,command,environment_json,enabled,updated_at,workspace_root,completed_action,context_root,runtime_json,worker_count,dispatcher_json FROM worker_config WHERE id=1`).Scan(&name, &driver, &command, &env, &enabled, &updated, &workspaceRoot, &completedAction, &contextRoot, &runtimeJSON, &workerCount, &dispatcherJSON)
 	if e != nil {
 		bad(ctx, e)
 		return
@@ -628,17 +644,28 @@ func (h *Handler) WorkerConfig(ctx iris.Context) {
 	} else {
 		ctx.Header("Cache-Control", "no-store")
 	}
-	ctx.JSON(iris.Map{"name": name, "driver": driver, "command": command, "environment": environment, "enabled": enabled != 0, "updated_at": updated, "worker_mode": "dispatcher_pool", "worker_count": workerCount, "workspace_root": workspaceRoot, "completed_action": completedAction, "context_root": contextRoot, "runtime": runtime})
+	var dispatcher map[string]any
+	if err := json.Unmarshal([]byte(dispatcherJSON), &dispatcher); err != nil {
+		bad(ctx, err)
+		return
+	}
+	if dispatcher != nil && ctx.URLParam("reveal") != "1" && ctx.URLParam("reveal") != "true" {
+		if env, ok := dispatcher["environment"].(map[string]any); ok {
+			dispatcher["environment"] = maskEnvironment(env)
+		}
+	}
+	ctx.JSON(iris.Map{"dispatcher": dispatcher, "name": name, "driver": driver, "command": command, "environment": environment, "enabled": enabled != 0, "updated_at": updated, "worker_mode": "dispatcher_pool", "worker_count": workerCount, "workspace_root": workspaceRoot, "completed_action": completedAction, "context_root": contextRoot, "runtime": runtime})
 }
 func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 	var r struct {
 		Name              string            `json:"name"`
 		Driver            string            `json:"driver"`
-		Command           string            `json:"command"`
+		Command           *string           `json:"command"`
 		WorkspaceRoot     *string           `json:"workspace_root"`
 		CompletedAction   *string           `json:"completed_action"`
 		ContextRoot       *string           `json:"context_root"`
 		Runtime           json.RawMessage   `json:"runtime"`
+		Dispatcher        json.RawMessage   `json:"dispatcher"`
 		WorkerCount       *int              `json:"worker_count"`
 		Environment       map[string]string `json:"environment"`
 		EnvironmentRemove []string          `json:"environment_remove"`
@@ -647,11 +674,10 @@ func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 	if !read(ctx, &r) {
 		return
 	}
-	if r.Name == "" {
-		r.Name = "local"
-	}
 	workerCount := 4
-	if err := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT worker_count FROM worker_config WHERE id=1`).Scan(&workerCount); err != nil {
+	var name, driver, command string
+	var enabled int
+	if err := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT name,driver,command,enabled,worker_count FROM worker_config WHERE id=1`).Scan(&name, &driver, &command, &enabled, &workerCount); err != nil {
 		bad(ctx, err)
 		return
 	}
@@ -662,15 +688,21 @@ func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 		bad(ctx, fmt.Errorf("worker_count must be between 1 and 32"))
 		return
 	}
-	if r.Driver == "" {
-		r.Driver = "mock"
+	if r.Name != "" {
+		name = r.Name
 	}
-	if !supportedDriver(r.Driver) {
+	if r.Driver != "" {
+		driver = r.Driver
+	}
+	if r.Command != nil {
+		command = *r.Command
+	}
+	if !supportedDriver(driver) {
 		bad(ctx, fmt.Errorf("unsupported local worker driver"))
 		return
 	}
-	var workspaceRoot, completedAction, contextRoot, runtimeJSON, existingEnv string
-	if err := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT workspace_root,completed_action,context_root,runtime_json,environment_json FROM worker_config WHERE id=1`).Scan(&workspaceRoot, &completedAction, &contextRoot, &runtimeJSON, &existingEnv); err != nil {
+	var workspaceRoot, completedAction, contextRoot, runtimeJSON, existingEnv, dispatcherJSON string
+	if err := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT workspace_root,completed_action,context_root,runtime_json,environment_json,dispatcher_json FROM worker_config WHERE id=1`).Scan(&workspaceRoot, &completedAction, &contextRoot, &runtimeJSON, &existingEnv, &dispatcherJSON); err != nil {
 		bad(ctx, err)
 		return
 	}
@@ -706,9 +738,13 @@ func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 		bad(ctx, fmt.Errorf("cleanup action must be keep or remove"))
 		return
 	}
-	en := 1
-	if r.Enabled != nil && !*r.Enabled {
-		en = 0
+	en := enabled
+	if r.Enabled != nil {
+		if *r.Enabled {
+			en = 1
+		} else {
+			en = 0
+		}
 	}
 	env := parseJSON(existingEnv)
 	for _, key := range r.EnvironmentRemove {
@@ -728,8 +764,13 @@ func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 		}
 		env[k] = v
 	}
+	dispatcherJSON, err := mergeDispatcherConfig(dispatcherJSON, r.Dispatcher)
+	if err != nil {
+		bad(ctx, err)
+		return
+	}
 	runtimeBytes, _ := json.Marshal(runtime)
-	_, e := h.DB.SQL.ExecContext(ctx.Request().Context(), `UPDATE worker_config SET name=?,driver=?,command=?,environment_json=?,enabled=?,updated_at=?,workspace_root=?,completed_action=?,context_root=?,runtime_json=?,worker_count=? WHERE id=1`, r.Name, r.Driver, r.Command, coreJSON(env), en, nowString(), workspaceRoot, completedAction, contextRoot, string(runtimeBytes), workerCount)
+	_, e := h.DB.SQL.ExecContext(ctx.Request().Context(), `UPDATE worker_config SET name=?,driver=?,command=?,environment_json=?,enabled=?,updated_at=?,workspace_root=?,completed_action=?,context_root=?,runtime_json=?,worker_count=?,dispatcher_json=? WHERE id=1`, name, driver, command, coreJSON(env), en, nowString(), workspaceRoot, completedAction, contextRoot, string(runtimeBytes), workerCount, dispatcherJSON)
 	if e != nil {
 		bad(ctx, e)
 		return
@@ -1069,6 +1110,23 @@ func (h *Handler) WorkerTest(ctx iris.Context) {
 	if err := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT driver,command,environment_json,enabled FROM worker_config WHERE id=1`).Scan(&driver, &command, &environment, &enabled); err != nil {
 		bad(ctx, err)
 		return
+	}
+	if ctx.URLParam("role") == "dispatcher" {
+		var raw string
+		if err := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT dispatcher_json FROM worker_config WHERE id=1`).Scan(&raw); err != nil {
+			bad(ctx, err)
+			return
+		}
+		var config *core.DispatcherConfig
+		if err := json.Unmarshal([]byte(raw), &config); err != nil {
+			bad(ctx, err)
+			return
+		}
+		if config != nil {
+			driver, command = config.Driver, config.Command
+			payload, _ := json.Marshal(config.Environment)
+			environment = string(payload)
+		}
 	}
 	if enabled == 0 {
 		ctx.StatusCode(iris.StatusBadRequest)

@@ -167,32 +167,51 @@ func shelveRouteTx(t *sql.Tx, project, id, reason, condition, direction string) 
 	if _, err := t.Exec(`INSERT INTO route_records(project_id,route_id,action,reason,reopen_condition,next_direction,created_at) VALUES(?,?,'shelved',?,?,?,?)`, project, id, reason, condition, direction, now()); err != nil {
 		return err
 	}
-	return queueDecideTx(t, project, "route_shelved: "+reason, id)
+	return failShelvedRouteProjectTx(t, project, id, reason)
+}
+
+func failShelvedRouteProjectTx(t *sql.Tx, project, id, reason string) error {
+	explanation := reason
+	switch reason {
+	case "budget_exhausted":
+		explanation = "累计时间预算耗尽"
+	case "no_information_limit":
+		explanation = "连续无进展达到上限"
+	case "needs_attention":
+		explanation = "步骤无法安全继续"
+	}
+	_, err := failActiveProjectTx(t, project, fmt.Sprintf("路线 %s 已搁置（%s）：%s", id, reason, explanation), "Project failed because a route was shelved")
+	return err
 }
 func enforceRouteLimitsTx(t *sql.Tx, project, id string) error {
 	r, err := scanRoute(t.QueryRow(`SELECT `+routeColumns+` FROM routes WHERE project_id=? AND id=?`, project, id))
 	if err != nil {
 		return err
 	}
+	if r.Status == "shelved" {
+		return failShelvedRouteProjectTx(t, project, id, r.ShelvedReason)
+	}
 	if r.Status != "active" {
 		return nil
 	}
 	if r.BudgetSeconds > 0 && r.InvestedMilliseconds >= int64(r.BudgetSeconds)*1000 {
-		return shelveRouteTx(t, project, id, "budget_exhausted", "Increase the budget with a justified new plan", "Review existing evidence and consider an alternative route")
+		return shelveRouteTx(t, project, id, "budget_exhausted", "Increase the budget before explicitly resuming and reopening the route", "Project failed; review the saved evidence before resuming")
 	}
 	if r.NoProgressCount >= r.NoProgressLimit {
-		return shelveRouteTx(t, project, id, "no_information_limit", "New evidence or a different method is available", "Recall prior negative results before choosing a new action")
+		return shelveRouteTx(t, project, id, "no_information_limit", "New evidence or a different method is available; explicitly resume before reopening", "Project failed; review prior negative results before resuming")
 	}
 	return nil
 }
 func (d *DB) UpdateRoute(ctx context.Context, project, id string, req UpdateRoute) (Route, error) {
 	var out Route
-	err := tx(ctx, d, func(t *sql.Tx) error { return d.updateRouteTx(ctx, t, project, id, req, &out) })
+	err := tx(ctx, d, func(t *sql.Tx) error { return d.updateRouteTx(ctx, t, project, id, req, &out, true) })
 	return out, err
 }
 
-func (d *DB) updateRouteTx(ctx context.Context, t *sql.Tx, project, id string, req UpdateRoute, out *Route) error {
-	if _, err := checkActive(t, project); err != nil {
+func (d *DB) updateRouteTx(ctx context.Context, t *sql.Tx, project, id string, req UpdateRoute, out *Route, allowFailed bool) error {
+	// An operator can repair/reopen routes while the project stays failed.
+	// Automatic plan mutations still require an active project.
+	if p, err := checkActive(t, project); err != nil && (!allowFailed || p.Status != "failed") {
 		return err
 	}
 	if err := validateRouteConfig(req.BudgetSeconds, req.NoProgressLimit); err != nil {
@@ -275,7 +294,7 @@ func recordResultTx(t *sql.Tx, project, step string, result ExecutionResult) err
 			return err
 		}
 		if result.Type == "needs_attention" {
-			if err := shelveRouteTx(t, project, route.String, "needs_attention", result.Detail, "Try an independent route; fail the project if none can advance the goal"); err != nil {
+			if err := shelveRouteTx(t, project, route.String, "needs_attention", result.Detail, "Project failed; review the saved evidence before resuming"); err != nil {
 				return err
 			}
 		}
@@ -285,9 +304,16 @@ func recordResultTx(t *sql.Tx, project, step string, result ExecutionResult) err
 	}
 	switch result.Type {
 	case "progress", "negative", "blocked", "environment_failure", "needs_attention":
-		return queueDecideTx(t, project, result.Type, step)
+		return queueActiveDecideTx(t, project, result.Type, step)
 	}
 	return nil
+}
+
+// A result may terminate the project through route stop-loss in the same
+// transaction. Such results remain evidence without requesting another plan.
+func queueActiveDecideTx(t *sql.Tx, project, reason, source string) error {
+	_, err := t.Exec(`INSERT INTO decide_events(project_id,reason,source_id,created_at) SELECT id,?,?,? FROM projects WHERE id=? AND status='active'`, reason, source, now(), project)
+	return err
 }
 func decodeResult(raw string) *ExecutionResult {
 	if raw == "" {
@@ -348,17 +374,20 @@ func finishWorkerTaskTx(t *sql.Tx, id int64, status, detail string, stamp time.T
 		if _, err := t.Exec(`UPDATE routes SET environment_failure_count=environment_failure_count+1 WHERE project_id=? AND id=?`, project.String, route.String); err != nil {
 			return err
 		}
-		if err := queueDecideTx(t, project.String, "environment_failure", step.String); err != nil {
-			return err
-		}
 	}
-	return enforceRouteLimitsTx(t, project.String, route.String)
+	if err := enforceRouteLimitsTx(t, project.String, route.String); err != nil {
+		return err
+	}
+	if status == "failed" || status == "summary_pending" || status == "invalid_payload" || status == "interrupted" {
+		return queueActiveDecideTx(t, project.String, "environment_failure", step.String)
+	}
+	return nil
 }
 
 // RefreshRouteLimits also covers migrated historical investment after restart.
 func (d *DB) RefreshRouteLimits(ctx context.Context) error {
 	return tx(ctx, d, func(t *sql.Tx) error {
-		rows, err := t.Query(`SELECT r.project_id,r.id FROM routes r JOIN projects p ON p.id=r.project_id WHERE r.status='active' AND p.status='active' AND ((r.budget_seconds>0 AND r.invested_ms>=r.budget_seconds*1000) OR r.no_progress_count>=r.no_progress_limit)`)
+		rows, err := t.Query(`SELECT r.project_id,r.id FROM routes r JOIN projects p ON p.id=r.project_id WHERE p.status='active' AND (r.status='shelved' OR (r.status='active' AND ((r.budget_seconds>0 AND r.invested_ms>=r.budget_seconds*1000) OR r.no_progress_count>=r.no_progress_limit)))`)
 		if err != nil {
 			return err
 		}

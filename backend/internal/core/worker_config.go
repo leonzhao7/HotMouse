@@ -6,6 +6,15 @@ import (
 	"strings"
 )
 
+// A nil dispatcher configuration preserves the legacy shared provider.
+// Once configured, its provider environment is independent of the workers.
+type DispatcherConfig struct {
+	Driver      string            `json:"driver"`
+	Command     string            `json:"command"`
+	Model       string            `json:"model"`
+	Environment map[string]string `json:"environment"`
+}
+
 type WorkerRuntime struct {
 	DecideTimeoutSeconds   int `json:"decide_timeout_seconds"`
 	ExecuteTimeoutSeconds  int `json:"execute_timeout_seconds"`

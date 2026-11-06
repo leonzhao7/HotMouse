@@ -230,6 +230,89 @@ test("templates, Worker execution, secret preservation and real environment remo
   await page.getByRole("button", { name: "测试已保存配置" }).click();
   await expect(page.getByText("检查通过", { exact: true })).toBeVisible();
 });
+test("Dispatcher LLM configuration preserves separate secrets and can return to shared settings", async ({
+  page,
+}) => {
+  await register(page);
+  const current = await (await page.request.get("/api/workers/config")).json();
+  await page.request.put("/api/workers/config", {
+    data: { ...current, dispatcher: null },
+  });
+  await page.goto("/#/workers");
+  await page.getByRole("button", { name: "编辑配置" }).click();
+  let dialog = page.getByRole("dialog", { name: "编辑本地 Worker" });
+  await dialog.getByLabel("Dispatcher 使用独立 LLM").check();
+  await dialog
+    .getByLabel("Dispatcher 驱动", { exact: true })
+    .selectOption("pi");
+  await dialog.getByLabel("Dispatcher 命令", { exact: true }).fill("");
+  await dialog
+    .getByLabel("Dispatcher 模型", { exact: true })
+    .fill("planner-model");
+  await dialog
+    .getByRole("button", { name: "添加 Dispatcher 环境变量", exact: true })
+    .click();
+  await dialog
+    .getByLabel("Dispatcher 环境变量 1 名称", { exact: true })
+    .fill("PI_API_KEY");
+  await dialog
+    .getByLabel("Dispatcher 环境变量 1 值", { exact: true })
+    .fill("separate-planner-secret");
+  await dialog
+    .getByRole("button", { name: "添加 Dispatcher 环境变量", exact: true })
+    .click();
+  await dialog
+    .getByLabel("Dispatcher 环境变量 2 名称", { exact: true })
+    .fill("DELETE_PLANNER_KEY");
+  await dialog
+    .getByLabel("Dispatcher 环境变量 2 值", { exact: true })
+    .fill("remove-planner-secret");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(
+    page.getByText("pi · planner-model", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "编辑配置" }).click();
+  dialog = page.getByRole("dialog", { name: "编辑本地 Worker" });
+  const plannerSecret = dialog
+    .locator(".environment-rows > div")
+    .filter({ has: page.locator('input[value="PI_API_KEY"]') })
+    .locator('input[aria-label$="值"]');
+  await expect(plannerSecret).toHaveValue("***");
+  await dialog.getByLabel("显示输入值", { exact: true }).click();
+  await expect(dialog.getByLabel("显示输入值", { exact: true })).toBeChecked();
+  await expect(plannerSecret).toHaveValue("separate-planner-secret");
+  await dialog.getByLabel("显示输入值", { exact: true }).uncheck();
+  await dialog
+    .getByRole("button", {
+      name: "删除 Dispatcher 环境变量 DELETE_PLANNER_KEY",
+      exact: true,
+    })
+    .click();
+  await dialog
+    .getByLabel("Dispatcher 模型", { exact: true })
+    .fill("updated-planner-model");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  const updated = await (
+    await page.request.get("/api/workers/config?reveal=1")
+  ).json();
+  expect(updated.dispatcher.environment).toEqual({
+    PI_API_KEY: "separate-planner-secret",
+  });
+  expect(updated.dispatcher.model).toBe("updated-planner-model");
+  const masked = await (await page.request.get("/api/workers/config")).json();
+  expect(masked.environment).toEqual(current.environment);
+  expect(masked.driver).toBe(current.driver);
+  await page.getByRole("button", { name: "编辑配置" }).click();
+  dialog = page.getByRole("dialog", { name: "编辑本地 Worker" });
+  await dialog.getByLabel("Dispatcher 使用独立 LLM").uncheck();
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  expect(
+    (await (await page.request.get("/api/workers/config")).json()).dispatcher,
+  ).toBeNull();
+});
 test("step list shows full LLM responses and retains them after refresh", async ({
   page,
 }) => {
@@ -464,6 +547,14 @@ test("route loss records, history recall, shared experience and flag reconciliat
   await page.getByRole("tab", { name: "路线与止损" }).click();
   await expect(page.getByText("已搁置", { exact: true })).toBeVisible();
   await expect(page.getByText("搁置原因：no_information_limit")).toBeVisible();
+  let projectState = await (
+    await page.request.get(`/projects/${projectID}`)
+  ).json();
+  expect(projectState.project.status).toBe("failed");
+  expect(projectState.project.failure_reason).toContain("no_information_limit");
+  await expect(
+    page.getByRole("button", { name: "继续推进", exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "调整路线" }).click();
   dialog = page.getByRole("dialog", { name: "调整路线" });
   await dialog.getByLabel("路线状态").selectOption("active");
@@ -472,6 +563,18 @@ test("route loss records, history recall, shared experience and flag reconciliat
   await dialog.getByRole("button", { name: "保存", exact: true }).click();
   await expect(dialog).not.toBeVisible();
   await expect(page.getByText("可投入", { exact: true })).toBeVisible();
+  projectState = await (
+    await page.request.get(`/projects/${projectID}`)
+  ).json();
+  expect(projectState.project.status).toBe("failed");
+  await page.getByRole("button", { name: "继续推进", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "停止", exact: true }),
+  ).toBeVisible();
+  projectState = await (
+    await page.request.get(`/projects/${projectID}`)
+  ).json();
+  expect(projectState.project.status).toBe("active");
   await page.getByRole("tab", { name: "历史检索" }).click();
   await page
     .getByPlaceholder("检索当前项目的历史与证据")

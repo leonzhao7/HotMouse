@@ -26,6 +26,7 @@ type TargetProbeAnalysis struct {
 }
 
 type TargetProbeState struct {
+	Preprocessing       PreprocessingState   `json:"preprocessing" yaml:"preprocessing"`
 	RunID               string               `json:"run_id" yaml:"run_id"`
 	Status              string               `json:"status" yaml:"status"`
 	Analysis            *TargetProbeAnalysis `json:"analysis,omitempty" yaml:"analysis,omitempty"`
@@ -36,14 +37,17 @@ type TargetProbeState struct {
 	RetryAfter          string               `json:"retry_after,omitempty" yaml:"retry_after,omitempty"`
 }
 
-const targetProbeSelect = `run_id,status,analysis_json,failure_counts_json,last_checked_at,last_error,analysis_failures,retry_after`
+const targetProbeSelect = `run_id,status,analysis_json,failure_counts_json,last_checked_at,last_error,analysis_failures,retry_after,preprocessing_json`
 
 func readTargetProbe(row *sql.Row) (TargetProbeState, error) {
 	var state TargetProbeState
-	var analysis, failures string
-	err := row.Scan(&state.RunID, &state.Status, &analysis, &failures, &state.LastCheckedAt, &state.LastError, &state.AnalysisFailures, &state.RetryAfter)
+	var analysis, failures, preprocessing string
+	err := row.Scan(&state.RunID, &state.Status, &analysis, &failures, &state.LastCheckedAt, &state.LastError, &state.AnalysisFailures, &state.RetryAfter, &preprocessing)
 	if err != nil {
 		return state, err
+	}
+	if err := json.Unmarshal([]byte(preprocessing), &state.Preprocessing); err != nil {
+		return state, fmt.Errorf("invalid saved preprocessing: %w", err)
 	}
 	if analysis != "" {
 		if err := json.Unmarshal([]byte(analysis), &state.Analysis); err != nil {

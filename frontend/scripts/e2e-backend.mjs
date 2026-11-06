@@ -23,7 +23,7 @@ const child = spawn(
   [
     "serve",
     "--addr",
-    "127.0.0.1:18080",
+    `127.0.0.1:${process.env.HOTMOUSE_E2E_BACKEND_PORT || 18080}`,
     "--db",
     join(directory, "test.db"),
     "--auth",

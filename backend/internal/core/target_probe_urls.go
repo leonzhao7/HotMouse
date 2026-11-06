@@ -142,9 +142,9 @@ func (d *DB) ReconcileTargetProbeURLs(ctx context.Context, project string, scope
 		resolved, err := resolveTargetProbeURLPorts(*state.Analysis, append(texts, scope...)...)
 		if err != nil {
 			// Ambiguous old output needs a fresh analysis using the parsed URLs.
-			_, err = t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),status='pending',analysis_json='',failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='' WHERE project_id=?`, project)
+			_, err = t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),preprocessing_json='{"status":"pending"}',status='pending',analysis_json='',failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='' WHERE project_id=?`, project)
 		} else if !reflect.DeepEqual(resolved.Targets, state.Analysis.Targets) {
-			_, err = t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),analysis_json=?,failure_counts_json=?,last_checked_at='',last_error='' WHERE project_id=?`, jsonData(resolved), jsonData(make([]int, len(resolved.Targets))), project)
+			_, err = t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),preprocessing_json='{"status":"pending"}',analysis_json=?,failure_counts_json=?,last_checked_at='',last_error='' WHERE project_id=?`, jsonData(resolved), jsonData(make([]int, len(resolved.Targets))), project)
 		} else {
 			return nil
 		}

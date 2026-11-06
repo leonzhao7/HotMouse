@@ -39,9 +39,6 @@ func (d *DB) ApplyDecisionPlan(ctx context.Context, project, worker string, plan
 		if owner.Valid && owner.String != worker {
 			return fmt.Errorf("project decide is currently claimed by %s", owner.String)
 		}
-		if err := validatePlanStepHistory(t, project, plan.Steps); err != nil {
-			return err
-		}
 		for _, u := range plan.RouteUpdates {
 			if u.Change.Status != nil && *u.Change.Status == "active" {
 				var reason string
@@ -53,11 +50,32 @@ func (d *DB) ApplyDecisionPlan(ctx context.Context, project, worker string, plan
 				}
 			}
 			var out Route
-			if err := d.updateRouteTx(ctx, t, project, u.ID, u.Change, &out); err != nil {
+			if err := d.updateRouteTx(ctx, t, project, u.ID, u.Change, &out, false); err != nil {
 				return err
 			}
+			var status string
+			if err := t.QueryRow(`SELECT status FROM projects WHERE id=?`, project).Scan(&status); err != nil {
+				return err
+			}
+			// Shelving is terminal. Commit the failure and preserve its evidence;
+			// later step or goal mutations must not roll it back or start new work.
+			if status == "failed" {
+				return nil
+			}
+		}
+		if err := validatePlanStepHistory(t, project, plan.Steps); err != nil {
+			return err
 		}
 		for _, u := range plan.StepUpdates {
+			// The model works from a snapshot. A worker may claim or finish a
+			// step while planning; preserve that work and apply the rest of the plan.
+			var immutable bool
+			if err := t.QueryRow(`SELECT worker IS NOT NULL OR to_fact_id IS NOT NULL OR abandoned<>0 OR EXISTS(SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=steps.project_id AND x.step_id=steps.id) FROM steps WHERE project_id=? AND id=?`, project, u.ID).Scan(&immutable); err != nil {
+				return err
+			}
+			if immutable {
+				continue
+			}
 			var out Step
 			if err := d.updateStepTx(ctx, t, project, u.ID, u.Change, &out); err != nil {
 				return err

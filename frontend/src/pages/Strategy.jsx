@@ -142,7 +142,7 @@ export default function Strategy({ mode, detail, base, refresh }) {
               )}
               {route.next_direction && <p>下一方向：{route.next_direction}</p>}
               <Button
-                disabled={detail.project.status !== "active"}
+                disabled={!["active", "failed"].includes(detail.project.status)}
                 onClick={() => setModal({ kind: "route-edit", item: route })}
               >
                 调整路线

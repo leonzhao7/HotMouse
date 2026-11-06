@@ -69,10 +69,10 @@ export default function Workers() {
     await refresh();
     notify(latest.enabled ? "Worker 已禁用" : "Worker 已启用");
   };
-  const test = async () => {
-    setBusy("test");
+  const test = async (role = "worker") => {
+    setBusy(role);
     await run(async () => {
-      setTestResult(await post("/api/workers/config/test"));
+      setTestResult(await post(`/api/workers/config/test?role=${role}`));
     });
     setBusy(null);
   };
@@ -181,6 +181,12 @@ export default function Workers() {
               <dd>
                 <code>{config.data?.driver}</code>
               </dd>
+              <dt>Dispatcher LLM</dt>
+              <dd>
+                {config.data?.dispatcher
+                  ? `${config.data.dispatcher.driver} · ${config.data.dispatcher.model || "驱动默认模型"}`
+                  : "共用 Worker 配置"}
+              </dd>
               <dt>命令</dt>
               <dd>
                 <code>{config.data?.command || "默认驱动命令"}</code>
@@ -221,8 +227,19 @@ export default function Workers() {
               >
                 {config.data?.enabled ? "禁用 Worker" : "启用 Worker"}
               </Button>
-              <Button icon={Terminal} busy={busy === "test"} onClick={test}>
+              <Button
+                icon={Terminal}
+                busy={busy === "worker"}
+                onClick={() => test()}
+              >
                 测试已保存配置
+              </Button>
+              <Button
+                icon={Terminal}
+                busy={busy === "dispatcher"}
+                onClick={() => test("dispatcher")}
+              >
+                测试 Dispatcher 配置
               </Button>
             </div>
             <p className="panel-copy muted">
@@ -315,12 +332,18 @@ function WorkerEditor({ initial, onClose, onSaved }) {
   const [draft, setDraft] = useState(() => ({
     ...initial,
     runtime: { ...initial.runtime },
+    dispatcher: initial.dispatcher ? { ...initial.dispatcher } : null,
   }));
   const [rows, setRows] = useState(() =>
     Object.entries(initial.environment || {}).map(([key, value]) => ({
       key,
       value,
     })),
+  );
+  const [dispatcherRows, setDispatcherRows] = useState(() =>
+    Object.entries(initial.dispatcher?.environment || {}).map(
+      ([key, value]) => ({ key, value }),
+    ),
   );
   const [showValues, setShowValues] = useState(false);
   const set = (key, value) =>
@@ -346,6 +369,14 @@ function WorkerEditor({ initial, onClose, onSaved }) {
             : row,
         ),
       );
+      const dispatcherEnvironment = current.dispatcher?.environment || {};
+      setDispatcherRows((previous) =>
+        previous.map((row) =>
+          row.value === "***" && Object.hasOwn(dispatcherEnvironment, row.key)
+            ? { ...row, value: dispatcherEnvironment[row.key] }
+            : row,
+        ),
+      );
       setShowValues(true);
     });
     if (!revealed) setShowValues(false);
@@ -357,7 +388,10 @@ function WorkerEditor({ initial, onClose, onSaved }) {
       wide
       onClose={onClose}
       onSubmit={async () => {
-        await put("/api/workers/config", workerPayload(draft, rows));
+        await put(
+          "/api/workers/config",
+          workerPayload(draft, rows, dispatcherRows),
+        );
         await onSaved();
       }}
     >
@@ -435,6 +469,145 @@ function WorkerEditor({ initial, onClose, onSaved }) {
         />
         启用 Worker
       </label>
+      <h3 className="section-label">Dispatcher LLM</h3>
+      <label className="checkbox-field">
+        <input
+          type="checkbox"
+          checked={Boolean(draft.dispatcher)}
+          onChange={(event) =>
+            set(
+              "dispatcher",
+              event.target.checked
+                ? {
+                    driver: draft.driver,
+                    command: draft.command || "",
+                    model: "",
+                    environment: initial.dispatcher?.environment || {},
+                  }
+                : null,
+            )
+          }
+        />
+        Dispatcher 使用独立 LLM
+      </label>
+      <p className="muted">
+        独立配置用于目标分析和规划。未启用时共用 Worker
+        配置；执行会话的恢复总结使用原 Worker 配置。
+      </p>
+      {draft.dispatcher && (
+        <>
+          <div className="form-grid">
+            <SelectField
+              label="Dispatcher 驱动"
+              value={draft.dispatcher.driver}
+              onChange={(event) =>
+                set("dispatcher", {
+                  ...draft.dispatcher,
+                  driver: event.target.value,
+                })
+              }
+            >
+              {!drivers.includes(draft.dispatcher.driver) && (
+                <option value={draft.dispatcher.driver}>
+                  {draft.dispatcher.driver}
+                </option>
+              )}
+              {drivers.map((driver) => (
+                <option key={driver} value={driver}>
+                  {driver}
+                </option>
+              ))}
+            </SelectField>
+            <TextField
+              label="Dispatcher 模型"
+              value={draft.dispatcher.model || ""}
+              placeholder="留空使用驱动默认模型"
+              onChange={(event) =>
+                set("dispatcher", {
+                  ...draft.dispatcher,
+                  model: event.target.value,
+                })
+              }
+            />
+          </div>
+          <TextField
+            label="Dispatcher 命令"
+            value={draft.dispatcher.command || ""}
+            required={draft.dispatcher.driver === "command"}
+            placeholder="留空使用驱动默认命令"
+            onChange={(event) =>
+              set("dispatcher", {
+                ...draft.dispatcher,
+                command: event.target.value,
+              })
+            }
+          />
+          <h3 className="section-label">Dispatcher 环境变量</h3>
+          <p className="muted">
+            单独设置 API
+            Key、服务地址及驱动参数。敏感值默认隐藏，下方“显示输入值”同时控制两组变量。
+          </p>
+          <div className="environment-rows">
+            {dispatcherRows.map((row, index) => (
+              <div key={index}>
+                <input
+                  aria-label={`Dispatcher 环境变量 ${index + 1} 名称`}
+                  placeholder="KEY"
+                  required
+                  value={row.key}
+                  onChange={(event) =>
+                    setDispatcherRows((previous) =>
+                      previous.map((entry, position) =>
+                        position === index
+                          ? { ...entry, key: event.target.value }
+                          : entry,
+                      ),
+                    )
+                  }
+                />
+                <input
+                  aria-label={`Dispatcher 环境变量 ${index + 1} 值`}
+                  type={showValues ? "text" : "password"}
+                  autoComplete="off"
+                  value={row.value}
+                  onFocus={(event) => {
+                    if (row.value === "***") event.target.select();
+                  }}
+                  onChange={(event) =>
+                    setDispatcherRows((previous) =>
+                      previous.map((entry, position) =>
+                        position === index
+                          ? { ...entry, value: event.target.value }
+                          : entry,
+                      ),
+                    )
+                  }
+                />
+                <Button
+                  icon={Trash2}
+                  aria-label={`删除 Dispatcher 环境变量 ${row.key || index + 1}`}
+                  onClick={() =>
+                    setDispatcherRows((previous) =>
+                      previous.filter((_, position) => position !== index),
+                    )
+                  }
+                />
+              </div>
+            ))}
+          </div>
+          <Button
+            icon={Plus}
+            onClick={() =>
+              setDispatcherRows((previous) => [
+                ...previous,
+                { key: "", value: "" },
+              ])
+            }
+          >
+            添加 Dispatcher 环境变量
+          </Button>
+        </>
+      )}
       <h3 className="section-label">运行参数</h3>
       <div className="form-grid">
         {runtimeFields.map(([key, name, min, max]) => (

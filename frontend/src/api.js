@@ -108,7 +108,7 @@ export async function downloadProject(id, format) {
 
 // Configuration PUTs require the existing complete configuration. Masked values
 // retain secrets; explicit removals must never also appear in environment.
-export function workerPayload(config, rows) {
+export function workerPayload(config, rows, dispatcherRows) {
   const environment = {};
   const keys = new Set();
   for (const row of rows) {
@@ -123,7 +123,26 @@ export function workerPayload(config, rows) {
     keys.add(key);
     environment[key] = row.value;
   }
+  let dispatcher;
+  if (config.dispatcher === null) dispatcher = null;
+  else if (config.dispatcher) {
+    const nested = workerPayload(
+      config.dispatcher,
+      dispatcherRows ??
+        Object.entries(config.dispatcher.environment || {}).map(
+          ([key, value]) => ({ key, value }),
+        ),
+    );
+    dispatcher = {
+      driver: config.dispatcher.driver,
+      command: config.dispatcher.command,
+      model: config.dispatcher.model,
+      environment: nested.environment,
+      environment_remove: nested.environment_remove,
+    };
+  }
   return {
+    dispatcher,
     name: config.name,
     driver: config.driver,
     command: config.command,

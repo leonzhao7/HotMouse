@@ -77,7 +77,7 @@ func TestEventDecideAdjustsQueueBeforeNextExecute(t *testing.T) {
 		t.Fatalf("event not acknowledged: %+v %v", events, err)
 	}
 }
-func TestEventDecideFailureRetainsEventAndNeverMutatesClaimedStep(t *testing.T) {
+func TestEventDecideSkipsClaimedStepAndAcknowledgesEvent(t *testing.T) {
 	r, p := strategyWorker(t)
 	queued := workerStep(t, r, p, "claimed by other")
 	if _, err := r.DB.HeartbeatStep(t.Context(), p, queued.ID, "other"); err != nil {
@@ -93,8 +93,8 @@ func TestEventDecideFailureRetainsEventAndNeverMutatesClaimedStep(t *testing.T) 
 	r.RunOnce(t.Context())
 	r.RunOnce(t.Context())
 	events, err := r.DB.PendingDecideEvents(t.Context(), p)
-	if err != nil || len(events) != 1 {
-		t.Fatalf("failed event discarded: %+v %v", events, err)
+	if err != nil || len(events) != 0 {
+		t.Fatalf("successful event was not acknowledged: %+v %v", events, err)
 	}
 	detail, err := r.DB.GetProject(t.Context(), p)
 	if err != nil || detail.Steps[0].Worker == nil || *detail.Steps[0].Worker != "other" || detail.Steps[0].Abandoned {
@@ -102,7 +102,7 @@ func TestEventDecideFailureRetainsEventAndNeverMutatesClaimedStep(t *testing.T) 
 	}
 	var count int
 	if err := r.DB.SQL.QueryRow(`SELECT count(*) FROM worker_task_history WHERE task_type='decide'`).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("event retry cooldown ignored: %d %v", count, err)
+		t.Fatalf("unchanged graph planned again: %d %v", count, err)
 	}
 }
 func TestStructuredResultRecoveryDoesNotReexecuteOrDoubleCount(t *testing.T) {

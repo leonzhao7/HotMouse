@@ -47,6 +47,7 @@ type modelHistoricalStep struct {
 }
 
 type modelContext struct {
+	Preprocessing PreprocessingState    `yaml:"preprocessing"`
 	Flags         []modelFlag           `yaml:"flags,omitempty"`
 	SchemaVersion int                   `yaml:"schema_version"`
 	Phase         string                `yaml:"phase"`
@@ -94,7 +95,7 @@ func (d *DB) ModelContext(ctx context.Context, project, phase, stepID string) (s
 	if err != nil {
 		return "", err
 	}
-	out := modelContext{SchemaVersion: 1, Phase: phase, Project: map[string]string{"id": project, "title": detail.Project.Title, "status": detail.Project.Status}, Goals: []Goal{}, RequiredFacts: []modelFact{}, Hints: detail.Hints,
+	out := modelContext{Preprocessing: detail.TargetProbe.Preprocessing, SchemaVersion: 1, Phase: phase, Project: map[string]string{"id": project, "title": detail.Project.Title, "status": detail.Project.Status}, Goals: []Goal{}, RequiredFacts: []modelFact{}, Hints: detail.Hints,
 		DetailAccess: map[string]string{
 			"fact":       "GET /projects/" + project + "/facts/{id}; hotmouse --project " + project + " fact show {id}",
 			"step":       "GET /projects/" + project + "/steps/{id}; hotmouse --project " + project + " step show {id}",
@@ -142,6 +143,9 @@ func (d *DB) ModelContext(ctx context.Context, project, phase, stepID string) (s
 		return view
 	}
 	required := map[string]bool{"origin": true}
+	if id := detail.TargetProbe.Preprocessing.FactID; id != "" {
+		required[id] = true
+	}
 	goalIDs := map[string]bool{}
 	routeIDs := map[string]bool{}
 	query := []string{}

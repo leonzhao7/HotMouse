@@ -526,6 +526,11 @@ env set 对名称包含 key/token/secret/password 的变量禁止 `--value` 明�
 | `workspace_root` | 服务主机路径；空字符串恢复后端默认路径 |
 | `completed_action` | `keep` 或 `remove` |
 | `context_root` | 服务主机上已存在的目录；空字符串恢复环境/目录发现 |
+| `worker_count` | 1–32，全局执行 Worker 数量，重启服务生效 |
+| `dispatcher.driver` | 独立规划驱动：`mock`、`command`、`pi`、`codex`、`claude` |
+| `dispatcher.command` | 独立规划命令；空字符串使用驱动默认命令 |
+| `dispatcher.model` | 独立规划模型；空字符串使用驱动默认模型 |
+| `dispatcher` | 通过 `config apply` 设置包含 driver/command/model/environment 的对象；`config set dispatcher null` 恢复共用 Worker 配置 |
 | `runtime.decide_timeout_seconds` | 1–86400，默认 300 |
 | `runtime.execute_timeout_seconds` | 1–86400，默认 300 |
 | `runtime.conclude_timeout_seconds` | 1–3600，默认 90 |
@@ -534,6 +539,8 @@ env set 对名称包含 key/token/secret/password 的变量禁止 `--value` 明�
 | `runtime.format_retries` | 0–1，默认 1 |
 
 CLI 接受历史 driver `shell` → command、`claudecode` / `claude_code` → claude 并规范化写入。已有非空 command 会被后端优先使用，切换到内置 driver 时如需使用内置适配器，应显式清空 command。
+
+Dispatcher 独立环境变量使用 `worker config apply --file PATH` 中的 `dispatcher.environment` 配置；删除键使用 `dispatcher.environment_remove`。前端 Worker 配置页也支持独立模型、驱动、凭据和脱敏编辑。目标分析与规划采用此配置，执行会话恢复总结沿用原 Worker provider。
 
 Worker 配置在服务主机生效，相对路径由服务的当前目录解析，不解析为远程客户端的目录。默认 workspace root 由后端依据 SQLite 路径生成；remove 只删除具有匹配 `.hotmouse-project` 标记的项目目录。
 

@@ -120,7 +120,7 @@ func (d *DB) failProjectIfNoWork(ctx context.Context, project, fingerprint, reas
 	return failed, err
 }
 
-// Target outages are terminal even while planning, executing or recovering.
+// Terminal failures stop the project even while planning, executing or recovering.
 func failActiveProjectTx(t *sql.Tx, project, reason, summary string) (bool, error) {
 	result, err := t.Exec(`UPDATE projects SET status='failed',failure_reason=?,decide_worker=NULL,decide_trigger=NULL,decide_started_at=NULL,decide_last_heartbeat_at=NULL WHERE id=? AND status='active'`, clean(reason), project)
 	if err != nil {

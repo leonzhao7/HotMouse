@@ -94,6 +94,14 @@ func Open(path string) (*DB, error) {
 	_, _ = d.Exec(`ALTER TABLE worker_config ADD COLUMN context_root TEXT NOT NULL DEFAULT ''`)
 	_, _ = d.Exec(`ALTER TABLE worker_config ADD COLUMN runtime_json TEXT NOT NULL DEFAULT '{}'`)
 	_, _ = d.Exec(`ALTER TABLE worker_config ADD COLUMN worker_count INTEGER NOT NULL DEFAULT 4`)
+	if err := addColumnIfMissing(d, "worker_config", "dispatcher_json", `TEXT NOT NULL DEFAULT 'null'`); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate dispatcher config: %w", err)
+	}
+	if err := addColumnIfMissing(d, "project_target_health", "preprocessing_json", `TEXT NOT NULL DEFAULT '{"status":"pending"}'`); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate preprocessing: %w", err)
+	}
 	_, _ = d.Exec(`ALTER TABLE projects ADD COLUMN max_workers INTEGER NOT NULL DEFAULT 1`)
 	_, _ = d.Exec(`ALTER TABLE steps ADD COLUMN worker_role TEXT NOT NULL DEFAULT 'agent' CHECK(worker_role IN ('agent','dispatcher'))`)
 	_, _ = d.Exec(`UPDATE steps SET worker_role='dispatcher' WHERE worker LIKE '%/dispatcher/%'`)

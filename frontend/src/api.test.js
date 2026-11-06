@@ -64,6 +64,31 @@ test("Worker environment prevents duplicate keys and moving unreadable secrets",
     /环境变量名/,
   );
 });
+test("Dispatcher payload preserves independent secrets and removes deleted keys", () => {
+  const config = {
+    environment: { WORKER_KEY: "***" },
+    dispatcher: {
+      driver: "pi",
+      model: "planner-model",
+      command: "",
+      environment: { PI_API_KEY: "***", REMOVE: "old" },
+    },
+  };
+  const result = workerPayload(
+    config,
+    [{ key: "WORKER_KEY", value: "***" }],
+    [{ key: "PI_API_KEY", value: "***" }],
+  );
+  assert.deepEqual(result.dispatcher, {
+    driver: "pi",
+    model: "planner-model",
+    command: "",
+    environment: { PI_API_KEY: "***" },
+    environment_remove: ["REMOVE"],
+  });
+  assert.deepEqual(result.environment, { WORKER_KEY: "***" });
+  assert.equal(workerPayload({ dispatcher: null }, []).dispatcher, null);
+});
 test("API preserves core paths, cookies and structured request bodies", async () => {
   globalThis.fetch = async (path, options) => {
     assert.equal(path, "/projects/p001/steps");

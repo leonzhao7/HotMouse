@@ -260,6 +260,40 @@ func workerPatchValid(patch map[string]any) error {
 			if _, ok := v.(bool); !ok {
 				return invalid("enabled must be a boolean")
 			}
+		case "dispatcher":
+			if v == nil {
+				continue
+			}
+			config, ok := v.(map[string]any)
+			if !ok {
+				return invalid("dispatcher must be an object or null")
+			}
+			rest := map[string]any{}
+			for field, value := range config {
+				switch field {
+				case "model":
+					if _, ok := value.(string); !ok {
+						return invalid("dispatcher model must be a string")
+					}
+				case "driver", "command", "environment", "environment_remove":
+					rest[field] = value
+				default:
+					return invalid("unknown dispatcher configuration field %q", field)
+				}
+			}
+			if len(rest) > 0 {
+				if err := workerPatchValid(rest); err != nil {
+					return err
+				}
+			}
+			if driver, ok := rest["driver"]; ok {
+				config["driver"] = driver
+			}
+		case "worker_count":
+			count, ok := integer(v)
+			if !ok || count < 1 || count > 32 {
+				return invalid("worker_count must be between 1 and 32")
+			}
 		case "runtime":
 			m, ok := v.(map[string]any)
 			if !ok {
@@ -398,6 +432,16 @@ func (a *app) workers() *cobra.Command {
 		key, value := args[0], args[1]
 		patch := map[string]any{}
 		switch {
+		case key == "dispatcher" && value == "null":
+			patch[key] = nil
+		case strings.HasPrefix(key, "dispatcher."):
+			patch["dispatcher"] = map[string]any{strings.TrimPrefix(key, "dispatcher."): value}
+		case key == "worker_count":
+			count, err := strconv.Atoi(value)
+			if err != nil {
+				return nil, invalid("worker_count must be integer")
+			}
+			patch[key] = count
 		case strings.HasPrefix(key, "runtime."):
 			n, e := strconv.Atoi(value)
 			if e != nil {

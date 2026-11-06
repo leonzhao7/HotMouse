@@ -67,6 +67,9 @@ func providerArgv(cfg workerConfig, phase, session, workspace, prompt string) ([
 	switch driver {
 	case "codex":
 		args := []string{"codex", "exec"}
+		if model := cfg.env["CODEX_MODEL"]; model != "" {
+			args = append(args, "--model", model)
+		}
 		if phase == "summary" {
 			args = append(args, "resume", "--json", "--skip-git-repo-check", "-c", `sandbox_mode="read-only"`, "-c", `approval_policy="never"`, "--", session, prompt)
 		} else {
@@ -81,6 +84,9 @@ func providerArgv(cfg workerConfig, phase, session, workspace, prompt string) ([
 		return args, nil
 	case "claudecode":
 		args := []string{"claude", "--dangerously-skip-permissions", "--output-format", "json"}
+		if model := cfg.env["ANTHROPIC_MODEL"]; model != "" {
+			args = append(args, "--model", model)
+		}
 		if phase == "summary" {
 			args = append(args, "--resume", session, "--tools", "")
 		} else {
@@ -147,6 +153,8 @@ func providerArgv(cfg workerConfig, phase, session, workspace, prompt string) ([
 				return nil, err
 			}
 			args = append(args, "--provider", "hotmouse", "--model", cfg.env["PI_MODEL"])
+		} else if model := cfg.env["PI_MODEL"]; model != "" {
+			args = append(args, "--model", model)
 		}
 		return append(args, "-p", prompt), nil
 	}
