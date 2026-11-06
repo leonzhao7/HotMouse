@@ -35,23 +35,35 @@ type modelFlag struct {
 	FactID      string `yaml:"fact_id"`
 }
 
+// Keep every action available to the planner, without its verbose evidence.
+// Keyword recall alone cannot reliably prevent repeating old work.
+type modelHistoricalStep struct {
+	ID          string   `yaml:"id"`
+	From        []string `yaml:"from"`
+	Description string   `yaml:"description"`
+	Status      string   `yaml:"status"`
+	To          *string  `yaml:"to,omitempty"`
+	ResultType  string   `yaml:"result_type,omitempty"`
+}
+
 type modelContext struct {
-	Flags         []modelFlag       `yaml:"flags,omitempty"`
-	SchemaVersion int               `yaml:"schema_version"`
-	Phase         string            `yaml:"phase"`
-	Project       map[string]string `yaml:"project"`
-	Goals         []Goal            `yaml:"goals"`
-	CurrentStep   *modelStep        `yaml:"current_step,omitempty"`
-	OpenSteps     []modelStep       `yaml:"open_steps,omitempty"`
-	RequiredFacts []modelFact       `yaml:"required_facts"`
-	RecentFacts   []modelFact       `yaml:"recent_facts,omitempty"`
-	Hints         []Hint            `yaml:"hints,omitempty"`
-	Routes        []Route           `yaml:"routes,omitempty"`
-	Events        []DecideEvent     `yaml:"decide_events,omitempty"`
-	History       []HistoryMatch    `yaml:"related_history,omitempty"`
-	Experiences   []Experience      `yaml:"experiences,omitempty"`
-	DetailAccess  map[string]string `yaml:"detail_access"`
-	Omitted       map[string]int    `yaml:"omitted"`
+	Flags         []modelFlag           `yaml:"flags,omitempty"`
+	SchemaVersion int                   `yaml:"schema_version"`
+	Phase         string                `yaml:"phase"`
+	Project       map[string]string     `yaml:"project"`
+	Goals         []Goal                `yaml:"goals"`
+	CurrentStep   *modelStep            `yaml:"current_step,omitempty"`
+	OpenSteps     []modelStep           `yaml:"open_steps,omitempty"`
+	StepHistory   []modelHistoricalStep `yaml:"step_history,omitempty"`
+	RequiredFacts []modelFact           `yaml:"required_facts"`
+	RecentFacts   []modelFact           `yaml:"recent_facts,omitempty"`
+	Hints         []Hint                `yaml:"hints,omitempty"`
+	Routes        []Route               `yaml:"routes,omitempty"`
+	Events        []DecideEvent         `yaml:"decide_events,omitempty"`
+	History       []HistoryMatch        `yaml:"related_history,omitempty"`
+	Experiences   []Experience          `yaml:"experiences,omitempty"`
+	DetailAccess  map[string]string     `yaml:"detail_access"`
+	Omitted       map[string]int        `yaml:"omitted"`
 }
 
 func brief(s string, max int) string {
@@ -156,6 +168,24 @@ func (d *DB) ModelContext(ctx context.Context, project, phase, stepID string) (s
 		}
 	} else {
 		for _, s := range detail.Steps {
+			status := "pending"
+			if s.Worker != nil {
+				status = "working"
+			}
+			if s.Abandoned {
+				status = "abandoned"
+			}
+			if s.To != nil {
+				status = "completed"
+			}
+			if recovery := recoveries[s.ID]; recovery != "" && s.To == nil {
+				status = recovery
+			}
+			history := modelHistoricalStep{ID: s.ID, From: s.From, Description: s.Description, Status: status, To: s.To}
+			if s.Result != nil {
+				history.ResultType = s.Result.Type
+			}
+			out.StepHistory = append(out.StepHistory, history)
 			if s.To != nil || s.Abandoned {
 				out.Omitted["closed_steps"]++
 				continue

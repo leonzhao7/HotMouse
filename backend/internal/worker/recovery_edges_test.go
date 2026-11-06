@@ -53,6 +53,7 @@ func TestWorkspaceOwnershipIsolationAndDeferredCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	runner := New(db)
 	cfg := runner.config(t.Context())
 	dir, err := runner.ensureWorkspace(project.Project.ID, cfg)

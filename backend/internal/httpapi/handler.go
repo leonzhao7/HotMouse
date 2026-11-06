@@ -25,6 +25,7 @@ import (
 
 type Handler struct {
 	DB        *core.DB
+	Runner    *worker.Runner
 	captchaMu sync.Mutex
 	captchas  map[string]captchaChallenge
 }
@@ -36,7 +37,11 @@ type captchaChallenge struct {
 
 var registrationUsernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-func New(db *core.DB) *Handler { return &Handler{DB: db, captchas: map[string]captchaChallenge{}} }
+func New(db *core.DB) *Handler {
+	runner := worker.New(db)
+	runner.SetLogOutput(os.Stdout)
+	return &Handler{DB: db, Runner: runner, captchas: map[string]captchaChallenge{}}
+}
 func bad(ctx iris.Context, err error) {
 	status := iris.StatusBadRequest
 	lower := strings.ToLower(err.Error())
@@ -1201,9 +1206,7 @@ func (h *Handler) WorkerHistory(ctx iris.Context) {
 	ctx.JSON(out)
 }
 func (h *Handler) ExecuteStep(ctx iris.Context) {
-	runner := worker.New(h.DB)
-	runner.SetLogOutput(os.Stdout)
-	result, e := runner.ExecuteNow(ctx.Request().Context(), ctx.Params().Get("project_id"), ctx.Params().Get("step_id"))
+	result, e := h.Runner.ExecuteNow(ctx.Request().Context(), ctx.Params().Get("project_id"), ctx.Params().Get("step_id"))
 	if e != nil {
 		bad(ctx, e)
 		return

@@ -166,6 +166,7 @@ func TestDecideSkipsUnchangedAndHeldProjects(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		fixtureTargetProbeNotRequired(t, db, p.Project.ID)
 		if i == 0 {
 			if _, err := db.SQL.Exec("INSERT INTO worker_decide_state(project_id,fingerprint,updated_at) VALUES(?,?,'now')", p.Project.ID, graphFingerprint(p)); err != nil {
 				t.Fatal(err)

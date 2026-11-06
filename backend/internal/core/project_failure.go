@@ -119,3 +119,19 @@ func (d *DB) failProjectIfNoWork(ctx context.Context, project, fingerprint, reas
 	})
 	return failed, err
 }
+
+// Target outages are terminal even while planning, executing or recovering.
+func failActiveProjectTx(t *sql.Tx, project, reason, summary string) (bool, error) {
+	result, err := t.Exec(`UPDATE projects SET status='failed',failure_reason=?,decide_worker=NULL,decide_trigger=NULL,decide_started_at=NULL,decide_last_heartbeat_at=NULL WHERE id=? AND status='active'`, clean(reason), project)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	if _, err := t.Exec(`UPDATE steps SET worker=NULL WHERE project_id=? AND to_fact_id IS NULL`, project); err != nil {
+		return false, err
+	}
+	_, err = t.Exec(`INSERT INTO audit_log(action,target_type,target_id,summary,detail,resource,detail_json,created_at) VALUES('project.failed','project',?,?,?,?,?,?)`, project, summary, clean(reason), project, jsonData(map[string]string{"reason": clean(reason)}), now())
+	return err == nil, err
+}

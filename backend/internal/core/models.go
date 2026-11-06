@@ -93,13 +93,14 @@ type ProjectSummary struct {
 }
 
 type ProjectDetail struct {
-	Project  Project   `json:"project" yaml:"project"`
-	Facts    []Fact    `json:"facts" yaml:"facts"`
-	Steps    []Step    `json:"steps" yaml:"steps"`
-	Goals    []Goal    `json:"goals" yaml:"goals"`
-	Findings []Finding `json:"findings" yaml:"findings"`
-	Hints    []Hint    `json:"hints" yaml:"hints"`
-	Routes   []Route   `json:"routes" yaml:"routes"`
+	TargetProbe TargetProbeState `json:"target_probe" yaml:"target_probe"`
+	Project     Project          `json:"project" yaml:"project"`
+	Facts       []Fact           `json:"facts" yaml:"facts"`
+	Steps       []Step           `json:"steps" yaml:"steps"`
+	Goals       []Goal           `json:"goals" yaml:"goals"`
+	Findings    []Finding        `json:"findings" yaml:"findings"`
+	Hints       []Hint           `json:"hints" yaml:"hints"`
+	Routes      []Route          `json:"routes" yaml:"routes"`
 }
 
 type CreateProject struct {

@@ -83,6 +83,9 @@ func (d *DB) CreateProject(ctx context.Context, req CreateProject) (ProjectDetai
 		if _, err := t.Exec(`INSERT INTO projects(id,title,max_workers,created_at) VALUES(?,?,?,?)`, pid, clean(req.Title), maxWorkers, nowv); err != nil {
 			return err
 		}
+		if _, err := t.Exec(`INSERT INTO project_target_health(project_id) VALUES(?)`, pid); err != nil {
+			return err
+		}
 		if _, err := t.Exec(`INSERT INTO facts(id,project_id,description) VALUES('origin',?,?)`, pid, clean(req.Origin)); err != nil {
 			return err
 		}
@@ -249,6 +252,10 @@ func (d *DB) getProjectTx(ctx context.Context, q queryer, id string) (ProjectDet
 	}
 	rows.Close()
 	out.Routes, err = listRoutes(ctx, q, id)
+	if err != nil {
+		return out, err
+	}
+	out.TargetProbe, err = readTargetProbe(q.QueryRowContext(ctx, `SELECT `+targetProbeSelect+` FROM project_target_health WHERE project_id=?`, id))
 	return out, err
 }
 func nullable(v sql.NullString) *string {
@@ -1361,12 +1368,18 @@ func (d *DB) SetProjectStatus(ctx context.Context, p, status string) (Project, e
 			return e
 		}
 		if status == "stopped" {
+			if _, e := t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),status='pending',analysis_json='',failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='' WHERE project_id=?`, p); e != nil {
+				return e
+			}
 			_, e := t.Exec(`UPDATE steps SET worker=NULL WHERE project_id=? AND concluded_at IS NULL`, p)
 			if e != nil {
 				return e
 			}
 		}
 		if status == "active" && cur != "active" {
+			if _, e := t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),status='pending',analysis_json='',failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='' WHERE project_id=?`, p); e != nil {
+				return e
+			}
 			if _, e := t.Exec(`DELETE FROM worker_decide_state WHERE project_id=?`, p); e != nil {
 				return e
 			}
@@ -1532,6 +1545,9 @@ func (d *DB) Reopen(ctx context.Context, p string, r Reopen) (ReopenResult, erro
 			}
 		}
 		_, e = t.Exec(`UPDATE projects SET status='active',decide_worker=NULL,decide_trigger=NULL,decide_started_at=NULL,decide_last_heartbeat_at=NULL WHERE id=?`, p)
+		if e == nil {
+			_, e = t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),status='pending',analysis_json='',failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='' WHERE project_id=?`, p)
+		}
 		if e != nil {
 			return e
 		}

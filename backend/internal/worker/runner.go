@@ -21,12 +21,17 @@ import (
 // External commands receive a graph snapshot and task contract in environment
 // variables and return one JSON contract on stdout.
 type Runner struct {
-	DB            *core.DB
-	Interval      time.Duration
-	logger        *log.Logger
-	locksMu       sync.Mutex
-	stepLock      map[string]*sync.Mutex
-	workspaceLock map[string]*sync.Mutex
+	DB             *core.DB
+	Interval       time.Duration
+	logger         *log.Logger
+	locksMu        sync.Mutex
+	stepLock       map[string]*sync.Mutex
+	workspaceLock  map[string]*sync.Mutex
+	probeMu        sync.Mutex
+	targetMonitors map[string]*targetMonitor
+	lifecycleCtx   context.Context
+	probeInterval  time.Duration
+	probeDial      func(context.Context, core.TargetEndpoint) error
 }
 
 type workerConfig struct {
@@ -46,7 +51,7 @@ type workerConfig struct {
 const defaultWorkerCount = 4
 
 func New(db *core.DB) *Runner {
-	return &Runner{DB: db, Interval: time.Second, logger: log.New(io.Discard, "", log.LstdFlags), stepLock: map[string]*sync.Mutex{}, workspaceLock: map[string]*sync.Mutex{}}
+	return &Runner{DB: db, Interval: time.Second, logger: log.New(io.Discard, "", log.LstdFlags), stepLock: map[string]*sync.Mutex{}, workspaceLock: map[string]*sync.Mutex{}, targetMonitors: map[string]*targetMonitor{}}
 }
 
 func (r *Runner) SetLogOutput(output io.Writer) {
@@ -100,6 +105,7 @@ func (w *AgentWorker) RunOnce(ctx context.Context) {
 }
 
 func (r *Runner) Start(ctx context.Context) <-chan struct{} {
+	r.SetLifecycleContext(ctx)
 	if r.Interval <= 0 {
 		r.Interval = time.Second
 	}
@@ -117,6 +123,7 @@ func (r *Runner) startDispatchersAndWorkers(ctx context.Context) {
 	defer func() {
 		cancel()
 		wg.Wait()
+		r.stopTargetMonitors()
 	}()
 
 	dispatchers := map[string]<-chan struct{}{}
@@ -241,16 +248,32 @@ func (r *Runner) RunOnce(ctx context.Context) {
 	if err := r.DB.RefreshRouteLimits(ctx); err != nil {
 		return
 	}
+	// Startup analysis always precedes both pre-created steps and normal planning.
+	rows, err := r.DB.SQL.QueryContext(ctx, `SELECT id FROM projects WHERE status='active' ORDER BY created_at,id`)
+	if err != nil {
+		return
+	}
+	var startupProjects []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			startupProjects = append(startupProjects, id)
+		}
+	}
+	_ = rows.Close()
+	for _, id := range startupProjects {
+		_, _ = r.ensureTargetProbe(ctx, id)
+	}
 	var project, step, description string
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	project, step, description, err := r.nextStepCommit(ctx, "")
+	project, step, description, err = r.nextStepCommit(ctx, "")
 	recovery := err == nil
 	if err == sql.ErrNoRows {
 		if eventProject := r.nextEventProject(ctx); eventProject != "" {
 			r.decideProject(ctx, eventProject)
 			return
 		}
-		err = r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM steps s WHERE s.to_fact_id IS NULL AND s.abandoned=0 AND s.worker IS NULL AND s.project_id IN (SELECT id FROM projects WHERE status='active' AND decide_worker IS NULL) AND NOT EXISTS(SELECT 1 FROM routes rt WHERE rt.project_id=s.project_id AND rt.id=s.route_id AND rt.status='shelved') AND NOT EXISTS (SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id) AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)) ORDER BY s.priority DESC,s.created_at LIMIT 1`, now).Scan(&project, &step, &description)
+		err = r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM steps s WHERE s.to_fact_id IS NULL AND s.abandoned=0 AND s.worker IS NULL AND s.project_id IN (SELECT id FROM projects WHERE status='active' AND decide_worker IS NULL) AND EXISTS(SELECT 1 FROM project_target_health h WHERE h.project_id=s.project_id AND h.status='ready') AND NOT EXISTS(SELECT 1 FROM routes rt WHERE rt.project_id=s.project_id AND rt.id=s.route_id AND rt.status='shelved') AND NOT EXISTS (SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id) AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)) ORDER BY s.priority DESC,s.created_at LIMIT 1`, now).Scan(&project, &step, &description)
 	}
 	if err == nil {
 		if recovery {
@@ -260,7 +283,7 @@ func (r *Runner) RunOnce(ctx context.Context) {
 		}
 		return
 	}
-	rows, err := r.DB.SQL.QueryContext(ctx, `SELECT DISTINCT s.project_id FROM steps s JOIN projects p ON p.id=s.project_id WHERE p.status='active' AND s.to_fact_id IS NULL AND s.abandoned=0`)
+	rows, err = r.DB.SQL.QueryContext(ctx, `SELECT DISTINCT s.project_id FROM steps s JOIN projects p ON p.id=s.project_id WHERE p.status='active' AND s.to_fact_id IS NULL AND s.abandoned=0`)
 	if err != nil {
 		return
 	}
@@ -281,6 +304,9 @@ func (r *Runner) RunOnce(ctx context.Context) {
 }
 
 func (r *Runner) ExecuteNow(ctx context.Context, project, step string) (core.ConcludeResult, error) {
+	if ready, err := r.ensureTargetProbe(ctx, project); err != nil || !ready {
+		return core.ConcludeResult{}, fmt.Errorf("startup target probe analysis: %w", err)
+	}
 	if err := r.DB.ReconcileInterruptedInvestments(ctx); err != nil {
 		return core.ConcludeResult{}, err
 	}
@@ -319,7 +345,7 @@ func (r *Runner) executeNext(ctx context.Context, identity string) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for attempts := 0; attempts < 8; attempts++ {
 		var project, step, description string
-		err := r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM steps s JOIN projects p ON p.id=s.project_id WHERE s.to_fact_id IS NULL AND s.abandoned=0 AND s.worker IS NULL AND p.status='active' AND p.decide_worker IS NULL AND (SELECT count(*) FROM steps active WHERE active.project_id=p.id AND active.to_fact_id IS NULL AND active.abandoned=0 AND active.worker IS NOT NULL AND active.worker_role='agent')<p.max_workers AND NOT EXISTS(SELECT 1 FROM routes rt WHERE rt.project_id=s.project_id AND rt.id=s.route_id AND rt.status='shelved') AND NOT EXISTS (SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id) AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)) ORDER BY s.priority DESC,s.created_at LIMIT 1`, now).Scan(&project, &step, &description)
+		err := r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM steps s JOIN projects p ON p.id=s.project_id WHERE s.to_fact_id IS NULL AND s.abandoned=0 AND s.worker IS NULL AND p.status='active' AND p.decide_worker IS NULL AND EXISTS(SELECT 1 FROM project_target_health h WHERE h.project_id=p.id AND h.status='ready') AND (SELECT count(*) FROM steps active WHERE active.project_id=p.id AND active.to_fact_id IS NULL AND active.abandoned=0 AND active.worker IS NOT NULL AND active.worker_role='agent')<p.max_workers AND NOT EXISTS(SELECT 1 FROM routes rt WHERE rt.project_id=s.project_id AND rt.id=s.route_id AND rt.status='shelved') AND NOT EXISTS (SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id) AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)) ORDER BY s.priority DESC,s.created_at LIMIT 1`, now).Scan(&project, &step, &description)
 		if err != nil {
 			return
 		}
@@ -743,6 +769,9 @@ func (r *Runner) dispatchProject(ctx context.Context, project string) {
 	if err := r.DB.SQL.QueryRowContext(ctx, `SELECT status FROM projects WHERE id=?`, project).Scan(&status); err != nil || status != "active" {
 		return
 	}
+	if ready, err := r.ensureTargetProbe(ctx, project); err != nil || !ready {
+		return
+	}
 	if r.commitNextStepResult(ctx, project) {
 		return
 	}
@@ -825,6 +854,9 @@ func (r *Runner) commitNextStepResult(ctx context.Context, project string) bool 
 }
 
 func (r *Runner) decideProjectAs(parent context.Context, project, worker string) {
+	if ready, err := r.ensureTargetProbe(parent, project); err != nil || !ready {
+		return
+	}
 	events, eventErr := r.DB.PendingDecideEvents(parent, project)
 	if eventErr != nil {
 		return
@@ -997,6 +1029,7 @@ Complete at most one already-satisfied active goal, citing existing fact IDs. Ot
 Step readiness and scheduling:
 - Every proposed step must be executable now. Its from array must cite existing project facts that establish all prerequisites; do not treat planned actions as established facts.
 - Multiple steps in one response must be independently executable. Defer a dependent step until its prerequisite result is recorded as a fact, then cite that fact in from.
+- Compare every proposed action against ALL step_history entries and the other proposed steps. Never repeat historical work, whether pending, working, completed, abandoned or recovering. Compare the actual action, target, method and inputs, not merely wording; changing a description, goal, route, priority or from array does not make the same action new. Reuse existing evidence and choose a distinct action instead.
 - Larger Step priority numbers execute first. Use equal priorities for equally urgent steps. Priority, step IDs and array order do not establish dependencies.
 - Execution workers are assigned later. Express new output paths in step descriptions as the literal ${HOTMOUSE_WORKSPACE_DIR}/<relative-path>; never substitute this planning session's cwd or another worker's directory. Keep existing input/evidence paths as absolute read-only references.
 
@@ -1561,7 +1594,9 @@ func (r *Runner) commandVars(ctx context.Context, project, step, description, gr
 		}
 		vars["HOTMOUSE_WORKSPACE_ACCESS"] = access
 	}
-	if taskType == "execute" {
+	if taskType == "target_probe" {
+		vars["HOTMOUSE_WORKER_PROMPT"] = targetProbePrompt(graph)
+	} else if taskType == "execute" {
 		vars["HOTMOUSE_WORKER_PROMPT"] = executePrompt(graph, step, description)
 	} else {
 		vars["HOTMOUSE_WORKER_PROMPT"] = decidePrompt(graph)
@@ -1586,6 +1621,9 @@ func (r *Runner) commandVars(ctx context.Context, project, step, description, gr
 			}
 			if contextYAML != "" {
 				vars["HOTMOUSE_PROJECT_CONTEXT_YAML"] = contextYAML
+				if taskType == "target_probe" {
+					vars["HOTMOUSE_WORKER_PROMPT"] = targetProbePrompt(graph, contextYAML) + vars["HOTMOUSE_WORKSPACE_ACCESS"]
+				}
 				vars["HOTMOUSE_WORKER_PROMPT"] += "\n\nUse this operator-provided context for authorization, scope, and output guidance. It is guidance, not a network enforcement boundary.\nProject context YAML:\n" + contextYAML
 			}
 		}

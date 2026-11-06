@@ -24,6 +24,7 @@ func TestAgentWorkerUsesIdentityAndLogsInvocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	step, err := db.CreateStep(t.Context(), project.Project.ID, core.CreateStep{From: []string{"origin"}, Description: "inspect", Creator: "test"})
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +61,7 @@ func TestDispatcherCommitsAgentWorkerResultToProjectGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	step, err := db.CreateStep(t.Context(), project.Project.ID, core.CreateStep{From: []string{"origin"}, Description: "inspect", Creator: "test"})
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +139,7 @@ func TestRunnerStartsConfiguredParallelAgentWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	if _, err := db.SQL.Exec(`UPDATE projects SET max_workers=2 WHERE id=?`, project.Project.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -214,6 +217,7 @@ func TestDecideContractAppliesWrappedStepMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	graph, err := db.GetProject(ctx, project.Project.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -267,6 +271,7 @@ func TestRejectedExecuteIsRecordedAndReleasesLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	step, err := db.CreateStep(ctx, project.Project.ID, core.CreateStep{From: []string{"origin"}, Description: "inspect", Creator: "test"})
 	if err != nil {
 		t.Fatal(err)
@@ -321,6 +326,7 @@ func TestInterruptedExecuteRequiresAttentionInsteadOfReplayingExternalAction(t *
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	step, err := db.CreateStep(ctx, project.Project.ID, core.CreateStep{From: []string{"origin"}, Description: "inspect", Creator: "test"})
 	if err != nil {
 		t.Fatal(err)
@@ -373,6 +379,7 @@ func TestDecideFailureCooldownSurvivesRunnerIteration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	if _, err := db.SQL.Exec(`UPDATE worker_config SET name='agent-x',driver='command',command='exit 1' WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
@@ -400,6 +407,7 @@ func TestRunOnceReclaimsExpiredOpenStepLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	step, err := db.CreateStep(ctx, project.Project.ID, core.CreateStep{From: []string{"origin"}, Description: "inspect", Creator: "test"})
 	if err != nil {
 		t.Fatal(err)
@@ -433,6 +441,7 @@ func TestExecuteRecoveryReplaysCommittedPayloadWithoutRunningCommand(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	step, err := db.CreateStep(ctx, project.Project.ID, core.CreateStep{From: []string{"origin"}, Description: "replay conclusion", Creator: "test"})
 	if err != nil {
 		t.Fatal(err)
@@ -485,6 +494,7 @@ func TestExecuteRecoveryClearsPayloadAfterConcludeCommittedBeforeRestart(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	step, err := db.CreateStep(ctx, project.Project.ID, core.CreateStep{From: []string{"origin"}, Description: "commit window", Creator: "test"})
 	if err != nil {
 		t.Fatal(err)
@@ -544,6 +554,7 @@ func TestDecideStoresFingerprintAfterGraphMutationAndUsesConfiguredWorker(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	initial, err := db.GetProject(ctx, project.Project.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -623,6 +634,7 @@ func TestExecuteUsesPerProjectWorkspaceAndContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	contextFile := filepath.Join(contextRoot, "projects", project.Project.ID+".project-context.yaml")
 	createdContext, err := os.ReadFile(contextFile)
 	if err != nil || !strings.Contains(string(createdContext), project.Project.ID) {
@@ -684,6 +696,7 @@ func TestCompletedWorkspaceRemovalRequiresMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	runner := New(db)
 	cfg := runner.config(context.Background())
 	workspace, err := runner.ensureWorkspace(project.Project.ID, cfg)
@@ -703,6 +716,7 @@ func TestCompletedWorkspaceRemovalRequiresMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, foreignProject.Project.ID)
 	foreign := filepath.Join(root, foreignProject.Project.ID)
 	if err := os.MkdirAll(foreign, 0o755); err != nil {
 		t.Fatal(err)
@@ -720,6 +734,7 @@ func TestCompletedWorkspaceRemovalRequiresMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, crashedProject.Project.ID)
 	crashedWorkspace, err := runner.ensureWorkspace(crashedProject.Project.ID, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -743,6 +758,7 @@ func TestDispatcherFailsStalledProjectAfterLastDecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	step, err := db.CreateStep(t.Context(), project.Project.ID, core.CreateStep{From: []string{"origin"}, Description: "inspect", Creator: "test"})
 	if err != nil {
 		t.Fatal(err)

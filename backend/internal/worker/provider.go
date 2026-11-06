@@ -71,7 +71,7 @@ func providerArgv(cfg workerConfig, phase, session, workspace, prompt string) ([
 			args = append(args, "resume", "--json", "--skip-git-repo-check", "-c", `sandbox_mode="read-only"`, "-c", `approval_policy="never"`, "--", session, prompt)
 		} else {
 			args = append(args, "--json", "--skip-git-repo-check")
-			if phase == "decide" {
+			if phase == "decide" || phase == "target_probe" {
 				args = append(args, "--sandbox", "read-only", "-c", `approval_policy="never"`)
 			} else {
 				args = append(args, "--dangerously-bypass-approvals-and-sandbox")
@@ -87,7 +87,7 @@ func providerArgv(cfg workerConfig, phase, session, workspace, prompt string) ([
 			if session != "" {
 				args = append(args, "--session-id", session)
 			}
-			if phase == "decide" {
+			if phase == "decide" || phase == "target_probe" {
 				args = append(args, "--tools", "Read")
 			}
 		}

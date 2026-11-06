@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS worker_task_history (id INTEGER PRIMARY KEY AUTOINCRE
 CREATE TABLE IF NOT EXISTS worker_retry_state (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, task_type TEXT NOT NULL CHECK(task_type IN ('decide','execute')), failure_count INTEGER NOT NULL DEFAULT 0, retry_after TEXT NOT NULL, last_outcome TEXT NOT NULL, PRIMARY KEY(project_id,task_type));
 CREATE TABLE IF NOT EXISTS worker_execute_recovery (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, step_id TEXT NOT NULL, payload_json TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','summary_pending','commit_pending','needs_attention')), worker_name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '', driver TEXT NOT NULL DEFAULT '', worker_identity TEXT NOT NULL DEFAULT '', workspace_dir TEXT NOT NULL DEFAULT '', summary_attempts INTEGER NOT NULL DEFAULT 0, interruption_reason TEXT NOT NULL DEFAULT '', PRIMARY KEY(project_id,step_id));
 CREATE TABLE IF NOT EXISTS worker_decide_state (project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE, fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS project_target_health (project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE, run_id TEXT NOT NULL DEFAULT (lower(hex(randomblob(16)))), status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','ready')), analysis_json TEXT NOT NULL DEFAULT '', failure_counts_json TEXT NOT NULL DEFAULT '[]', last_checked_at TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', analysis_failures INTEGER NOT NULL DEFAULT 0, retry_after TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS idx_steps_open ON steps(project_id, concluded_at, abandoned, priority DESC, created_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
 `
@@ -123,6 +124,10 @@ func Open(path string) (*DB, error) {
 	if err := migrateProjectFailure(d); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("migrate project failure state: %w", err)
+	}
+	if _, err := d.Exec(`INSERT OR IGNORE INTO project_target_health(project_id) SELECT id FROM projects`); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("initialize target probe state: %w", err)
 	}
 	absPath, _ := filepath.Abs(path)
 	return &DB{SQL: d, Path: absPath}, nil

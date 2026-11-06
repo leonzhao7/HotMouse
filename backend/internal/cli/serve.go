@@ -19,7 +19,6 @@ import (
 	"hotmouse/backend/internal/apiclient"
 	"hotmouse/backend/internal/core"
 	"hotmouse/backend/internal/httpapi"
-	"hotmouse/backend/internal/worker"
 )
 
 func (a *app) versionResult(_ *cobra.Command) error {
@@ -118,7 +117,9 @@ func (a *app) serveCommand() *cobra.Command {
 		defer cancel()
 		api := iris.New()
 		api.Logger().SetOutput(a.errOut)
-		httpapi.Register(api, httpapi.New(db))
+		handler := httpapi.New(db)
+		handler.Runner.SetLifecycleContext(serviceCtx)
+		httpapi.Register(api, handler)
 		if e = api.Build(); e != nil {
 			return failed("build server: %s", e)
 		}
@@ -131,9 +132,7 @@ func (a *app) serveCommand() *cobra.Command {
 		go func() { done <- server.Serve(listener) }()
 		var workerDone <-chan struct{}
 		if autorun {
-			runner := worker.New(db)
-			runner.SetLogOutput(os.Stdout)
-			workerDone = runner.Start(serviceCtx)
+			workerDone = handler.Runner.Start(serviceCtx)
 		}
 		fmt.Fprintf(a.errOut, "HotMouse listening on %s (db=%s, autorun=%t)\n", listener.Addr(), path, autorun)
 		var serveErr error
@@ -155,6 +154,7 @@ func (a *app) serveCommand() *cobra.Command {
 				return failed("worker shutdown timed out")
 			}
 		}
+		handler.Runner.StopTargetProbes()
 		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			return failed("server: %s", serveErr)
 		}

@@ -21,7 +21,20 @@ func strategyWorker(t *testing.T) (*Runner, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, p.Project.ID)
 	return New(db), p.Project.ID
+}
+
+// These fixtures exercise later scheduling phases; startup has its own tests.
+func fixtureTargetProbeNotRequired(t *testing.T, db *core.DB, project string) {
+	t.Helper()
+	state, err := db.TargetProbe(t.Context(), project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveTargetProbeAnalysis(t.Context(), project, state.RunID, core.TargetProbeAnalysis{Reason: "offline test fixture", Targets: []core.TargetEndpoint{}}); err != nil {
+		t.Fatal(err)
+	}
 }
 func workerStep(t *testing.T, r *Runner, p, description string) core.Step {
 	t.Helper()

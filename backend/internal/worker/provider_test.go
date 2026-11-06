@@ -34,6 +34,7 @@ func fakePi(t *testing.T, script string, runtime core.WorkerRuntime) (*core.DB, 
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureTargetProbeNotRequired(t, db, project.Project.ID)
 	step, err := db.CreateStep(t.Context(), project.Project.ID, core.CreateStep{From: []string{"origin"}, Description: "bounded fixture", Creator: "test"})
 	if err != nil {
 		t.Fatal(err)

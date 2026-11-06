@@ -14,6 +14,7 @@ func (r *Runner) nextStepCommit(ctx context.Context, project string) (string, st
  FROM worker_execute_recovery x JOIN steps s ON s.project_id=x.project_id AND s.id=x.step_id
  JOIN projects p ON p.id=s.project_id
  WHERE p.status='active' AND (?='' OR p.id=?) AND s.abandoned=0
+ AND EXISTS(SELECT 1 FROM project_target_health h WHERE h.project_id=p.id AND h.status='ready')
  AND ((x.status='commit_pending' AND x.payload_json<>'')
       OR (x.status='summary_pending' AND x.session_id<>'' AND s.to_fact_id IS NULL
           AND (x.retry_after='' OR julianday(x.retry_after)<=julianday(?))
