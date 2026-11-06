@@ -184,7 +184,7 @@ export default function Workspace({ id }) {
                       action(
                         "resume",
                         () => put(`${base}/status`, { status: "active" }),
-                        "项目已恢复",
+                        "项目已恢复，路线获得新一轮预算",
                       )
                     }
                   >

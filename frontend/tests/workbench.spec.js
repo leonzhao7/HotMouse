@@ -555,18 +555,6 @@ test("route loss records, history recall, shared experience and flag reconciliat
   await expect(
     page.getByRole("button", { name: "继续推进", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "调整路线" }).click();
-  dialog = page.getByRole("dialog", { name: "调整路线" });
-  await dialog.getByLabel("路线状态").selectOption("active");
-  await dialog.getByLabel("调整原因").fill("Use independent verified method");
-  await dialog.getByLabel("重新开启条件").fill("New evidence is available");
-  await dialog.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(dialog).not.toBeVisible();
-  await expect(page.getByText("可投入", { exact: true })).toBeVisible();
-  projectState = await (
-    await page.request.get(`/projects/${projectID}`)
-  ).json();
-  expect(projectState.project.status).toBe("failed");
   await page.getByRole("button", { name: "继续推进", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "停止", exact: true }),
@@ -575,6 +563,19 @@ test("route loss records, history recall, shared experience and flag reconciliat
     await page.request.get(`/projects/${projectID}`)
   ).json();
   expect(projectState.project.status).toBe("active");
+  expect(projectState.project.failure_reason).toBeFalsy();
+  expect(projectState.routes[0].status).toBe("active");
+  expect(projectState.routes[0].no_progress_count).toBe(0);
+  expect(projectState.routes[0].budget_spent_ms).toBe(0);
+  expect(projectState.routes[0].result_count).toBe(1);
+  await expect(page.getByText("可投入", { exact: true })).toBeVisible();
+  await expect(page.getByText(/本轮 0 秒.*累计 0 秒/)).toBeVisible();
+  await page.getByRole("button", { name: "调整路线" }).click();
+  dialog = page.getByRole("dialog", { name: "调整路线" });
+  await dialog.getByLabel("调整原因").fill("Use independent verified method");
+  await dialog.getByLabel("重新开启条件").fill("New evidence is available");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
   await page.getByRole("tab", { name: "历史检索" }).click();
   await page
     .getByPlaceholder("检索当前项目的历史与证据")

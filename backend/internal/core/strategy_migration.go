@@ -54,6 +54,9 @@ func migrateStrategy(d *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	if err := addColumn(d, "routes", "budget_baseline_ms", `INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
 	// Existing steps are grouped by goal; explicit routes can split future work.
 	t, err := d.Begin()
 	if err != nil {
@@ -80,7 +83,7 @@ CREATE TABLE IF NOT EXISTS routes (
  id TEXT NOT NULL, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
  title TEXT NOT NULL, goal_id TEXT, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','shelved')),
  budget_seconds INTEGER NOT NULL DEFAULT 1200 CHECK(budget_seconds>=0), no_progress_limit INTEGER NOT NULL DEFAULT 3 CHECK(no_progress_limit>0),
- invested_ms INTEGER NOT NULL DEFAULT 0, result_count INTEGER NOT NULL DEFAULT 0, progress_count INTEGER NOT NULL DEFAULT 0,
+ invested_ms INTEGER NOT NULL DEFAULT 0, budget_baseline_ms INTEGER NOT NULL DEFAULT 0, result_count INTEGER NOT NULL DEFAULT 0, progress_count INTEGER NOT NULL DEFAULT 0,
  negative_count INTEGER NOT NULL DEFAULT 0, no_progress_count INTEGER NOT NULL DEFAULT 0, environment_failure_count INTEGER NOT NULL DEFAULT 0,
  shelved_reason TEXT NOT NULL DEFAULT '', reopen_condition TEXT NOT NULL DEFAULT '', next_direction TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
  PRIMARY KEY(id,project_id), FOREIGN KEY(goal_id,project_id) REFERENCES goals(id,project_id));

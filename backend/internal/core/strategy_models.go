@@ -17,22 +17,24 @@ func (r ExecutionResult) Validate() error {
 }
 
 type Route struct {
-	ID                      string  `json:"id" yaml:"id"`
-	Title                   string  `json:"title" yaml:"title"`
-	GoalID                  *string `json:"goal_id" yaml:"goal_id"`
-	Status                  string  `json:"status" yaml:"status"`
-	BudgetSeconds           int     `json:"budget_seconds" yaml:"budget_seconds"`
-	NoProgressLimit         int     `json:"no_progress_limit" yaml:"no_progress_limit"`
-	InvestedMilliseconds    int64   `json:"invested_ms" yaml:"invested_ms"`
-	ResultCount             int     `json:"result_count" yaml:"result_count"`
-	ProgressCount           int     `json:"progress_count" yaml:"progress_count"`
-	NegativeCount           int     `json:"negative_count" yaml:"negative_count"`
-	NoProgressCount         int     `json:"no_progress_count" yaml:"no_progress_count"`
-	EnvironmentFailureCount int     `json:"environment_failure_count" yaml:"environment_failure_count"`
-	ShelvedReason           string  `json:"shelved_reason" yaml:"shelved_reason"`
-	ReopenCondition         string  `json:"reopen_condition" yaml:"reopen_condition"`
-	NextDirection           string  `json:"next_direction" yaml:"next_direction"`
-	CreatedAt               string  `json:"created_at" yaml:"created_at"`
+	ID                         string  `json:"id" yaml:"id"`
+	Title                      string  `json:"title" yaml:"title"`
+	GoalID                     *string `json:"goal_id" yaml:"goal_id"`
+	Status                     string  `json:"status" yaml:"status"`
+	BudgetSeconds              int     `json:"budget_seconds" yaml:"budget_seconds"`
+	NoProgressLimit            int     `json:"no_progress_limit" yaml:"no_progress_limit"`
+	InvestedMilliseconds       int64   `json:"invested_ms" yaml:"invested_ms"`
+	BudgetBaselineMilliseconds int64   `json:"budget_baseline_ms" yaml:"budget_baseline_ms"`
+	BudgetSpentMilliseconds    int64   `json:"budget_spent_ms" yaml:"budget_spent_ms"`
+	ResultCount                int     `json:"result_count" yaml:"result_count"`
+	ProgressCount              int     `json:"progress_count" yaml:"progress_count"`
+	NegativeCount              int     `json:"negative_count" yaml:"negative_count"`
+	NoProgressCount            int     `json:"no_progress_count" yaml:"no_progress_count"`
+	EnvironmentFailureCount    int     `json:"environment_failure_count" yaml:"environment_failure_count"`
+	ShelvedReason              string  `json:"shelved_reason" yaml:"shelved_reason"`
+	ReopenCondition            string  `json:"reopen_condition" yaml:"reopen_condition"`
+	NextDirection              string  `json:"next_direction" yaml:"next_direction"`
+	CreatedAt                  string  `json:"created_at" yaml:"created_at"`
 }
 type CreateRoute struct {
 	Title           string  `json:"title"`

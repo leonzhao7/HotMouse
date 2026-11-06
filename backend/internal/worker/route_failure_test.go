@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"hotmouse/backend/internal/core"
@@ -54,5 +55,35 @@ func TestShelvedRoutePreventsPlanningDespitePendingEvents(t *testing.T) {
 				t.Fatalf("failed project invoked planner or worker: %v", err)
 			}
 		})
+	}
+}
+
+func TestManualResumeAllowsPlanningAndPendingWorkerExecution(t *testing.T) {
+	r, project := strategyWorker(t)
+	step := workerStep(t, r, project, "continue previous pending work")
+	if _, err := r.DB.SQL.Exec(`UPDATE routes SET status='shelved',shelved_reason='budget_exhausted',invested_ms=1300000 WHERE project_id=?`, project); err != nil {
+		t.Fatal(err)
+	}
+	r.dispatchProject(t.Context(), project)
+	if _, err := r.DB.SetProjectStatus(t.Context(), project, "active"); err != nil {
+		t.Fatal(err)
+	}
+	fixtureTargetProbeNotRequired(t, r.DB, project)
+	marker := filepath.Join(t.TempDir(), "tasks")
+	env, _ := json.Marshal(map[string]string{"MARKER": marker})
+	command := `printf '%s\n' "$HOTMOUSE_TASK_TYPE" >> "$MARKER"; if [ "$HOTMOUSE_TASK_TYPE" = execute ]; then printf '%s' '{"accepted":true,"data":{"description":"resumed result","result":{"type":"progress","detail":"fresh confirmed evidence"}}}'; else printf '%s' '{"accepted":true,"data":{}}'; fi`
+	if _, err := r.DB.SQL.Exec(`UPDATE worker_config SET driver='command',command=?,environment_json=?`, command, string(env)); err != nil {
+		t.Fatal(err)
+	}
+	r.dispatchProject(t.Context(), project)
+	NewAgentWorker(r, "local/worker/01").RunOnce(t.Context())
+	r.dispatchProject(t.Context(), project)
+	detail, err := r.DB.GetProject(t.Context(), project)
+	if err != nil || detail.Project.Status != "active" || len(detail.Steps) != 1 || detail.Steps[0].ID != step.ID || detail.Steps[0].To == nil {
+		t.Fatalf("resumed project did not execute previous pending work: %+v err=%v", detail, err)
+	}
+	calls, err := os.ReadFile(marker)
+	if err != nil || !strings.Contains(string(calls), "decide\n") || !strings.Contains(string(calls), "execute\n") {
+		t.Fatalf("resumed project did not invoke planner and worker: %q err=%v", calls, err)
 	}
 }

@@ -130,8 +130,12 @@ export default function Strategy({ mode, detail, base, refresh }) {
                 <strong>{route.title}</strong>
               </div>
               <p>
-                累计 {Math.round(route.invested_ms / 1000)} 秒 /{" "}
-                {route.budget_seconds || "不限"} 秒 · 进展{" "}
+                本轮{" "}
+                {Math.round(
+                  (route.budget_spent_ms ?? route.invested_ms) / 1000,
+                )}{" "}
+                秒 / {route.budget_seconds || "不限"} 秒 · 累计{" "}
+                {Math.round(route.invested_ms / 1000)} 秒 · 进展{" "}
                 {route.progress_count} · 负面结果 {route.negative_count} ·
                 连续无信息 {route.no_progress_count}/{route.no_progress_limit} ·
                 环境失败 {route.environment_failure_count}

@@ -1364,6 +1364,11 @@ func (d *DB) SetProjectStatus(ctx context.Context, p, status string) (Project, e
 		if status != "active" && status != "stopped" {
 			return fmt.Errorf("invalid status")
 		}
+		if status == "active" && cur != "active" {
+			if err := resumeRoutesTx(t, p); err != nil {
+				return err
+			}
+		}
 		if _, e := t.Exec(`UPDATE projects SET status=?,failure_reason='',decide_worker=CASE WHEN ?='stopped' THEN NULL ELSE decide_worker END,decide_trigger=CASE WHEN ?='stopped' THEN NULL ELSE decide_trigger END,decide_started_at=CASE WHEN ?='stopped' THEN NULL ELSE decide_started_at END,decide_last_heartbeat_at=CASE WHEN ?='stopped' THEN NULL ELSE decide_last_heartbeat_at END WHERE id=?`, status, status, status, status, status, p); e != nil {
 			return e
 		}
@@ -1472,6 +1477,9 @@ func (d *DB) Reopen(ctx context.Context, p string, r Reopen) (ReopenResult, erro
 		}
 		if st != "completed" {
 			return fmt.Errorf("project is not completed")
+		}
+		if err := resumeRoutesTx(t, p); err != nil {
+			return err
 		}
 		v := now()
 		rows, e := t.Query(`SELECT id,description,parent_goal_id,priority,created_at FROM goals WHERE project_id=? AND status='completed'`, p)

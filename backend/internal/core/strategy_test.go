@@ -209,6 +209,52 @@ func TestInvestmentIsIdempotentAndSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestRouteBudgetWindowMigratesExistingRoutes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old-route.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := strategyProject(t, db)
+	strategyStep(t, db, project, nil)
+	if _, err := db.SQL.Exec(`UPDATE routes SET invested_ms=1300000 WHERE project_id=?`, project); err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the schema used before per-resume budget windows existed.
+	if _, err := db.SQL.Exec(`ALTER TABLE routes DROP COLUMN budget_baseline_ms`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.SQL.Close() })
+	detail, err := db.GetProject(t.Context(), project)
+	if err != nil || detail.Routes[0].BudgetBaselineMilliseconds != 0 || detail.Routes[0].BudgetSpentMilliseconds != 1300000 || detail.Routes[0].InvestedMilliseconds != 1300000 {
+		t.Fatalf("migration changed historical route investment: %+v err=%v", detail, err)
+	}
+	if err := db.RefreshRouteLimits(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := db.GetProjectMeta(t.Context(), project)
+	if err != nil || meta.Status != "failed" {
+		t.Fatal("migration implicitly overrode historical stop-loss")
+	}
+	if _, err := db.SetProjectStatus(t.Context(), project, "active"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RefreshRouteLimits(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	meta, err = db.GetProjectMeta(t.Context(), project)
+	if err != nil || meta.Status != "active" {
+		t.Fatal("migrated project could not be manually resumed")
+	}
+}
+
 func TestDecisionPlanRollsBackAndProtectsRecovery(t *testing.T) {
 	db := testDB(t)
 	p := strategyProject(t, db)

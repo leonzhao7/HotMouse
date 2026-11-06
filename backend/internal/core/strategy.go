@@ -8,13 +8,14 @@ import (
 	"time"
 )
 
-const routeColumns = `id,title,goal_id,status,budget_seconds,no_progress_limit,invested_ms,result_count,progress_count,negative_count,no_progress_count,environment_failure_count,shelved_reason,reopen_condition,next_direction,created_at`
+const routeColumns = `id,title,goal_id,status,budget_seconds,no_progress_limit,invested_ms,budget_baseline_ms,result_count,progress_count,negative_count,no_progress_count,environment_failure_count,shelved_reason,reopen_condition,next_direction,created_at`
 
 func scanRoute(row interface{ Scan(...any) error }) (Route, error) {
 	var r Route
 	var goal sql.NullString
-	err := row.Scan(&r.ID, &r.Title, &goal, &r.Status, &r.BudgetSeconds, &r.NoProgressLimit, &r.InvestedMilliseconds, &r.ResultCount, &r.ProgressCount, &r.NegativeCount, &r.NoProgressCount, &r.EnvironmentFailureCount, &r.ShelvedReason, &r.ReopenCondition, &r.NextDirection, &r.CreatedAt)
+	err := row.Scan(&r.ID, &r.Title, &goal, &r.Status, &r.BudgetSeconds, &r.NoProgressLimit, &r.InvestedMilliseconds, &r.BudgetBaselineMilliseconds, &r.ResultCount, &r.ProgressCount, &r.NegativeCount, &r.NoProgressCount, &r.EnvironmentFailureCount, &r.ShelvedReason, &r.ReopenCondition, &r.NextDirection, &r.CreatedAt)
 	r.GoalID = nullable(goal)
+	r.BudgetSpentMilliseconds = max(0, r.InvestedMilliseconds-r.BudgetBaselineMilliseconds)
 	return r, err
 }
 func listRoutes(ctx context.Context, q queryer, project string) ([]Route, error) {
@@ -174,7 +175,7 @@ func failShelvedRouteProjectTx(t *sql.Tx, project, id, reason string) error {
 	explanation := reason
 	switch reason {
 	case "budget_exhausted":
-		explanation = "累计时间预算耗尽"
+		explanation = "本轮时间预算耗尽"
 	case "no_information_limit":
 		explanation = "连续无进展达到上限"
 	case "needs_attention":
@@ -194,11 +195,11 @@ func enforceRouteLimitsTx(t *sql.Tx, project, id string) error {
 	if r.Status != "active" {
 		return nil
 	}
-	if r.BudgetSeconds > 0 && r.InvestedMilliseconds >= int64(r.BudgetSeconds)*1000 {
-		return shelveRouteTx(t, project, id, "budget_exhausted", "Increase the budget before explicitly resuming and reopening the route", "Project failed; review the saved evidence before resuming")
+	if r.BudgetSeconds > 0 && r.BudgetSpentMilliseconds >= int64(r.BudgetSeconds)*1000 {
+		return shelveRouteTx(t, project, id, "budget_exhausted", "Explicitly resume the project to start a new budget window", "Project failed; review the saved evidence before resuming")
 	}
 	if r.NoProgressCount >= r.NoProgressLimit {
-		return shelveRouteTx(t, project, id, "no_information_limit", "New evidence or a different method is available; explicitly resume before reopening", "Project failed; review prior negative results before resuming")
+		return shelveRouteTx(t, project, id, "no_information_limit", "Explicitly resume the project to reset the consecutive no-information count", "Project failed; review prior negative results before resuming")
 	}
 	return nil
 }
@@ -241,7 +242,7 @@ func (d *DB) updateRouteTx(ctx context.Context, t *sql.Tx, project, id string, r
 		if req.BudgetSeconds != nil {
 			budget = *req.BudgetSeconds
 		}
-		if budget > 0 && r.InvestedMilliseconds >= int64(budget)*1000 {
+		if budget > 0 && r.BudgetSpentMilliseconds >= int64(budget)*1000 {
 			return fmt.Errorf("route budget already exhausted; increase budget before reopening")
 		}
 		if _, err := t.Exec(`UPDATE routes SET status='active',shelved_reason='',no_progress_count=0,reopen_condition=?,next_direction=? WHERE project_id=? AND id=?`, clean(req.ReopenCondition), clean(req.NextDirection), project, id); err != nil {
@@ -387,7 +388,7 @@ func finishWorkerTaskTx(t *sql.Tx, id int64, status, detail string, stamp time.T
 // RefreshRouteLimits also covers migrated historical investment after restart.
 func (d *DB) RefreshRouteLimits(ctx context.Context) error {
 	return tx(ctx, d, func(t *sql.Tx) error {
-		rows, err := t.Query(`SELECT r.project_id,r.id FROM routes r JOIN projects p ON p.id=r.project_id WHERE p.status='active' AND (r.status='shelved' OR (r.status='active' AND ((r.budget_seconds>0 AND r.invested_ms>=r.budget_seconds*1000) OR r.no_progress_count>=r.no_progress_limit)))`)
+		rows, err := t.Query(`SELECT r.project_id,r.id FROM routes r JOIN projects p ON p.id=r.project_id WHERE p.status='active' AND (r.status='shelved' OR (r.status='active' AND ((r.budget_seconds>0 AND r.invested_ms-r.budget_baseline_ms>=r.budget_seconds*1000) OR r.no_progress_count>=r.no_progress_limit)))`)
 		if err != nil {
 			return err
 		}
@@ -417,38 +418,54 @@ func (d *DB) RefreshRouteLimits(ctx context.Context) error {
 // ReconcileInterruptedInvestments closes orphaned task histories at the last
 // persisted heartbeat, so service downtime never consumes a route's budget.
 func (d *DB) ReconcileInterruptedInvestments(ctx context.Context) error {
-	return tx(ctx, d, func(t *sql.Tx) error {
-		rows, err := t.Query(`SELECT h.id,CASE WHEN s.to_fact_id IS NOT NULL THEN COALESCE(s.concluded_at,h.last_activity_at,h.started_at) ELSE COALESCE(h.last_activity_at,s.last_heartbeat_at,h.started_at) END,CASE WHEN s.to_fact_id IS NOT NULL THEN 'completed' ELSE 'interrupted' END FROM worker_task_history h JOIN steps s ON s.project_id=h.project_id AND s.id=h.step_id CROSS JOIN settings st WHERE h.task_type='execute' AND h.finished_at IS NULL AND (s.worker IS NULL OR s.to_fact_id IS NOT NULL OR (julianday(?)-julianday(s.last_heartbeat_at))*86400>st.step_timeout)`, time.Now().UTC().Format(time.RFC3339Nano))
+	return tx(ctx, d, func(t *sql.Tx) error { return reconcileInterruptedInvestmentsTx(t, "") })
+}
+
+func reconcileInterruptedInvestmentsTx(t *sql.Tx, project string) error {
+	rows, err := t.Query(`SELECT h.id,CASE WHEN s.to_fact_id IS NOT NULL THEN COALESCE(s.concluded_at,h.last_activity_at,h.started_at) ELSE COALESCE(h.last_activity_at,s.last_heartbeat_at,h.started_at) END,CASE WHEN s.to_fact_id IS NOT NULL THEN 'completed' ELSE 'interrupted' END FROM worker_task_history h JOIN steps s ON s.project_id=h.project_id AND s.id=h.step_id CROSS JOIN settings st WHERE (?='' OR h.project_id=?) AND h.task_type='execute' AND h.finished_at IS NULL AND (s.worker IS NULL OR s.to_fact_id IS NOT NULL OR (julianday(?)-julianday(s.last_heartbeat_at))*86400>st.step_timeout)`, project, project, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return err
+	}
+	type orphan struct {
+		id          int64
+		end, status string
+	}
+	items := []orphan{}
+	for rows.Next() {
+		var item orphan
+		if err := rows.Scan(&item.id, &item.end, &item.status); err != nil {
+			rows.Close()
+			return err
+		}
+		items = append(items, item)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		end, err := time.Parse(time.RFC3339Nano, item.end)
 		if err != nil {
 			return err
 		}
-		type orphan struct {
-			id          int64
-			end, status string
-		}
-		items := []orphan{}
-		for rows.Next() {
-			var item orphan
-			if err := rows.Scan(&item.id, &item.end, &item.status); err != nil {
-				rows.Close()
-				return err
-			}
-			items = append(items, item)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
+		if err := finishWorkerTaskTx(t, item.id, item.status, "reconciled previous execution at its last recorded activity", end); err != nil {
 			return err
 		}
-		for _, item := range items {
-			end, err := time.Parse(time.RFC3339Nano, item.end)
-			if err != nil {
-				return err
-			}
-			if err := finishWorkerTaskTx(t, item.id, item.status, "reconciled previous execution at its last recorded activity", end); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	}
+	return nil
+}
+
+// A manual resume acknowledges all prior route stop-loss decisions. Settle old
+// attempts before granting fresh budgets so their late completion cannot consume
+// the new window. Lifetime investment and execution evidence remain intact.
+func resumeRoutesTx(t *sql.Tx, project string) error {
+	if err := reconcileInterruptedInvestmentsTx(t, project); err != nil {
+		return err
+	}
+	if _, err := t.Exec(`INSERT INTO route_records(project_id,route_id,action,reason,created_at) SELECT project_id,id,CASE WHEN status='shelved' THEN 'reopened' ELSE 'budget_reset' END,'operator_resume',? FROM routes WHERE project_id=?`, now(), project); err != nil {
+		return err
+	}
+	_, err := t.Exec(`UPDATE routes SET status='active',shelved_reason='',reopen_condition='',next_direction='',budget_baseline_ms=invested_ms,no_progress_count=0 WHERE project_id=?`, project)
+	return err
 }
