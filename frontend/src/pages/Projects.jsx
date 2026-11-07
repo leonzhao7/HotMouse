@@ -190,6 +190,7 @@ export default function Projects() {
 
 export function ProjectCreateModal({ template, onClose }) {
   const templates = useResource("/api/templates");
+  const settings = useResource("/api/settings");
   const { user, notify } = useApp();
   const [title, setTitle] = useState(template?.title || "");
   const [origin, setOrigin] = useState(template?.origin || "");
@@ -198,6 +199,7 @@ export function ProjectCreateModal({ template, onClose }) {
     (template?.hints || []).map((item) => item.content).join("\n"),
   );
   const [maxWorkers, setMaxWorkers] = useState(1);
+  const [budget, setBudget] = useState("");
   const [selected, setSelected] = useState(template?.id || "");
   const select = (value) => {
     setSelected(value);
@@ -222,6 +224,7 @@ export function ProjectCreateModal({ template, onClose }) {
           origin: origin.trim(),
           goal: goal.trim(),
           max_workers: Number(maxWorkers),
+          ...(budget === "" ? {} : { budget_seconds: Number(budget) }),
           hints: hints
             .split("\n")
             .map((content) => content.trim())
@@ -281,6 +284,18 @@ export function ProjectCreateModal({ template, onClose }) {
         value={maxWorkers}
         onChange={(event) => setMaxWorkers(Number(event.target.value))}
         hint="项目 Dispatcher 始终独立负责规划和提交结果。"
+      />
+      <TextField
+        label="项目预算（秒，0为不限）"
+        type="number"
+        min="0"
+        step="1"
+        value={budget}
+        placeholder={String(
+          settings.data?.default_project_budget_seconds ?? "",
+        )}
+        onChange={(event) => setBudget(event.target.value)}
+        hint="留空自动使用系统配置的项目预算；所有路线共同消耗这一份额度。"
       />
       <TextField
         label="提示（可选）"

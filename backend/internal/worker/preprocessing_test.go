@@ -181,7 +181,7 @@ func TestIncompleteHomepageBodyIsRecordedAsFailure(t *testing.T) {
 	}
 }
 
-func TestCancelledPreprocessingCannotOpenGateAndResumedRunRefetches(t *testing.T) {
+func TestCancelledPreprocessingCannotOpenGateAndResumeReusesEvidence(t *testing.T) {
 	r, project := startupWorker(t)
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { requests.Add(1); _, _ = w.Write([]byte("homepage")) }))
@@ -198,32 +198,36 @@ func TestCancelledPreprocessingCannotOpenGateAndResumedRunRefetches(t *testing.T
 	}
 	old := saveAnalysis()
 	r.probeDial = func(context.Context, core.TargetEndpoint) error { return nil }
-	if _, err := r.ensureStartup(t.Context(), project); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.DB.SetProjectStatus(t.Context(), project, "stopped"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.DB.SetProjectStatus(t.Context(), project, "active"); err != nil {
-		t.Fatal(err)
-	}
-	newRun := saveAnalysis()
-	if err := r.DB.SavePreprocessing(t.Context(), project, old.RunID, core.PreprocessingState{Status: "skipped"}, "", ""); err == nil {
-		t.Fatal("stale preprocessing affected resumed project")
-	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := r.ensureStartup(ctx, project); err == nil {
 		t.Fatal("cancelled startup succeeded")
 	}
 	state, _ := r.DB.TargetProbe(t.Context(), project)
-	if state.Preprocessing.Status != "pending" || state.RunID != newRun.RunID {
+	if state.Preprocessing.Status != "pending" {
 		t.Fatal("cancellation opened startup gate")
 	}
 	if _, err := r.ensureStartup(t.Context(), project); err != nil {
 		t.Fatal(err)
 	}
-	if requests.Load() != 2 {
-		t.Fatalf("resume did not fetch fresh response: %d", requests.Load())
+	old, _ = r.DB.TargetProbe(t.Context(), project)
+	if _, err := r.DB.SetProjectStatus(t.Context(), project, "stopped"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.DB.SetProjectStatus(t.Context(), project, "active"); err != nil {
+		t.Fatal(err)
+	}
+	newRun, err := r.DB.TargetProbe(t.Context(), project)
+	if err != nil || newRun.Analysis == nil || newRun.Preprocessing.Status != "ready" || newRun.Preprocessing.FactID != old.Preprocessing.FactID {
+		t.Fatalf("resume discarded startup evidence: %+v %v", newRun, err)
+	}
+	if err := r.DB.SavePreprocessing(t.Context(), project, old.RunID, core.PreprocessingState{Status: "skipped"}, "", ""); err == nil {
+		t.Fatal("stale preprocessing affected resumed project")
+	}
+	if _, err := r.ensureStartup(t.Context(), project); err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("resume repeated initial preprocessing: %d", requests.Load())
 	}
 }

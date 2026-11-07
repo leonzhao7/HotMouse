@@ -35,8 +35,8 @@ func listRoutes(ctx context.Context, q queryer, project string) ([]Route, error)
 	return out, rows.Err()
 }
 func validateRouteConfig(budget, limit *int) error {
-	if budget != nil && *budget < 0 {
-		return fmt.Errorf("route budget_seconds must be nonnegative")
+	if budget != nil {
+		return fmt.Errorf("route budgets are no longer supported; configure the project budget_seconds")
 	}
 	if limit != nil && *limit < 1 {
 		return fmt.Errorf("route no_progress_limit must be positive")
@@ -46,7 +46,8 @@ func validateRouteConfig(budget, limit *int) error {
 func (d *DB) CreateRoute(ctx context.Context, project string, req CreateRoute) (Route, error) {
 	var out Route
 	err := tx(ctx, d, func(t *sql.Tx) error {
-		if _, err := checkActive(t, project); err != nil {
+		_, err := checkActive(t, project)
+		if err != nil {
 			return err
 		}
 		if err := requireText("route title", req.Title); err != nil {
@@ -68,7 +69,7 @@ func (d *DB) CreateRoute(ctx context.Context, project string, req CreateRoute) (
 		if err != nil {
 			return err
 		}
-		if _, err := t.Exec(`INSERT INTO routes(id,project_id,title,goal_id,budget_seconds,no_progress_limit,created_at) VALUES(?,?,?,?,COALESCE(?,1200),COALESCE(?,3),?)`, id, project, clean(req.Title), req.GoalID, req.BudgetSeconds, req.NoProgressLimit, now()); err != nil {
+		if _, err := t.Exec(`INSERT INTO routes(id,project_id,title,goal_id,budget_seconds,no_progress_limit,created_at) VALUES(?,?,?,?,0,COALESCE(?,3),?)`, id, project, clean(req.Title), req.GoalID, req.NoProgressLimit, now()); err != nil {
 			return err
 		}
 		out, err = scanRoute(t.QueryRow(`SELECT `+routeColumns+` FROM routes WHERE project_id=? AND id=?`, project, id))
@@ -105,7 +106,7 @@ func resolveRouteTx(t *sql.Tx, project string, r CreateStep) (string, error) {
 			id = "route_" + *r.GoalID
 			title = *r.GoalID
 		}
-		if _, err := t.Exec(`INSERT OR IGNORE INTO routes(id,project_id,title,goal_id,created_at) VALUES(?,?,?,?,?)`, id, project, title, r.GoalID, now()); err != nil {
+		if _, err := t.Exec(`INSERT OR IGNORE INTO routes(id,project_id,title,goal_id,budget_seconds,created_at) VALUES(?,?,?,?,0,?)`, id, project, title, r.GoalID, now()); err != nil {
 			return "", err
 		}
 	}
@@ -185,6 +186,9 @@ func failShelvedRouteProjectTx(t *sql.Tx, project, id, reason string) error {
 	return err
 }
 func enforceRouteLimitsTx(t *sql.Tx, project, id string) error {
+	if err := enforceProjectBudgetTx(t, project); err != nil {
+		return err
+	}
 	r, err := scanRoute(t.QueryRow(`SELECT `+routeColumns+` FROM routes WHERE project_id=? AND id=?`, project, id))
 	if err != nil {
 		return err
@@ -194,9 +198,6 @@ func enforceRouteLimitsTx(t *sql.Tx, project, id string) error {
 	}
 	if r.Status != "active" {
 		return nil
-	}
-	if r.BudgetSeconds > 0 && r.BudgetSpentMilliseconds >= int64(r.BudgetSeconds)*1000 {
-		return shelveRouteTx(t, project, id, "budget_exhausted", "Explicitly resume the project to start a new budget window", "Project failed; review the saved evidence before resuming")
 	}
 	if r.NoProgressCount >= r.NoProgressLimit {
 		return shelveRouteTx(t, project, id, "no_information_limit", "Explicitly resume the project to reset the consecutive no-information count", "Project failed; review prior negative results before resuming")
@@ -230,7 +231,7 @@ func (d *DB) updateRouteTx(ctx context.Context, t *sql.Tx, project, id string, r
 			return err
 		}
 	}
-	if _, err := t.Exec(`UPDATE routes SET budget_seconds=COALESCE(?,budget_seconds),no_progress_limit=COALESCE(?,no_progress_limit) WHERE project_id=? AND id=?`, req.BudgetSeconds, req.NoProgressLimit, project, id); err != nil {
+	if _, err := t.Exec(`UPDATE routes SET no_progress_limit=COALESCE(?,no_progress_limit) WHERE project_id=? AND id=?`, req.NoProgressLimit, project, id); err != nil {
 		return err
 	}
 	if req.Status != nil && *req.Status == "shelved" {
@@ -238,13 +239,6 @@ func (d *DB) updateRouteTx(ctx context.Context, t *sql.Tx, project, id string, r
 			return err
 		}
 	} else if req.Status != nil && *req.Status == "active" && r.Status == "shelved" {
-		budget := r.BudgetSeconds
-		if req.BudgetSeconds != nil {
-			budget = *req.BudgetSeconds
-		}
-		if budget > 0 && r.BudgetSpentMilliseconds >= int64(budget)*1000 {
-			return fmt.Errorf("route budget already exhausted; increase budget before reopening")
-		}
 		if _, err := t.Exec(`UPDATE routes SET status='active',shelved_reason='',no_progress_count=0,reopen_condition=?,next_direction=? WHERE project_id=? AND id=?`, clean(req.ReopenCondition), clean(req.NextDirection), project, id); err != nil {
 			return err
 		}
@@ -388,7 +382,7 @@ func finishWorkerTaskTx(t *sql.Tx, id int64, status, detail string, stamp time.T
 // RefreshRouteLimits also covers migrated historical investment after restart.
 func (d *DB) RefreshRouteLimits(ctx context.Context) error {
 	return tx(ctx, d, func(t *sql.Tx) error {
-		rows, err := t.Query(`SELECT r.project_id,r.id FROM routes r JOIN projects p ON p.id=r.project_id WHERE p.status='active' AND (r.status='shelved' OR (r.status='active' AND ((r.budget_seconds>0 AND r.invested_ms-r.budget_baseline_ms>=r.budget_seconds*1000) OR r.no_progress_count>=r.no_progress_limit)))`)
+		rows, err := t.Query(`SELECT r.project_id,r.id FROM routes r JOIN projects p ON p.id=r.project_id WHERE p.status='active' AND (r.status='shelved' OR (r.status='active' AND r.no_progress_count>=r.no_progress_limit) OR (p.budget_seconds>0 AND COALESCE((SELECT SUM(invested_ms) FROM routes WHERE project_id=p.id),0)-p.budget_baseline_ms>=p.budget_seconds*1000))`)
 		if err != nil {
 			return err
 		}
@@ -416,7 +410,7 @@ func (d *DB) RefreshRouteLimits(ctx context.Context) error {
 }
 
 // ReconcileInterruptedInvestments closes orphaned task histories at the last
-// persisted heartbeat, so service downtime never consumes a route's budget.
+// persisted heartbeat, so service downtime never consumes the project budget.
 func (d *DB) ReconcileInterruptedInvestments(ctx context.Context) error {
 	return tx(ctx, d, func(t *sql.Tx) error { return reconcileInterruptedInvestmentsTx(t, "") })
 }
@@ -457,13 +451,16 @@ func reconcileInterruptedInvestmentsTx(t *sql.Tx, project string) error {
 }
 
 // A manual resume acknowledges all prior route stop-loss decisions. Settle old
-// attempts before granting fresh budgets so their late completion cannot consume
+// attempts before granting a fresh shared allowance so late completion cannot consume
 // the new window. Lifetime investment and execution evidence remain intact.
 func resumeRoutesTx(t *sql.Tx, project string) error {
 	if err := reconcileInterruptedInvestmentsTx(t, project); err != nil {
 		return err
 	}
-	if _, err := t.Exec(`INSERT INTO route_records(project_id,route_id,action,reason,created_at) SELECT project_id,id,CASE WHEN status='shelved' THEN 'reopened' ELSE 'budget_reset' END,'operator_resume',? FROM routes WHERE project_id=?`, now(), project); err != nil {
+	if _, err := t.Exec(`UPDATE projects SET budget_baseline_ms=COALESCE((SELECT SUM(invested_ms) FROM routes WHERE project_id=?),0) WHERE id=?`, project, project); err != nil {
+		return err
+	}
+	if _, err := t.Exec(`INSERT INTO route_records(project_id,route_id,action,reason,created_at) SELECT project_id,id,CASE WHEN status='shelved' THEN 'reopened' ELSE 'resumed' END,'operator_resume',? FROM routes WHERE project_id=?`, now(), project); err != nil {
 		return err
 	}
 	_, err := t.Exec(`UPDATE routes SET status='active',shelved_reason='',reopen_condition='',next_direction='',budget_baseline_ms=invested_ms,no_progress_count=0 WHERE project_id=?`, project)

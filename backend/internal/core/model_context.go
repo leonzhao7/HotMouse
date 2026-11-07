@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"hotmouse/backend/internal/knowledge"
 )
 
 type modelFact struct {
@@ -47,24 +48,26 @@ type modelHistoricalStep struct {
 }
 
 type modelContext struct {
-	Preprocessing PreprocessingState    `yaml:"preprocessing"`
-	Flags         []modelFlag           `yaml:"flags,omitempty"`
-	SchemaVersion int                   `yaml:"schema_version"`
-	Phase         string                `yaml:"phase"`
-	Project       map[string]string     `yaml:"project"`
-	Goals         []Goal                `yaml:"goals"`
-	CurrentStep   *modelStep            `yaml:"current_step,omitempty"`
-	OpenSteps     []modelStep           `yaml:"open_steps,omitempty"`
-	StepHistory   []modelHistoricalStep `yaml:"step_history,omitempty"`
-	RequiredFacts []modelFact           `yaml:"required_facts"`
-	RecentFacts   []modelFact           `yaml:"recent_facts,omitempty"`
-	Hints         []Hint                `yaml:"hints,omitempty"`
-	Routes        []Route               `yaml:"routes,omitempty"`
-	Events        []DecideEvent         `yaml:"decide_events,omitempty"`
-	History       []HistoryMatch        `yaml:"related_history,omitempty"`
-	Experiences   []Experience          `yaml:"experiences,omitempty"`
-	DetailAccess  map[string]string     `yaml:"detail_access"`
-	Omitted       map[string]int        `yaml:"omitted"`
+	TargetAnalysis *TargetProbeAnalysis  `yaml:"target_analysis,omitempty"`
+	Preprocessing  PreprocessingState    `yaml:"preprocessing"`
+	Flags          []modelFlag           `yaml:"flags,omitempty"`
+	SchemaVersion  int                   `yaml:"schema_version"`
+	Phase          string                `yaml:"phase"`
+	Project        map[string]any        `yaml:"project"`
+	Goals          []Goal                `yaml:"goals"`
+	CurrentStep    *modelStep            `yaml:"current_step,omitempty"`
+	OpenSteps      []modelStep           `yaml:"open_steps,omitempty"`
+	StepHistory    []modelHistoricalStep `yaml:"step_history,omitempty"`
+	RequiredFacts  []modelFact           `yaml:"required_facts"`
+	RecentFacts    []modelFact           `yaml:"recent_facts,omitempty"`
+	Hints          []Hint                `yaml:"hints,omitempty"`
+	Routes         []Route               `yaml:"routes,omitempty"`
+	Events         []DecideEvent         `yaml:"decide_events,omitempty"`
+	History        []HistoryMatch        `yaml:"related_history,omitempty"`
+	Experiences    []Experience          `yaml:"experiences,omitempty"`
+	Knowledge      []knowledge.Summary   `yaml:"related_knowledge,omitempty"`
+	DetailAccess   map[string]string     `yaml:"detail_access"`
+	Omitted        map[string]int        `yaml:"omitted"`
 }
 
 func brief(s string, max int) string {
@@ -95,7 +98,7 @@ func (d *DB) ModelContext(ctx context.Context, project, phase, stepID string) (s
 	if err != nil {
 		return "", err
 	}
-	out := modelContext{Preprocessing: detail.TargetProbe.Preprocessing, SchemaVersion: 1, Phase: phase, Project: map[string]string{"id": project, "title": detail.Project.Title, "status": detail.Project.Status}, Goals: []Goal{}, RequiredFacts: []modelFact{}, Hints: detail.Hints,
+	out := modelContext{TargetAnalysis: detail.TargetProbe.Analysis, Preprocessing: detail.TargetProbe.Preprocessing, SchemaVersion: 1, Phase: phase, Project: map[string]any{"id": project, "title": detail.Project.Title, "status": detail.Project.Status, "budget_seconds": detail.Project.BudgetSeconds, "budget_spent_ms": detail.Project.BudgetSpentMilliseconds, "invested_ms": detail.Project.InvestedMilliseconds}, Goals: []Goal{}, RequiredFacts: []modelFact{}, Hints: detail.Hints,
 		DetailAccess: map[string]string{
 			"fact":       "GET /projects/" + project + "/facts/{id}; hotmouse --project " + project + " fact show {id}",
 			"step":       "GET /projects/" + project + "/steps/{id}; hotmouse --project " + project + " step show {id}",
@@ -103,6 +106,8 @@ func (d *DB) ModelContext(ctx context.Context, project, phase, stepID string) (s
 			"finding":    "GET /projects/" + project + "/findings/{id}; hotmouse --project " + project + " finding show {id}",
 			"history":    "GET /projects/" + project + "/history?q={query}; hotmouse --project " + project + " project recall --query {query}",
 			"experience": "GET /api/experiences/{id}; hotmouse experience show {id}",
+			"knowledge":  "GET /api/knowledge/entries/{id}; hotmouse kb show {id} --output json; references only, not project evidence",
+			"kb_search":  "GET /api/knowledge/entries?q={query}; hotmouse kb search {query} --output json",
 		}, Omitted: map[string]int{"closed_steps": 0, "facts": 0, "findings": len(detail.Findings)}}
 	recoveries := map[string]string{}
 	rows, err := d.SQL.QueryContext(ctx, `SELECT step_id,status FROM worker_execute_recovery WHERE project_id=?`, project)
@@ -282,6 +287,20 @@ func (d *DB) ModelContext(ctx context.Context, project, phase, stepID string) (s
 		e.Method = brief(e.Method, 480)
 		e.FailureConditions = brief(e.FailureConditions, 320)
 	}
+	catalog, err := knowledge.Load()
+	if err != nil {
+		return "", fmt.Errorf("load bundled knowledge: %w", err)
+	}
+	knowledgeQuery := append([]string{detail.Project.Title}, query...)
+	for _, f := range out.RequiredFacts {
+		knowledgeQuery = append(knowledgeQuery, f.Title, brief(f.Description, 600))
+	}
+	if phase == "decide" {
+		for _, f := range out.RecentFacts {
+			knowledgeQuery = append(knowledgeQuery, f.Title, f.Description)
+		}
+	}
+	out.Knowledge = catalog.Recall(strings.Join(knowledgeQuery, " "), 3)
 	sort.Slice(out.RequiredFacts, func(i, j int) bool { return out.RequiredFacts[i].ID < out.RequiredFacts[j].ID })
 	b, err := yaml.Marshal(out)
 	if err != nil {

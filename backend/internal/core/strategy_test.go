@@ -100,9 +100,8 @@ func TestRouteLossLimitsAndEnvironmentEvidence(t *testing.T) {
 	db := testDB(t)
 	p := strategyProject(t, db)
 	limit := 2
-	zero := 0
 	goal := "g001"
-	route, err := db.CreateRoute(t.Context(), p, CreateRoute{Title: "Authentication route", GoalID: &goal, NoProgressLimit: &limit, BudgetSeconds: &zero})
+	route, err := db.CreateRoute(t.Context(), p, CreateRoute{Title: "Authentication route", GoalID: &goal, NoProgressLimit: &limit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +153,10 @@ func TestInvestmentIsIdempotentAndSurvivesRestart(t *testing.T) {
 	}
 	p := strategyProject(t, db)
 	budget := 1
-	route, err := db.CreateRoute(t.Context(), p, CreateRoute{Title: "timed route", BudgetSeconds: &budget})
+	if _, err := db.SetProjectBudget(t.Context(), p, budget); err != nil {
+		t.Fatal(err)
+	}
+	route, err := db.CreateRoute(t.Context(), p, CreateRoute{Title: "timed route"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +177,7 @@ func TestInvestmentIsIdempotentAndSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if before.Routes[0].InvestedMilliseconds < 2000 || before.Routes[0].EnvironmentFailureCount != 1 || before.Routes[0].Status != "shelved" {
+	if before.Routes[0].InvestedMilliseconds < 2000 || before.Routes[0].EnvironmentFailureCount != 1 || before.Routes[0].Status != "active" {
 		t.Fatalf("investment: %+v", before.Routes)
 	}
 	if before.Project.Status != "failed" || !strings.Contains(before.Project.FailureReason, "budget_exhausted") {
@@ -201,12 +203,16 @@ func TestInvestmentIsIdempotentAndSurvivesRestart(t *testing.T) {
 		t.Fatalf("restart altered accounting: %+v", after.Routes)
 	}
 	active := "active"
-	if _, err := db.UpdateRoute(t.Context(), p, route.ID, UpdateRoute{Status: &active, Reason: "retry"}); err == nil {
-		t.Fatal("exhausted budget reopened")
-	}
 	bigger := 10
-	if _, err := db.UpdateRoute(t.Context(), p, route.ID, UpdateRoute{Status: &active, BudgetSeconds: &bigger, Reason: "validated new method"}); err != nil {
+	if _, err := db.SetProjectBudget(t.Context(), p, bigger); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := db.UpdateRoute(t.Context(), p, route.ID, UpdateRoute{Status: &active, Reason: "validated new method"}); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := db.GetProjectMeta(t.Context(), p)
+	if err != nil || meta.Status != "failed" {
+		t.Fatal("editing a budget implicitly resumed project", err)
 	}
 }
 func TestRouteBudgetWindowMigratesExistingRoutes(t *testing.T) {

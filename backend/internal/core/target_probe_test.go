@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func readyTargetProbe(t *testing.T, db *DB, p string, targets ...TargetEndpoint) TargetProbeState {
@@ -64,6 +66,9 @@ func TestTargetProbeStateSurvivesRestartAndIgnoresPreviousRun(t *testing.T) {
 	}
 	p := strategyProject(t, db)
 	state := readyTargetProbe(t, db, p, TargetEndpoint{Host: "127.0.0.1", Port: 31337})
+	if err := db.SavePreprocessing(t.Context(), p, state.RunID, PreprocessingState{Status: "skipped", Reason: "already classified non-HTTP target"}, "", ""); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.RecordTargetProbe(t.Context(), p, state.RunID, []string{"refused"}); err != nil {
 		t.Fatal(err)
 	}
@@ -86,14 +91,54 @@ func TestTargetProbeStateSurvivesRestartAndIgnoresPreviousRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	resumed, err := db.TargetProbe(t.Context(), p)
-	if err != nil || resumed.RunID == state.RunID || resumed.Status != "pending" || resumed.Analysis != nil {
-		t.Fatalf("resumed run reused old target state: %+v err=%v", resumed, err)
+	if err != nil || resumed.RunID == state.RunID || resumed.Status != "ready" || resumed.Analysis == nil || resumed.Analysis.Targets[0] != state.Analysis.Targets[0] || len(resumed.ConsecutiveFailures) != 0 || resumed.Preprocessing.Status != "skipped" {
+		t.Fatalf("resumed run discarded classification or reused failures: %+v err=%v", resumed, err)
 	}
 	if failed, err := db.RecordTargetProbe(t.Context(), p, state.RunID, []string{"refused"}); err != nil || failed {
 		t.Fatalf("previous run affected resumed project: failed=%v err=%v", failed, err)
 	}
 	if err := db.SaveTargetProbeAnalysis(t.Context(), p, state.RunID, *state.Analysis); err == nil {
 		t.Fatal("old analysis overwritten resumed project")
+	}
+}
+
+func TestResumeRecoversClassificationClearedByLegacyStop(t *testing.T) {
+	for _, format := range []string{"wrapped", "bare", "mock"} {
+		t.Run(format, func(t *testing.T) {
+			db := testDB(t)
+			p := strategyProject(t, db)
+			analysis := TargetProbeAnalysis{Required: true, Reason: "remote CTF", Targets: []TargetEndpoint{{Host: "ctf.example", Port: 443}}}
+			if format == "mock" {
+				analysis = TargetProbeAnalysis{Reason: "offline fixture", Targets: []TargetEndpoint{}}
+			}
+			response := jsonData(analysis)
+			if format == "wrapped" {
+				response = jsonData(map[string]any{"accepted": true, "data": analysis})
+			}
+			if _, err := db.SQL.Exec(`INSERT INTO worker_task_history(worker,project_id,task_type,status,started_at,finished_at,detail) VALUES('legacy',?,'target_probe','completed',?,?,?)`, p, now(), now(), response); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.SQL.Exec(`UPDATE projects SET status='stopped' WHERE id=?`, p); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.SetProjectStatus(t.Context(), p, "active"); err != nil {
+				t.Fatal(err)
+			}
+			resumed, err := db.TargetProbe(t.Context(), p)
+			if err != nil || resumed.Status != "ready" || resumed.Analysis == nil || jsonData(resumed.Analysis) != jsonData(analysis) {
+				t.Fatalf("legacy resume needs another classification: %+v %v", resumed, err)
+			}
+			graph, err := db.ModelContext(t.Context(), p, "decide", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var context struct {
+				Analysis *TargetProbeAnalysis `yaml:"target_analysis"`
+			}
+			if err := yaml.Unmarshal([]byte(graph), &context); err != nil || jsonData(context.Analysis) != jsonData(analysis) {
+				t.Fatalf("resumed planner cannot see the saved classification: %+v %v", context, err)
+			}
+		})
 	}
 }
 

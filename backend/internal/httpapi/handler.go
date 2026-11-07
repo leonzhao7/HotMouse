@@ -354,7 +354,7 @@ func (h *Handler) Health(ctx iris.Context) {
 }
 func (h *Handler) GetSettings(ctx iris.Context) {
 	var s core.Settings
-	e := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT step_timeout,decide_timeout,worker_unhealthy_retry_after_seconds,worker_rejected_retry_after_seconds,max_failed_login_attempts,rate_limit_window_minutes,session_duration_hours,log_retention_days,export_retention_days,notification_retention_days,project_idle_alert_hours FROM settings WHERE id=1`).Scan(&s.StepTimeout, &s.DecideTimeout, &s.WorkerUnhealthyRetryAfterSeconds, &s.WorkerRejectedRetryAfterSeconds, &s.MaxFailedLoginAttempts, &s.RateLimitWindowMinutes, &s.SessionDurationHours, &s.LogRetentionDays, &s.ExportRetentionDays, &s.NotificationRetentionDays, &s.ProjectIdleAlertHours)
+	e := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT step_timeout,decide_timeout,worker_unhealthy_retry_after_seconds,worker_rejected_retry_after_seconds,max_failed_login_attempts,rate_limit_window_minutes,session_duration_hours,log_retention_days,export_retention_days,notification_retention_days,project_idle_alert_hours,default_project_budget_seconds FROM settings WHERE id=1`).Scan(&s.StepTimeout, &s.DecideTimeout, &s.WorkerUnhealthyRetryAfterSeconds, &s.WorkerRejectedRetryAfterSeconds, &s.MaxFailedLoginAttempts, &s.RateLimitWindowMinutes, &s.SessionDurationHours, &s.LogRetentionDays, &s.ExportRetentionDays, &s.NotificationRetentionDays, &s.ProjectIdleAlertHours, &s.DefaultProjectBudgetSeconds)
 	if e != nil {
 		bad(ctx, e)
 		return
@@ -362,16 +362,28 @@ func (h *Handler) GetSettings(ctx iris.Context) {
 	ctx.JSON(s)
 }
 func (h *Handler) UpdateSettings(ctx iris.Context) {
-	var s core.Settings
-	if !read(ctx, &s) {
+	var req struct {
+		core.Settings
+		DefaultProjectBudgetSeconds *int `json:"default_project_budget_seconds"`
+	}
+	if !read(ctx, &req) {
+		return
+	}
+	s := req.Settings
+	if req.DefaultProjectBudgetSeconds != nil && *req.DefaultProjectBudgetSeconds < 0 {
+		bad(ctx, fmt.Errorf("default_project_budget_seconds must be nonnegative"))
 		return
 	}
 	if s.StepTimeout < 5 || s.DecideTimeout < 5 || s.WorkerUnhealthyRetryAfterSeconds < 1 || s.WorkerUnhealthyRetryAfterSeconds > 3600 || s.WorkerRejectedRetryAfterSeconds < 1 || s.WorkerRejectedRetryAfterSeconds > 3600 || s.MaxFailedLoginAttempts < 1 || s.MaxFailedLoginAttempts > 50 || s.RateLimitWindowMinutes < 1 || s.RateLimitWindowMinutes > 1440 || s.SessionDurationHours < 1 || s.SessionDurationHours > 168 || s.LogRetentionDays < 1 || s.LogRetentionDays > 3650 || s.ExportRetentionDays < 1 || s.ExportRetentionDays > 3650 || s.NotificationRetentionDays < 1 || s.NotificationRetentionDays > 3650 || s.ProjectIdleAlertHours < 1 || s.ProjectIdleAlertHours > 720 {
 		bad(ctx, fmt.Errorf("invalid settings"))
 		return
 	}
-	_, e := h.DB.SQL.ExecContext(ctx.Request().Context(), `UPDATE settings SET step_timeout=?,decide_timeout=?,worker_unhealthy_retry_after_seconds=?,worker_rejected_retry_after_seconds=?,max_failed_login_attempts=?,rate_limit_window_minutes=?,session_duration_hours=?,log_retention_days=?,export_retention_days=?,notification_retention_days=?,project_idle_alert_hours=? WHERE id=1`, s.StepTimeout, s.DecideTimeout, s.WorkerUnhealthyRetryAfterSeconds, s.WorkerRejectedRetryAfterSeconds, s.MaxFailedLoginAttempts, s.RateLimitWindowMinutes, s.SessionDurationHours, s.LogRetentionDays, s.ExportRetentionDays, s.NotificationRetentionDays, s.ProjectIdleAlertHours)
+	_, e := h.DB.SQL.ExecContext(ctx.Request().Context(), `UPDATE settings SET step_timeout=?,decide_timeout=?,worker_unhealthy_retry_after_seconds=?,worker_rejected_retry_after_seconds=?,max_failed_login_attempts=?,rate_limit_window_minutes=?,session_duration_hours=?,log_retention_days=?,export_retention_days=?,notification_retention_days=?,project_idle_alert_hours=?,default_project_budget_seconds=COALESCE(?,default_project_budget_seconds) WHERE id=1`, s.StepTimeout, s.DecideTimeout, s.WorkerUnhealthyRetryAfterSeconds, s.WorkerRejectedRetryAfterSeconds, s.MaxFailedLoginAttempts, s.RateLimitWindowMinutes, s.SessionDurationHours, s.LogRetentionDays, s.ExportRetentionDays, s.NotificationRetentionDays, s.ProjectIdleAlertHours, req.DefaultProjectBudgetSeconds)
 	if e != nil {
+		bad(ctx, e)
+		return
+	}
+	if e := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT default_project_budget_seconds FROM settings WHERE id=1`).Scan(&s.DefaultProjectBudgetSeconds); e != nil {
 		bad(ctx, e)
 		return
 	}
@@ -2178,6 +2190,7 @@ func Register(app *iris.Application, h *Handler) {
 	app.Put("/api/auth/password", h.ChangePassword)
 	app.Put("/auth/password", h.ChangePassword)
 	h.registerStrategy(app)
+	h.registerKnowledge(app)
 	app.Get("/projects", h.ListProjects)
 	app.Post("/projects", h.CreateProject)
 	app.Get("/projects/{project_id:string}", h.GetProject)

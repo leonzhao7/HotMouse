@@ -74,6 +74,39 @@ test("register, session persistence, theme and responsive navigation", async ({
   });
   expect(errors).toEqual([]);
 });
+test("offline CTF knowledge can be searched, filtered and read in a project", async ({
+  page,
+}) => {
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await register(page);
+  await createProject(page, "UI knowledge project");
+  await page.getByRole("tab", { name: "CTF 知识", exact: true }).click();
+  await expect(page.getByText("56 条离线知识", { exact: false })).toBeVisible();
+  const search = page.getByRole("textbox", { name: "检索技术、产品或 CVE" });
+  await search.fill("SSRF");
+  const entry = page.locator(".entity-card").filter({ hasText: "kb006" });
+  await expect(entry).toBeVisible();
+  await entry.getByRole("button", { name: "查看方法" }).click();
+  let dialog = page.getByRole("dialog", { name: "SSRF 利用" });
+  await expect(dialog.getByText("来源：", { exact: false })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "命令示例" })).toBeVisible();
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await search.fill("");
+  await page.getByLabel("知识分类").selectOption("crypto");
+  await expect(
+    page.locator(".entity-card").filter({ hasText: "kb041" }),
+  ).toBeVisible();
+  await expect(entry).toHaveCount(0);
+  await page
+    .locator(".entity-card")
+    .filter({ hasText: "hotmouse-dispatcher" })
+    .getByRole("button", { name: "查看技能" })
+    .click();
+  dialog = page.getByRole("dialog", { name: "hotmouse-dispatcher" });
+  await expect(dialog.locator("pre")).toContainText("HotMouse Dispatcher");
+  expect(errors).toEqual([]);
+});
 test("project graph, manual step conclusion, finding review and goal completion", async ({
   page,
 }) => {
@@ -348,7 +381,7 @@ test("step list shows full LLM responses and retains them after refresh", async 
       data: {
         ...configuration,
         driver: "command",
-        command: `printf '%s' '${rawResponse}'`,
+        command: `if [ "$HOTMOUSE_TASK_TYPE" = target_probe ]; then printf '%s' '{"accepted":true,"data":{"required":false,"reason":"local model output fixture","targets":[]}}'; else printf '%s' '${rawResponse}'; fi`,
         enabled: true,
       },
     });
@@ -496,6 +529,95 @@ test("settings persist, notifications can be marked read, and expired sessions r
   await expect(page.getByText("登录会话已过期，请重新登录。")).toBeVisible();
 });
 
+test("configured project budget is inherited at creation and retained after default changes", async ({
+  page,
+}) => {
+  await register(page);
+  const initial = await (await page.request.get("/api/settings")).json();
+  try {
+    await page.goto("/#/settings");
+    const input = page.getByLabel("默认项目预算（秒，0为不限）");
+    await input.fill("3600");
+    await page.getByRole("button", { name: "保存设置" }).click();
+    await expect(page.getByText("设置已保存", { exact: true })).toBeVisible();
+    await page.reload();
+    await expect(input).toHaveValue("3600");
+    await page.goto("/#/projects");
+    const projectID = await createProject(page, "UI configured budget");
+    let detail = await (
+      await page.request.get(`/projects/${projectID}`)
+    ).json();
+    expect(detail.project.budget_seconds).toBe(3600);
+    const step = await page.request.post(`/projects/${projectID}/steps`, {
+      data: {
+        from: ["origin"],
+        goal_id: "g001",
+        description: "inspect offline budget fixture",
+        creator: "ui-test",
+      },
+    });
+    expect(step.ok()).toBe(true);
+    await page.goto("/#/settings");
+    await input.fill("7200");
+    await page.getByRole("button", { name: "保存设置" }).click();
+    await expect(page.getByText("设置已保存", { exact: true })).toBeVisible();
+    await page.goto(`/#/projects/${projectID}`);
+    await page.getByRole("tab", { name: "路线与止损" }).click();
+    await page.getByRole("button", { name: "添加路线", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "添加路线" });
+    await expect(dialog.getByLabel("路线预算（秒，0 为不限）")).toHaveCount(0);
+    await dialog
+      .getByLabel("标题", { exact: true })
+      .fill("another budget route");
+    await dialog.getByRole("button", { name: "保存", exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    detail = await (await page.request.get(`/projects/${projectID}`)).json();
+    expect(detail.project.budget_seconds).toBe(3600);
+    expect(detail.routes).toHaveLength(2);
+    expect(
+      detail.routes.every((route) => !Object.hasOwn(route, "budget_seconds")),
+    ).toBe(true);
+    await expect(page.getByLabel("项目共享预算")).toContainText("3600 秒");
+    await page
+      .getByRole("button", { name: "修改项目预算", exact: true })
+      .click();
+    const projectBudgetDialog = page.getByRole("dialog", {
+      name: "修改项目预算",
+    });
+    await projectBudgetDialog
+      .getByLabel("项目共享预算（秒，0 为不限）")
+      .fill("1800");
+    await projectBudgetDialog
+      .getByRole("button", { name: "保存", exact: true })
+      .click();
+    await expect(projectBudgetDialog).not.toBeVisible();
+    await expect(page.getByLabel("项目共享预算")).toContainText("1800 秒");
+    await page.goto("/#/projects");
+    const secondID = await createProject(page, "UI changed default budget");
+    const second = await (
+      await page.request.get(`/projects/${secondID}`)
+    ).json();
+    expect(second.project.budget_seconds).toBe(7200);
+    await page.goto("/#/settings");
+    await input.fill("0");
+    await page.getByRole("button", { name: "保存设置" }).click();
+    await expect(page.getByText("设置已保存", { exact: true })).toBeVisible();
+    await page.goto("/#/projects");
+    const thirdID = await createProject(page, "UI unlimited budget");
+    const third = await (await page.request.get(`/projects/${thirdID}`)).json();
+    expect(third.project.budget_seconds).toBe(0);
+  } finally {
+    const latest = await (await page.request.get("/api/settings")).json();
+    const restored = await page.request.put("/api/settings", {
+      data: {
+        ...latest,
+        default_project_budget_seconds: initial.default_project_budget_seconds,
+      },
+    });
+    expect(restored.ok()).toBe(true);
+  }
+});
+
 test("route loss records, history recall, shared experience and flag reconciliation", async ({
   page,
 }) => {
@@ -566,10 +688,13 @@ test("route loss records, history recall, shared experience and flag reconciliat
   expect(projectState.project.failure_reason).toBeFalsy();
   expect(projectState.routes[0].status).toBe("active");
   expect(projectState.routes[0].no_progress_count).toBe(0);
-  expect(projectState.routes[0].budget_spent_ms).toBe(0);
+  expect(projectState.project.budget_spent_ms).toBe(0);
+  expect(projectState.routes[0]).not.toHaveProperty("budget_seconds");
   expect(projectState.routes[0].result_count).toBe(1);
   await expect(page.getByText("可投入", { exact: true })).toBeVisible();
-  await expect(page.getByText(/本轮 0 秒.*累计 0 秒/)).toBeVisible();
+  await expect(page.getByLabel("项目共享预算")).toContainText(
+    "本轮累计执行 0 秒",
+  );
   await page.getByRole("button", { name: "调整路线" }).click();
   dialog = page.getByRole("dialog", { name: "调整路线" });
   await dialog.getByLabel("调整原因").fill("Use independent verified method");

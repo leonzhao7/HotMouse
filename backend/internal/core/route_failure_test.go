@@ -15,7 +15,10 @@ func TestShelvedRouteImmediatelyFailsProjectWithOtherWork(t *testing.T) {
 			if mode == "budget" {
 				budget = 1
 			}
-			route, err := db.CreateRoute(t.Context(), project, CreateRoute{Title: "stop-loss route", GoalID: &goal, NoProgressLimit: &limit, BudgetSeconds: &budget})
+			if _, err := db.SetProjectBudget(t.Context(), project, budget); err != nil {
+				t.Fatal(err)
+			}
+			route, err := db.CreateRoute(t.Context(), project, CreateRoute{Title: "stop-loss route", GoalID: &goal, NoProgressLimit: &limit})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -72,7 +75,7 @@ func TestShelvedRouteImmediatelyFailsProjectWithOtherWork(t *testing.T) {
 				}
 			}
 			detail, err := db.GetProject(t.Context(), project)
-			if err != nil || detail.Project.Status != "failed" || !strings.Contains(detail.Project.FailureReason, route.ID) || !strings.Contains(detail.Project.FailureReason, reason) || detail.Project.Decide != nil {
+			if err != nil || detail.Project.Status != "failed" || (mode != "budget" && !strings.Contains(detail.Project.FailureReason, route.ID)) || !strings.Contains(detail.Project.FailureReason, reason) || detail.Project.Decide != nil {
 				t.Fatalf("route failure left project running: %+v err=%v", detail.Project, err)
 			}
 			if len(detail.Steps) != 2 {
@@ -103,6 +106,12 @@ func TestShelvedRouteImmediatelyFailsProjectWithOtherWork(t *testing.T) {
 				t.Fatal(err)
 			}
 			records, err := db.RouteRecords(t.Context(), project)
+			if mode == "budget" {
+				if err != nil || len(records) != 0 {
+					t.Fatalf("project budget created a route budget record: %+v %v", records, err)
+				}
+				return
+			}
 			if err != nil || len(records) != 1 || records[0].Reason != reason {
 				t.Fatalf("stop-loss record missing or duplicated: %+v err=%v", records, err)
 			}
@@ -116,7 +125,10 @@ func TestManualResumeOverridesPreviousRouteStopLoss(t *testing.T) {
 			db := testDB(t)
 			project := strategyProject(t, db)
 			budget, limit := 1, 1
-			route, err := db.CreateRoute(t.Context(), project, CreateRoute{Title: "retry route", BudgetSeconds: &budget, NoProgressLimit: &limit})
+			if _, err := db.SetProjectBudget(t.Context(), project, budget); err != nil {
+				t.Fatal(err)
+			}
+			route, err := db.CreateRoute(t.Context(), project, CreateRoute{Title: "retry route", NoProgressLimit: &limit})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -144,7 +156,7 @@ func TestManualResumeOverridesPreviousRouteStopLoss(t *testing.T) {
 				t.Fatalf("manual resume failed: %+v err=%v", detail.Project, err)
 			}
 			got := detail.Routes[0]
-			if got.Status != "active" || got.ShelvedReason != "" || got.NoProgressCount != 0 || got.BudgetSeconds != budget || got.BudgetSpentMilliseconds != 0 || got.InvestedMilliseconds != 2000 || got.ResultCount != 1 {
+			if got.Status != "active" || got.ShelvedReason != "" || got.NoProgressCount != 0 || detail.Project.BudgetSeconds != budget || detail.Project.BudgetSpentMilliseconds != 0 || got.InvestedMilliseconds != 2000 || got.ResultCount != 1 {
 				t.Fatalf("resume did not grant a fresh window while retaining history: %+v", got)
 			}
 			fact, err := db.NodeDetail(t.Context(), project, "fact", result.Fact.ID)
@@ -273,9 +285,17 @@ func TestManualResumeResetsAllRoutesFromStoppedProject(t *testing.T) {
 	}
 }
 
-func TestReopenCompletedProjectGrantsFreshRouteBudget(t *testing.T) {
+func TestReopenCompletedProjectGrantsSharedBudgetAndPreservesStartupEvidence(t *testing.T) {
 	db := testDB(t)
 	project := strategyProject(t, db)
+	state := readyTargetProbe(t, db, project, TargetEndpoint{Host: "ctf.example", Port: 443})
+	if err := db.SavePreprocessing(t.Context(), project, state.RunID, PreprocessingState{Status: "ready", Pages: []PreprocessingPage{{URL: "https://ctf.example/", StatusCode: 200, ResponsePath: "/saved/response.json"}}}, "saved initial evidence", "full response"); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := db.TargetProbe(t.Context(), project)
+	if err != nil {
+		t.Fatal(err)
+	}
 	step := strategyStep(t, db, project, nil)
 	result := strategyResult(t, db, project, step, "progress")
 	if _, err := db.CompleteGoal(t.Context(), project, *step.GoalID, Completion{From: []string{result.Fact.ID}, Description: "confirmed completion", Worker: "test"}); err != nil {
@@ -291,7 +311,13 @@ func TestReopenCompletedProjectGrantsFreshRouteBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	detail, err := db.GetProject(t.Context(), project)
-	if err != nil || detail.Project.Status != "active" || detail.Routes[0].Status != "active" || detail.Routes[0].BudgetSpentMilliseconds != 0 || detail.Routes[0].InvestedMilliseconds != 1300000 {
+	if err != nil || detail.Project.Status != "active" || detail.Routes[0].Status != "active" || detail.Project.BudgetSpentMilliseconds != 0 || detail.Project.InvestedMilliseconds != 1300000 {
 		t.Fatalf("reopened project failed due to old route budget: %+v err=%v", detail, err)
+	}
+	if detail.TargetProbe.RunID == saved.RunID || detail.TargetProbe.Status != "ready" || jsonData(detail.TargetProbe.Analysis) != jsonData(saved.Analysis) || jsonData(detail.TargetProbe.Preprocessing) != jsonData(saved.Preprocessing) {
+		t.Fatalf("reopen discarded initial evidence or reused the old run: %+v", detail.TargetProbe)
+	}
+	if err := db.SavePreprocessing(t.Context(), project, saved.RunID, PreprocessingState{Status: "skipped"}, "", ""); err == nil {
+		t.Fatal("old preprocessing result affected reopened project")
 	}
 }

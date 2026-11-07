@@ -129,6 +129,10 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate strategy and memory: %w", err)
 	}
+	if err := migrateProjectBudget(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate project budget: %w", err)
+	}
 	if err := migrateProjectFailure(d); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("migrate project failure state: %w", err)

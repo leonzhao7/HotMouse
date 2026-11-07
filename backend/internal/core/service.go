@@ -33,16 +33,17 @@ func nextID(tx *sql.Tx, project, kind, prefix string) (string, error) {
 	return fmt.Sprintf("%s%03d", prefix, n), nil
 }
 
-const projectSelectColumns = `id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at,failure_reason`
+const projectSelectColumns = `id,title,status,bootstrap_enabled,max_workers,created_at,decide_worker,decide_trigger,decide_started_at,decide_last_heartbeat_at,failure_reason,budget_seconds,budget_baseline_ms,COALESCE((SELECT SUM(invested_ms) FROM routes WHERE project_id=projects.id),0)`
 
 func projectFrom(row interface{ Scan(...any) error }) (Project, error) {
 	var p Project
 	var boot int
 	var dw, dt, ds, dh sql.NullString
-	err := row.Scan(&p.ID, &p.Title, &p.Status, &boot, &p.MaxWorkers, &p.CreatedAt, &dw, &dt, &ds, &dh, &p.FailureReason)
+	err := row.Scan(&p.ID, &p.Title, &p.Status, &boot, &p.MaxWorkers, &p.CreatedAt, &dw, &dt, &ds, &dh, &p.FailureReason, &p.BudgetSeconds, &p.BudgetBaselineMilliseconds, &p.InvestedMilliseconds)
 	if err != nil {
 		return p, err
 	}
+	p.BudgetSpentMilliseconds = max(0, p.InvestedMilliseconds-p.BudgetBaselineMilliseconds)
 	p.BootstrapEnabled = boot != 0
 	if dw.Valid {
 		p.Decide = &DecideLease{Worker: dw.String, Trigger: dt.String, StartedAt: ds.String, LastHeartbeatAt: dh.String}
@@ -72,15 +73,22 @@ func (d *DB) CreateProject(ctx context.Context, req CreateProject) (ProjectDetai
 	if maxWorkers < 1 || maxWorkers > 32 {
 		return ProjectDetail{}, fmt.Errorf("max_workers must be between 1 and 32")
 	}
+	if req.BudgetSeconds != nil && *req.BudgetSeconds < 0 {
+		return ProjectDetail{}, fmt.Errorf("project budget_seconds must be nonnegative")
+	}
 	var out ProjectDetail
 	err := tx(ctx, d, func(t *sql.Tx) error {
 		nowv := now()
+		var budget int
+		if err := t.QueryRow(`SELECT COALESCE(?,default_project_budget_seconds) FROM settings WHERE id=1`, req.BudgetSeconds).Scan(&budget); err != nil {
+			return err
+		}
 		var n int
 		if err := t.QueryRow(`UPDATE counters SET value=value+1 WHERE name='project' RETURNING value`).Scan(&n); err != nil {
 			return err
 		}
 		pid := fmt.Sprintf("proj_%03d", n)
-		if _, err := t.Exec(`INSERT INTO projects(id,title,max_workers,created_at) VALUES(?,?,?,?)`, pid, clean(req.Title), maxWorkers, nowv); err != nil {
+		if _, err := t.Exec(`INSERT INTO projects(id,title,max_workers,budget_seconds,created_at) VALUES(?,?,?,?,?)`, pid, clean(req.Title), maxWorkers, budget, nowv); err != nil {
 			return err
 		}
 		if _, err := t.Exec(`INSERT INTO project_target_health(project_id) VALUES(?)`, pid); err != nil {
@@ -1373,7 +1381,7 @@ func (d *DB) SetProjectStatus(ctx context.Context, p, status string) (Project, e
 			return e
 		}
 		if status == "stopped" {
-			if _, e := t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),preprocessing_json='{"status":"pending"}',status='pending',analysis_json='',failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='' WHERE project_id=?`, p); e != nil {
+			if e := renewTargetProbeRunTx(t, p); e != nil {
 				return e
 			}
 			_, e := t.Exec(`UPDATE steps SET worker=NULL WHERE project_id=? AND concluded_at IS NULL`, p)
@@ -1382,7 +1390,7 @@ func (d *DB) SetProjectStatus(ctx context.Context, p, status string) (Project, e
 			}
 		}
 		if status == "active" && cur != "active" {
-			if _, e := t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),preprocessing_json='{"status":"pending"}',status='pending',analysis_json='',failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='' WHERE project_id=?`, p); e != nil {
+			if e := renewTargetProbeRunTx(t, p); e != nil {
 				return e
 			}
 			if _, e := t.Exec(`DELETE FROM worker_decide_state WHERE project_id=?`, p); e != nil {
@@ -1554,7 +1562,7 @@ func (d *DB) Reopen(ctx context.Context, p string, r Reopen) (ReopenResult, erro
 		}
 		_, e = t.Exec(`UPDATE projects SET status='active',decide_worker=NULL,decide_trigger=NULL,decide_started_at=NULL,decide_last_heartbeat_at=NULL WHERE id=?`, p)
 		if e == nil {
-			_, e = t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),preprocessing_json='{"status":"pending"}',status='pending',analysis_json='',failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='' WHERE project_id=?`, p)
+			e = renewTargetProbeRunTx(t, p)
 		}
 		if e != nil {
 			return e
@@ -1574,8 +1582,9 @@ func (d *DB) Reopen(ctx context.Context, p string, r Reopen) (ReopenResult, erro
 }
 
 type exportProject struct {
-	Title  string `yaml:"title"`
-	Origin string `yaml:"origin"`
+	Title         string `yaml:"title"`
+	Origin        string `yaml:"origin"`
+	BudgetSeconds int    `yaml:"budget_seconds"`
 }
 
 type exportFact struct {
@@ -1691,7 +1700,7 @@ func (d *DB) ExportYAML(ctx context.Context, p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	doc := exportDocument{Flags: flags, Routes: detail.Routes, RouteRecords: records, Project: exportProject{Title: detail.Project.Title, Origin: origin}, Goals: goals, Hints: hints, Facts: facts, Steps: steps, Findings: findings}
+	doc := exportDocument{Flags: flags, Routes: detail.Routes, RouteRecords: records, Project: exportProject{Title: detail.Project.Title, Origin: origin, BudgetSeconds: detail.Project.BudgetSeconds}, Goals: goals, Hints: hints, Facts: facts, Steps: steps, Findings: findings}
 	b, err := yaml.Marshal(doc)
 	return string(b), err
 }

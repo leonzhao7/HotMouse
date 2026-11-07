@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
-import { api, patch, post } from "../api.js";
+import { api, patch, post, put } from "../api.js";
 import { useResource } from "../hooks.js";
 import { useApp } from "../context.jsx";
 import {
@@ -83,6 +83,9 @@ export default function Strategy({ mode, detail, base, refresh }) {
         )}
         {mode === "routes" && (
           <>
+            <Button onClick={() => setModal({ kind: "project-budget" })}>
+              修改项目预算
+            </Button>
             <Button
               icon={Plus}
               disabled={detail.project.status !== "active"}
@@ -120,6 +123,18 @@ export default function Strategy({ mode, detail, base, refresh }) {
       </div>
       {mode === "routes" && (
         <div className="entity-list">
+          <article className="entity-card" aria-label="项目共享预算">
+            <strong>项目共享预算</strong>
+            <p>
+              本轮累计执行{" "}
+              {Math.round((detail.project.budget_spent_ms || 0) / 1000)} 秒
+              {" / "}
+              {detail.project.budget_seconds === 0
+                ? "不限"
+                : `${detail.project.budget_seconds} 秒`}
+              {" · 所有路线共用，新增路线不增加额度。"}
+            </p>
+          </article>
           {(detail.routes || []).map((route) => (
             <article className="entity-card" key={route.id}>
               <div>
@@ -130,12 +145,7 @@ export default function Strategy({ mode, detail, base, refresh }) {
                 <strong>{route.title}</strong>
               </div>
               <p>
-                本轮{" "}
-                {Math.round(
-                  (route.budget_spent_ms ?? route.invested_ms) / 1000,
-                )}{" "}
-                秒 / {route.budget_seconds || "不限"} 秒 · 累计{" "}
-                {Math.round(route.invested_ms / 1000)} 秒 · 进展{" "}
+                累计投入 {Math.round(route.invested_ms / 1000)} 秒 · 进展{" "}
                 {route.progress_count} · 负面结果 {route.negative_count} ·
                 连续无信息 {route.no_progress_count}/{route.no_progress_limit} ·
                 环境失败 {route.environment_failure_count}
@@ -312,7 +322,7 @@ function StrategyModal({ kind, item, detail, base, onClose, onSaved }) {
   const [values, setValues] = useState({
     title: item?.title || "",
     goal_id: item?.goal_id || "",
-    budget_seconds: item?.budget_seconds ?? 1200,
+    budget_seconds: detail.project.budget_seconds,
     no_progress_limit: item?.no_progress_limit ?? 3,
     status: item?.status || (kind === "flag-result" ? "accepted" : "active"),
     reason: "",
@@ -359,17 +369,19 @@ function StrategyModal({ kind, item, detail, base, onClose, onSaved }) {
     </SelectField>
   );
   const submit = async () => {
+    if (kind === "project-budget")
+      await put(`${base}/budget`, {
+        budget_seconds: Number(values.budget_seconds),
+      });
     if (kind === "route")
       await post(`${base}/routes`, {
         title: values.title,
         goal_id: values.goal_id || null,
-        budget_seconds: Number(values.budget_seconds),
         no_progress_limit: Number(values.no_progress_limit),
       });
     if (kind === "route-edit")
       await patch(`${base}/routes/${item.id}`, {
         status: values.status,
-        budget_seconds: Number(values.budget_seconds),
         no_progress_limit: Number(values.no_progress_limit),
         reason: values.reason,
         reopen_condition: values.reopen_condition,
@@ -402,6 +414,7 @@ function StrategyModal({ kind, item, detail, base, onClose, onSaved }) {
     await onSaved();
   };
   const titles = {
+    "project-budget": "修改项目预算",
     route: "添加路线",
     "route-edit": "调整路线",
     experience: "保存经验",
@@ -410,6 +423,20 @@ function StrategyModal({ kind, item, detail, base, onClose, onSaved }) {
   };
   return (
     <FormModal title={titles[kind]} onClose={onClose} onSubmit={submit}>
+      {kind === "project-budget" && (
+        <TextField
+          label="项目共享预算（秒，0 为不限）"
+          type="number"
+          required
+          min="0"
+          step="1"
+          value={values.budget_seconds}
+          onChange={(e) =>
+            setValues((v) => ({ ...v, budget_seconds: e.target.value }))
+          }
+          hint="修改所有路线共用的项目额度；已有累计投入保留。"
+        />
+      )}
       {["route", "experience"].includes(kind) && field("title", "标题", true)}
       {kind === "route" &&
         select("goal_id", "关联目标", [
@@ -420,13 +447,6 @@ function StrategyModal({ kind, item, detail, base, onClose, onSaved }) {
         ])}
       {["route", "route-edit"].includes(kind) && (
         <>
-          {field(
-            "budget_seconds",
-            "路线预算（秒，0 为不限）",
-            true,
-            false,
-            "number",
-          )}
           {field("no_progress_limit", "连续无信息上限", true, false, "number")}
         </>
       )}

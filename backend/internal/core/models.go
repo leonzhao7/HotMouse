@@ -68,14 +68,18 @@ type DecideLease struct {
 }
 
 type Project struct {
-	ID               string       `json:"id" yaml:"id"`
-	Title            string       `json:"title" yaml:"title"`
-	Status           string       `json:"status" yaml:"status"`
-	FailureReason    string       `json:"failure_reason,omitempty" yaml:"failure_reason,omitempty"`
-	BootstrapEnabled bool         `json:"bootstrap_enabled" yaml:"bootstrap_enabled"`
-	MaxWorkers       int          `json:"max_workers" yaml:"max_workers"`
-	CreatedAt        string       `json:"created_at" yaml:"created_at"`
-	Decide           *DecideLease `json:"decide" yaml:"decide"`
+	ID                         string       `json:"id" yaml:"id"`
+	Title                      string       `json:"title" yaml:"title"`
+	Status                     string       `json:"status" yaml:"status"`
+	FailureReason              string       `json:"failure_reason,omitempty" yaml:"failure_reason,omitempty"`
+	BootstrapEnabled           bool         `json:"bootstrap_enabled" yaml:"bootstrap_enabled"`
+	MaxWorkers                 int          `json:"max_workers" yaml:"max_workers"`
+	BudgetSeconds              int          `json:"budget_seconds" yaml:"budget_seconds"`
+	InvestedMilliseconds       int64        `json:"invested_ms" yaml:"invested_ms"`
+	BudgetBaselineMilliseconds int64        `json:"budget_baseline_ms" yaml:"budget_baseline_ms"`
+	BudgetSpentMilliseconds    int64        `json:"budget_spent_ms" yaml:"budget_spent_ms"`
+	CreatedAt                  string       `json:"created_at" yaml:"created_at"`
+	Decide                     *DecideLease `json:"decide" yaml:"decide"`
 }
 
 type ProjectSummary struct {
@@ -104,11 +108,12 @@ type ProjectDetail struct {
 }
 
 type CreateProject struct {
-	Title      string       `json:"title"`
-	Origin     string       `json:"origin"`
-	Goal       string       `json:"goal"`
-	Hints      []CreateHint `json:"hints"`
-	MaxWorkers int          `json:"max_workers,omitempty"`
+	Title         string       `json:"title"`
+	Origin        string       `json:"origin"`
+	Goal          string       `json:"goal"`
+	Hints         []CreateHint `json:"hints"`
+	MaxWorkers    int          `json:"max_workers,omitempty"`
+	BudgetSeconds *int         `json:"budget_seconds,omitempty"`
 }
 type CreateHint struct {
 	Content string `json:"content"`
@@ -186,6 +191,7 @@ type ReopenResult struct {
 }
 
 type Settings struct {
+	DefaultProjectBudgetSeconds      int `json:"default_project_budget_seconds"`
 	StepTimeout                      int `json:"step_timeout"`
 	DecideTimeout                    int `json:"decide_timeout"`
 	WorkerUnhealthyRetryAfterSeconds int `json:"worker_unhealthy_retry_after_seconds"`

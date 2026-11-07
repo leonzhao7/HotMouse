@@ -63,6 +63,7 @@ COPY --from=frontend-build /src/frontend/dist ./frontend/dist
 COPY frontend/server.mjs ./frontend/server.mjs
 COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/hotmouse-entrypoint
 COPY LICENSE /usr/share/doc/hotmouse/LICENSE
+COPY backend/internal/knowledge/LICENSE.sapper-v2 backend/internal/knowledge/DISCLAIMER.sapper-v2.md backend/internal/knowledge/NOTICE.md /usr/share/doc/hotmouse/sapper-v2/
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \

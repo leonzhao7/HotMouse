@@ -21,11 +21,11 @@ type Route struct {
 	Title                      string  `json:"title" yaml:"title"`
 	GoalID                     *string `json:"goal_id" yaml:"goal_id"`
 	Status                     string  `json:"status" yaml:"status"`
-	BudgetSeconds              int     `json:"budget_seconds" yaml:"budget_seconds"`
+	BudgetSeconds              int     `json:"-" yaml:"-"` // Legacy database value; no route time limits.
 	NoProgressLimit            int     `json:"no_progress_limit" yaml:"no_progress_limit"`
 	InvestedMilliseconds       int64   `json:"invested_ms" yaml:"invested_ms"`
-	BudgetBaselineMilliseconds int64   `json:"budget_baseline_ms" yaml:"budget_baseline_ms"`
-	BudgetSpentMilliseconds    int64   `json:"budget_spent_ms" yaml:"budget_spent_ms"`
+	BudgetBaselineMilliseconds int64   `json:"-" yaml:"-"`
+	BudgetSpentMilliseconds    int64   `json:"-" yaml:"-"`
 	ResultCount                int     `json:"result_count" yaml:"result_count"`
 	ProgressCount              int     `json:"progress_count" yaml:"progress_count"`
 	NegativeCount              int     `json:"negative_count" yaml:"negative_count"`

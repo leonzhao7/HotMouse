@@ -16,6 +16,11 @@ import {
 
 const groups = [
   [
+    "项目预算",
+    "新建项目自动保存此预算，所有路线共同消耗项目额度；已有项目保留创建时的预算。",
+    [["default_project_budget_seconds", "默认项目预算（秒，0为不限）", 0]],
+  ],
+  [
     "租约与重试",
     "控制步骤租约、规划租约和失败后的重试间隔。",
     [
@@ -60,7 +65,7 @@ export default function SystemSettings() {
       <PageHeader
         eyebrow="SYSTEM / 服务与策略"
         title="系统设置"
-        description="查看本地服务健康，管理租约、会话与历史记录。"
+        description="查看本地服务健康，管理项目预算、租约、会话与历史记录。"
         actions={
           <Button
             icon={RefreshCw}

@@ -12,7 +12,7 @@ func TestStrategyCLIConcludeRecallExperienceAndFlagLedger(t *testing.T) {
 	h.ok("config", "set", "worker", "test")
 	project := object(h.ok("project", "create", "--title", "strategy", "--origin", "authorized target", "--goal", "verify", "--use"))
 	p := textValue(object(project["project"])["id"])
-	route := object(h.ok("route", "create", "--title", "authentication route", "--goal", "g001", "--budget-seconds", "10", "--no-progress-limit", "1"))
+	route := object(h.ok("route", "create", "--title", "authentication route", "--goal", "g001", "--no-progress-limit", "1"))
 	routeID := textValue(route["id"])
 	step := object(h.ok("step", "create", "--from", "origin", "--description", "inspect authentication", "--goal", "g001", "--route", routeID))
 	stepID := textValue(step["id"])

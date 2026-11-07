@@ -112,6 +112,7 @@ func (a *app) command() *cobra.Command {
 	root.AddCommand(a.serveCommand(), a.versionCommand(), a.completionCommand(), a.configCommand(), a.authCommand())
 	a.graphCommands(root)
 	a.strategyCommands(root)
+	a.knowledgeCommands(root)
 	a.productCommands(root)
 	root.AddCommand(a.leaf("status", "查询服务、健康和 Worker 状态", 0, 0, "none", func(c *cobra.Command, _ []string) (any, error) {
 		service, e := a.get(c, "/healthz")
@@ -156,7 +157,7 @@ func (a *app) prepare(c *cobra.Command, _ []string) error {
 		})
 		return err
 	}
-	local := c == a.root || c.Name() == "version" || c.Name() == "completion" || strings.HasPrefix(c.CommandPath(), "hotmouse config ")
+	local := c == a.root || c.Name() == "version" || c.Name() == "completion" || strings.HasPrefix(c.CommandPath(), "hotmouse config ") || c.Annotations["local"] == "true"
 	if local {
 		var wrong string
 		a.root.PersistentFlags().VisitAll(func(f *pflag.Flag) {
@@ -185,6 +186,9 @@ func (a *app) prepare(c *cobra.Command, _ []string) error {
 		if c.Flags().Changed(name) && c.Flags().Lookup(name).Value.String() == "" {
 			return invalid("--%s must not be empty", name)
 		}
+	}
+	if c.Annotations["local"] == "true" {
+		return a.prepareKnowledge(c)
 	}
 	path := a.configPath
 	if path == "" {

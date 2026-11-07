@@ -68,7 +68,6 @@ func TestManualResumeAllowsPlanningAndPendingWorkerExecution(t *testing.T) {
 	if _, err := r.DB.SetProjectStatus(t.Context(), project, "active"); err != nil {
 		t.Fatal(err)
 	}
-	fixtureTargetProbeNotRequired(t, r.DB, project)
 	marker := filepath.Join(t.TempDir(), "tasks")
 	env, _ := json.Marshal(map[string]string{"MARKER": marker})
 	command := `printf '%s\n' "$HOTMOUSE_TASK_TYPE" >> "$MARKER"; if [ "$HOTMOUSE_TASK_TYPE" = execute ]; then printf '%s' '{"accepted":true,"data":{"description":"resumed result","result":{"type":"progress","detail":"fresh confirmed evidence"}}}'; else printf '%s' '{"accepted":true,"data":{}}'; fi`
@@ -85,5 +84,8 @@ func TestManualResumeAllowsPlanningAndPendingWorkerExecution(t *testing.T) {
 	calls, err := os.ReadFile(marker)
 	if err != nil || !strings.Contains(string(calls), "decide\n") || !strings.Contains(string(calls), "execute\n") {
 		t.Fatalf("resumed project did not invoke planner and worker: %q err=%v", calls, err)
+	}
+	if strings.Contains(string(calls), "target_probe") {
+		t.Fatal("resuming repeated initial target analysis")
 	}
 }

@@ -2,6 +2,8 @@
 
 状态：已实现。`backend/cmd/hotmouse` 提供下述命令树；`serve` 启动服务，其他业务命令调用 HTTP API。
 
+`kb` 是离线参考命令，直接读取二进制内置的 CTF 知识和技能，无需服务或客户端 Profile。检索、全文、导出与自动召回见 [knowledge.md](knowledge.md)。
+
 本设计以现有 Go、Iris、SQLite 后端为基础，覆盖项目图协议、认证、本地 Worker、漏洞审核、模板、系统设置、审计和通知。接口范围依据 [routes.md](routes.md)；实现入口见 [handler.go](../backend/internal/httpapi/handler.go)。
 
 ## 1. 基本结构
@@ -49,6 +51,7 @@ hotmouse
 │   ├── create
 │   ├── use <PROJECT>
 │   ├── rename [PROJECT]
+│   ├── budget [PROJECT]
 │   ├── stop [PROJECT]
 │   ├── resume [PROJECT]
 │   ├── complete [PROJECT]
@@ -87,6 +90,14 @@ hotmouse
 │   ├── search
 │   ├── show <ID>
 │   └── create
+├── kb
+│   ├── status
+│   ├── list
+│   ├── search [QUERY]
+│   ├── show <ID>
+│   ├── skills
+│   ├── skill <NAME>
+│   └── export <DIRECTORY>
 ├── flag
 │   ├── list
 │   ├── capture
@@ -350,9 +361,10 @@ auth status 的会话通过 me 验证，mode=session、user 为用户对象；�
 | --- | --- |
 | `project list` | `--status active\|stopped\|completed\|failed`、`--query TEXT`、`--limit N`；返回 ProjectSummary 数组 |
 | `project show [PROJECT]` | 返回完整 ProjectDetail：project、facts、goals、steps、findings、hints；支持监看 |
-| `project create` | `--title TEXT --origin TEXT --goal TEXT` 必填；`--hint TEXT` 可重复、`--creator NAME`、`--template ID`、`--use`；支持 `--file`，返回 ProjectDetail |
+| `project create` | `--title TEXT --origin TEXT --goal TEXT` 必填；`--budget-seconds N` 可覆盖系统默认预算（非负整数，0 不限）；`--hint TEXT` 可重复、`--creator NAME`、`--template ID`、`--use`；支持 `--file`，返回 ProjectDetail |
 | `project use PROJECT` | 验证并保存默认项目；返回 `{project, server}` |
 | `project rename [PROJECT]` | `--title TEXT` 必填；返回 Project |
+| `project budget [PROJECT]` | `--budget-seconds N` 必填（非负整数，0 不限）；修改所有路线共用的项目额度，保留已消耗时间；支持 `--file` |
 | `project stop/resume [PROJECT]` | 设置 stopped/active；返回 Project |
 | `project complete [PROJECT]` | `--from FACT --description TEXT --worker NAME` 必填；支持 `--file`，返回被完成的 Goal |
 | `project reopen [PROJECT]` | `--description TEXT` 必填、`--creator NAME`；支持 `--file`，返回 `{project, fact, step, goal}` |
@@ -364,11 +376,15 @@ auth status 的会话通过 me 验证，mode=session、user 为用户对象；�
 
 创建时 title、origin、goal 都不能是空文本。使用模板时先读取模板，在客户端展开为创建请求：显式 title/origin/goal 覆盖模板对应字段，显式 hints 追加到模板 hints。模板正文中的 `[URL]` 等占位符不做自动替换，应通过 `--origin` / `--goal` 明确提供内容。`--file` 与 `--template` 互斥。
 
+未提供 `--budget-seconds` 或请求文件中的 `budget_seconds` 时，服务自动读取系统设置 `default_project_budget_seconds`，保存到 `project.budget_seconds`。所有路线共同消耗这一份额度，新增路线不增加预算；修改系统配置只影响以后创建的项目。使用 `hotmouse project show PROJECT --select project.budget_seconds` 查看预算，使用 `--select project.budget_spent_ms` 查看本轮累计消耗。已有项目通过 `project budget --budget-seconds` 修改，详见 [strategy.md](strategy.md)。
+
 creator 默认取命令参数、`HOTMOUSE_CREATOR`、profile.creator，最后为 `cli`。创建时仅有 origin 事实和初始顶层目标，不隐式创建或执行步骤。`--use` 在创建成功后另行保存默认项目；若本地写入失败，保留创建结果、返回退出码 1，并在错误中说明项目已创建。
 
 `project complete` 对应已有兼容接口，由服务选择一个 active 顶层目标完成，不能用它强制设置项目为 completed。完整项目只有在所有目标均 completed 后才自动结束。确定目标的脚本优先使用 `goal complete GOAL`；不额外提供会绕过证据链的 `project update --status completed`。
 
 `project reopen` 仅适用于 completed 项目，会重新激活目标，并生成外部反馈 Step 和 Fact。stopped 项目使用 `resume`；failed 项目可用 `resume` 清除失败状态并重新触发规划。删除当前默认项目成功后清除本地默认值；删除不额外承诺清理 Worker 工作目录。
+
+继续推进和重新打开均复用已保存的目标识别与初始预处理结果。项目按保存的预算开启一份新的共享额度，所有路线共用；历史投入和证据保留，重复恢复 active 项目不会重置额度。
 
 `project wait` 只观察，不启动 Worker：等待 completed 时遇到 stopped 或 failed 退出 5；等待 stopped 时遇到 completed 或 failed 退出 5；等待 failed 时遇到 completed 或 stopped 退出 5。超时退出 6。每个 HTTP 请求仍使用全局 timeout。成功前进度写入 stderr，stdout 只输出最终结果。
 
@@ -566,6 +582,7 @@ history 当前服务只返回最近 20 条，可按 worker 名从服务端筛选
 
 ```text
 hotmouse settings show
+hotmouse settings set default_project_budget_seconds <秒数>
 hotmouse settings set step_timeout 30
 hotmouse settings apply --file settings.yaml
 hotmouse settings health
@@ -576,6 +593,7 @@ settings show 返回完整 Settings，set 更新一个键，apply 按单个 JSON
 
 | KEY | 单位 / 范围 / 默认值 |
 | --- | --- |
+| `default_project_budget_seconds` | 新项目共享预算秒数，≥0，0 表示不限，默认 1200；创建时保存，所有路线共同消耗 |
 | `step_timeout` | Step 租约秒数，≥5，默认 15 |
 | `decide_timeout` | Decide 租约秒数，≥5，默认 15 |
 | `worker_unhealthy_retry_after_seconds` | 秒，1–3600，默认 5 |
@@ -735,6 +753,7 @@ hints:
 | `project show/use/wait` | `GET /projects/P`；use 本地保存，wait 轮询 |
 | `project rename` | `PUT /projects/P/title` |
 | `project stop/resume` | `PUT /projects/P/status`，status=stopped/active |
+| `project budget` | `PUT /projects/P/budget`，budget_seconds=非负整数 |
 | `project complete/reopen/delete` | `POST /projects/P/complete`、`POST /projects/P/reopen`、`DELETE /projects/P` |
 | `project campaign/timeline` | `GET /api/projects/P/campaign`、`GET /api/projects/P/timeline` |
 | `project export` | `GET /projects/P/export?format=yaml\|timeline` |
@@ -809,4 +828,4 @@ backend/internal/worker/          已有服务内串行 Worker
 自动化测试覆盖真实 HTTP 服务下的项目证据链、租约边界、配置更新、认证与 Profile 隔离、漏洞部分成功、输入校验、监看中断、导出覆盖和服务单实例退出。
 
 
-路线预算、结构化执行结果 `--result-file`、紧凑上下文、历史检索、经验库与 flag 台账的协议和示例见 [strategy.md](strategy.md)。
+项目共享预算、路线止损、结构化执行结果 `--result-file`、紧凑上下文、历史检索、经验库与 flag 台账的协议和示例见 [strategy.md](strategy.md)。

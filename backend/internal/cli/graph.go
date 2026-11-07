@@ -300,7 +300,7 @@ func (a *app) projectCommands() *cobra.Command {
 	})
 	watchFlags(show)
 	g.AddCommand(show)
-	schema := []field{str("title", true), str("origin", true), str("goal", true), {Name: "hints", Kind: "hints"}}
+	schema := []field{str("title", true), str("origin", true), str("goal", true), number("budget_seconds"), {Name: "hints", Kind: "hints"}}
 	create := a.leaf("create", "创建项目、origin 和顶层目标；不隐式执行步骤", 0, 0, "none", func(c *cobra.Command, _ []string) (any, error) {
 		var body map[string]any
 		template, _ := c.Flags().GetString("template")
@@ -360,6 +360,7 @@ func (a *app) projectCommands() *cobra.Command {
 		return v, nil
 	})
 	a.bodyFlags(create, schema)
+	create.Flags().Lookup("budget-seconds").Usage = "项目预算（秒，0 为不限）；省略时自动读取系统配置"
 	create.Flags().StringArray("hint", nil, "追加提示，可重复")
 	create.Flags().String("creator", "", "显式提示的创建者，默认 cli")
 	create.Flags().String("creator-file", "", "显式提示创建者的 UTF-8 文件")

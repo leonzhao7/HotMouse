@@ -525,7 +525,7 @@ func (a *app) workers() *cobra.Command {
 	return g
 }
 
-var settingsLimits = map[string][2]int{"step_timeout": {5, math.MaxInt}, "decide_timeout": {5, math.MaxInt}, "worker_unhealthy_retry_after_seconds": {1, 3600}, "worker_rejected_retry_after_seconds": {1, 3600}, "max_failed_login_attempts": {1, 50}, "rate_limit_window_minutes": {1, 1440}, "session_duration_hours": {1, 168}, "log_retention_days": {1, 3650}, "export_retention_days": {1, 3650}, "notification_retention_days": {1, 3650}, "project_idle_alert_hours": {1, 720}}
+var settingsLimits = map[string][2]int{"default_project_budget_seconds": {0, math.MaxInt}, "step_timeout": {5, math.MaxInt}, "decide_timeout": {5, math.MaxInt}, "worker_unhealthy_retry_after_seconds": {1, 3600}, "worker_rejected_retry_after_seconds": {1, 3600}, "max_failed_login_attempts": {1, 50}, "rate_limit_window_minutes": {1, 1440}, "session_duration_hours": {1, 168}, "log_retention_days": {1, 3650}, "export_retention_days": {1, 3650}, "notification_retention_days": {1, 3650}, "project_idle_alert_hours": {1, 720}}
 
 func (a *app) updateSettings(c *cobra.Command, patch map[string]any) (any, error) {
 	if len(patch) == 0 {
@@ -552,7 +552,7 @@ func (a *app) updateSettings(c *cobra.Command, patch map[string]any) (any, error
 	return a.request(c, "PUT", "/api/settings", body)
 }
 func (a *app) settings() *cobra.Command {
-	g := group("settings", "系统租约、登录和保留策略；局部更新尚无并发版本保护")
+	g := group("settings", "系统项目预算、租约、登录和保留策略；局部更新尚无并发版本保护")
 	g.AddCommand(a.leaf("show", "显示完整 Settings", 0, 0, "none", func(c *cobra.Command, _ []string) (any, error) { return a.get(c, "/api/settings") }))
 	g.AddCommand(a.leaf("set <KEY> <VALUE>", "修改一个整数设置；单位按键名，租约为秒", 2, 2, "none", func(c *cobra.Command, args []string) (any, error) {
 		n, e := strconv.Atoi(args[1])

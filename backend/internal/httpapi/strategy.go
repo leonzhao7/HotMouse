@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/kataras/iris/v12"
@@ -8,6 +9,24 @@ import (
 )
 
 func (h *Handler) registerStrategy(app *iris.Application) {
+	app.Put("/projects/{project_id:string}/budget", func(ctx iris.Context) {
+		var req struct {
+			BudgetSeconds *int `json:"budget_seconds"`
+		}
+		if !read(ctx, &req) {
+			return
+		}
+		if req.BudgetSeconds == nil {
+			bad(ctx, fmt.Errorf("budget_seconds is required"))
+			return
+		}
+		v, err := h.DB.SetProjectBudget(ctx.Request().Context(), ctx.Params().Get("project_id"), *req.BudgetSeconds)
+		if err != nil {
+			bad(ctx, err)
+			return
+		}
+		ctx.JSON(v)
+	})
 	app.Get("/projects/{project_id:string}/context", func(ctx iris.Context) {
 		phase := ctx.URLParamDefault("phase", "decide")
 		value, err := h.DB.ModelContext(ctx.Request().Context(), ctx.Params().Get("project_id"), phase, ctx.URLParam("step_id"))

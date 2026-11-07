@@ -64,6 +64,48 @@ func (d *DB) TargetProbe(ctx context.Context, project string) (TargetProbeState,
 	return readTargetProbe(d.SQL.QueryRowContext(ctx, `SELECT `+targetProbeSelect+` FROM project_target_health WHERE project_id=?`, project))
 }
 
+// Rotate the monitor generation without discarding successful classification or
+// preprocessing. Old probe/analysis results cannot overwrite a resumed run.
+func renewTargetProbeRunTx(t *sql.Tx, project string) error {
+	var analysis string
+	if err := t.QueryRow(`SELECT analysis_json FROM project_target_health WHERE project_id=?`, project).Scan(&analysis); err != nil {
+		return err
+	}
+	if analysis == "" {
+		// Older stop/resume code cleared classification. Recover the last saved
+		// successful response so existing projects can resume without another LLM call.
+		var raw string
+		err := t.QueryRow(`SELECT detail FROM worker_task_history WHERE project_id=? AND task_type='target_probe' AND status='completed' ORDER BY id DESC LIMIT 1`, project).Scan(&raw)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		var response struct {
+			Accepted *bool           `json:"accepted"`
+			Data     json.RawMessage `json:"data"`
+		}
+		if err == nil && json.Unmarshal([]byte(raw), &response) == nil {
+			// Both wrapped and bare analysis responses are supported by workers.
+			data := []byte(raw)
+			if response.Accepted != nil {
+				data = nil
+				if *response.Accepted {
+					data = response.Data
+				}
+			}
+			var saved TargetProbeAnalysis
+			if json.Unmarshal(data, &saved) == nil && ValidateTargetProbeAnalysis(saved) == nil {
+				data, err = json.Marshal(saved)
+				if err != nil {
+					return err
+				}
+				analysis = string(data)
+			}
+		}
+	}
+	_, err := t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),status=CASE WHEN ?='' THEN 'pending' ELSE 'ready' END,analysis_json=?,failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='' WHERE project_id=?`, analysis, analysis, project)
+	return err
+}
+
 func ValidateTargetProbeAnalysis(analysis TargetProbeAnalysis) error {
 	if err := requireText("target probe reason", analysis.Reason); err != nil {
 		return err

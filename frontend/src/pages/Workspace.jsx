@@ -1,6 +1,7 @@
 import { lazy, Suspense, useState } from "react";
 import {
   ArrowLeft,
+  BookOpen,
   Check,
   CircleX,
   Clock3,
@@ -57,6 +58,7 @@ import {
   TextField,
 } from "../components/ui.jsx";
 import Strategy, { resultLabels } from "./Strategy.jsx";
+import Knowledge from "./Knowledge.jsx";
 import StepResponse from "../components/StepResponse.jsx";
 const Graph = lazy(() => import("../components/Graph.jsx"));
 
@@ -72,6 +74,7 @@ const tabs = [
   ["routes", "路线与止损", GitBranch],
   ["history", "历史检索", FileSearch],
   ["experiences", "经验库", Lightbulb],
+  ["knowledge", "CTF 知识", BookOpen],
   ["flags", "flag 台账", ShieldAlert],
 ];
 
@@ -418,6 +421,7 @@ export default function Workspace({ id }) {
                     "routes",
                     "history",
                     "experiences",
+                    "knowledge",
                     "flags",
                   ].includes(tab) && (
                     <div className="workspace-list-toolbar">
@@ -652,6 +656,7 @@ export default function Workspace({ id }) {
                       <Campaign data={campaign.data} />
                     </ResourceState>
                   )}
+                  {tab === "knowledge" && <Knowledge />}
                 </>
               )}
             </section>
