@@ -45,7 +45,7 @@ The Dispatcher commits saved successful results first, then processes summaries 
 
 Built-in `codex`, `claude`/`claudecode`, and `pi` drivers use local CLIs. Set `PI_CLI` in the worker environment when Pi is installed outside `PATH`; the worker test and health summary verify CLI availability only, not provider credentials or model API access.
 
-Reports, report templates/attachments and Docker/container deployment are outside this migration.
+Reports and report templates/attachments are outside this migration. Docker image builds and deployment are documented in [docker/README.md](../docker/README.md).
 
 Set `HOTMOUSE_AUTORUN=1` to start project Dispatchers and the Agent Worker pool. Set `worker_count` through `/api/workers/config` to control the global number of concurrent external agents; restart the service to apply a changed pool size. Each project's `max_workers` caps its own share of that pool and applies immediately. Without autorun, use the explicit `/api/projects/{project_id}/steps/{step_id}/execute` endpoint while developing or integrating another local trigger. Each external process start is logged to backend stdout with its project, step, worker identity and argv.
 

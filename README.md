@@ -43,6 +43,7 @@ npm run dev
 打开 **http://127.0.0.1:5173** 注册或登录。后端默认监听 `127.0.0.1:8080`。
 
 - [前端使用、构建与验证](frontend/README.md)
+- [Docker 镜像构建与启动](docker/README.md)
 - [后端与 Worker 配置](backend/README.md)
 - [完整命令行接口](docs/cli.md)
 - [HTTP 接口范围](docs/routes.md)

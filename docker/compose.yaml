@@ -1,0 +1,22 @@
+services:
+  hotmouse:
+    image: ${HOTMOUSE_IMAGE:-hotmouse:latest}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "${HOTMOUSE_BIND_ADDRESS:-127.0.0.1}:${HOTMOUSE_PORT:-9981}:9981"
+    environment:
+      HOTMOUSE_AUTORUN: "${HOTMOUSE_AUTORUN:-1}"
+      HOTMOUSE_AUTH_REQUIRED: "${HOTMOUSE_AUTH_REQUIRED:-1}"
+    volumes:
+      - hotmouse-data:/data
+      - hotmouse-home:/home/node
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  hotmouse-data:
+  hotmouse-home:

@@ -1,0 +1,36 @@
+# The build context is the repository root. Send only build inputs.
+**
+!backend/
+backend/**
+!backend/go.mod
+!backend/go.sum
+!backend/cmd/
+!backend/cmd/**
+!backend/internal/
+!backend/internal/**
+!frontend/
+frontend/**
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/index.html
+!frontend/vite.config.js
+!frontend/server.mjs
+!frontend/src/
+!frontend/src/**
+!frontend/public/
+!frontend/public/**
+!docker/
+docker/**
+!docker/Dockerfile
+!docker/entrypoint.sh
+!LICENSE
+
+# Exclude local state even when it is nested inside an allowed source directory.
+**/.env
+**/.env.*
+**/.git
+**/node_modules
+**/*.db
+**/*.db-*
+**/*.sqlite
+**/*.sqlite3
