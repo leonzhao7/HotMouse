@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"hotmouse/backend/internal/core"
+	"hotmouse/backend/internal/logging"
 )
 
 // Runner owns the project dispatchers and the configured pool of agent workers.
@@ -23,7 +23,7 @@ import (
 type Runner struct {
 	DB             *core.DB
 	Interval       time.Duration
-	logger         *log.Logger
+	logger         *logging.Logger
 	locksMu        sync.Mutex
 	stepLock       map[string]*sync.Mutex
 	workspaceLock  map[string]*sync.Mutex
@@ -45,20 +45,24 @@ type workerConfig struct {
 	runtime         core.WorkerRuntime
 	workerCount     int
 	identity        string
-	logger          *log.Logger
+	logger          *logging.Logger
 }
 
 const defaultWorkerCount = 4
 
 func New(db *core.DB) *Runner {
-	return &Runner{DB: db, Interval: time.Second, logger: log.New(io.Discard, "", log.LstdFlags), stepLock: map[string]*sync.Mutex{}, workspaceLock: map[string]*sync.Mutex{}, targetMonitors: map[string]*targetMonitor{}}
+	return &Runner{DB: db, Interval: time.Second, logger: logging.New(io.Discard, "worker"), stepLock: map[string]*sync.Mutex{}, workspaceLock: map[string]*sync.Mutex{}, targetMonitors: map[string]*targetMonitor{}}
 }
 
 func (r *Runner) SetLogOutput(output io.Writer) {
 	if output == nil {
 		output = io.Discard
 	}
-	r.logger = log.New(output, "", log.LstdFlags)
+	r.logger = logging.New(output, "worker")
+}
+
+func (r *Runner) SetLogger(logger *logging.Logger) {
+	r.logger = logger.WithComponent("worker")
 }
 
 // Dispatcher owns planning for exactly one project. Agent workers only claim
@@ -124,6 +128,7 @@ func (r *Runner) startDispatchersAndWorkers(ctx context.Context) {
 		cancel()
 		wg.Wait()
 		r.stopTargetMonitors()
+		r.logger.Info("worker.pool.stop")
 	}()
 
 	dispatchers := map[string]<-chan struct{}{}
@@ -133,6 +138,7 @@ func (r *Runner) startDispatchersAndWorkers(ctx context.Context) {
 	if workerCount < 1 {
 		workerCount = defaultWorkerCount
 	}
+	r.logger.Info("worker.pool.start", "workers", workerCount, "interval", r.Interval)
 	for slot := 1; slot <= workerCount; slot++ {
 		identity := r.workerIdentity(slot)
 		wg.Add(1)
@@ -152,6 +158,9 @@ func (r *Runner) startDispatchersAndWorkers(ctx context.Context) {
 		}
 		rows, err := r.DB.SQL.QueryContext(childCtx, `SELECT id FROM projects WHERE status='active' ORDER BY created_at,id`)
 		if err != nil {
+			if childCtx.Err() == nil {
+				r.logger.Error("dispatcher.projects_failed", "error", err)
+			}
 			return
 		}
 		projects := []string{}
@@ -189,6 +198,8 @@ func (r *Runner) startDispatchersAndWorkers(ctx context.Context) {
 }
 
 func (r *Runner) dispatcherLoop(ctx context.Context, dispatcher *Dispatcher) {
+	r.logger.Info("dispatcher.start", "project", dispatcher.project)
+	defer r.logger.Info("dispatcher.stop", "project", dispatcher.project)
 	ticker := time.NewTicker(r.Interval)
 	defer ticker.Stop()
 	for {
@@ -206,6 +217,8 @@ func (r *Runner) dispatcherLoop(ctx context.Context, dispatcher *Dispatcher) {
 }
 
 func (r *Runner) agentWorkerLoop(ctx context.Context, worker *AgentWorker) {
+	r.logger.Info("worker.start", "worker", worker.Identity)
+	defer r.logger.Info("worker.stop", "worker", worker.Identity)
 	ticker := time.NewTicker(r.Interval)
 	defer ticker.Stop()
 	for {
@@ -502,8 +515,8 @@ func (r *Runner) executeAsRole(parent context.Context, project, step, descriptio
 				vars, err = r.commandVars(leaseCtx, project, step, description, graph, "execute", cfg, workspace)
 				if err == nil {
 					argv := []string{"sh", "-c", cfg.command}
-					r.logInvocation(cfg, project, step, "execute", argv)
-					process := runProcess(leaseCtx, argv, cfg.env, workspace, vars, time.Duration(cfg.runtime.ExecuteTimeoutSeconds)*time.Second, nil)
+					logger := r.processLogger(cfg, project, step, "execute")
+					process := runProcess(leaseCtx, argv, cfg.env, workspace, vars, time.Duration(cfg.runtime.ExecuteTimeoutSeconds)*time.Second, nil, logger)
 					commandInvoked = true
 					output, err = process.stdout, process.err
 				}
@@ -943,8 +956,8 @@ func (r *Runner) decideProjectAs(parent context.Context, project, worker string)
 			}
 		} else {
 			argv := []string{"sh", "-c", cfg.command}
-			r.logInvocation(cfg, project, "", "decide", argv)
-			process := runProcess(leaseCtx, argv, cfg.env, workspace, vars, time.Duration(cfg.runtime.DecideTimeoutSeconds)*time.Second, nil)
+			logger := r.processLogger(cfg, project, "", "decide")
+			process := runProcess(leaseCtx, argv, cfg.env, workspace, vars, time.Duration(cfg.runtime.DecideTimeoutSeconds)*time.Second, nil, logger)
 			payload, err = process.stdout, process.err
 			planningTimedOut = process.timedOut
 		}
@@ -1542,16 +1555,15 @@ func ensureOwnedDirectoryWithStatus(path string) (bool, error) {
 	return true, nil
 }
 
-func (r *Runner) logInvocation(cfg workerConfig, project, step, task string, argv []string) {
+func (r *Runner) processLogger(cfg workerConfig, project, step, task string) *logging.Logger {
 	logger := cfg.logger
 	if logger == nil {
 		logger = r.logger
 	}
 	if logger == nil {
-		return
+		return nil
 	}
-	encoded, _ := json.Marshal(argv)
-	logger.Printf("worker process start project=%s step=%s task=%s worker=%s argv=%s", project, step, task, cfg.identity, encoded)
+	return logger.WithEnvironment(logging.MergeEnvironment(nil, cfg.env)).With("project", project, "step", step, "task", task, "worker", cfg.identity, "driver", canonicalDriver(cfg.driver))
 }
 
 func (r *Runner) cleanupCompletedWorkspaces(ctx context.Context) {
@@ -1743,9 +1755,11 @@ func (r *Runner) historyStart(project, step, task, started, worker string) int64
 	}
 	res, err := r.DB.SQL.Exec(`INSERT INTO worker_task_history(worker,project_id,step_id,task_type,status,started_at,detail,last_activity_at) VALUES(?,?,?,?,?,?,?,?)`, worker, pid, sid, task, "running", started, "", started)
 	if err != nil {
+		r.logger.Error("task.history_failed", "project", project, "step", step, "task", task, "worker", worker, "error", err)
 		return 0
 	}
 	id, _ := res.LastInsertId()
+	r.logger.Info("task.start", "history", id, "project", project, "step", step, "task", task, "worker", worker)
 	return id
 }
 
@@ -1879,6 +1893,7 @@ func (r *Runner) recordTaskOutcome(project, taskType, outcome string, attempts .
 		r.logger.Printf("save task retry project=%s task=%s: %v", project, taskType, err)
 		return
 	}
+	r.logger.Warn("task.retry.scheduled", "project", project, "task", taskType, "outcome", outcome, "failure_count", failureCount, "retry_after", retryAfter)
 	if taskType == "decide" && attempt.fingerprint != "" {
 		r.failExhaustedDecideProject(ctx, project, attempt)
 	}
@@ -1890,5 +1905,9 @@ func (r *Runner) historyFinish(id int64, status, detail string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_ = r.DB.FinishWorkerTask(ctx, id, status, detail)
+	if err := r.DB.FinishWorkerTask(ctx, id, status, detail); err != nil {
+		r.logger.Error("task.finish_failed", "history", id, "status", status, "error", err)
+		return
+	}
+	r.logger.Info("task.finish", "history", id, "status", status, "detail_bytes", len(detail))
 }

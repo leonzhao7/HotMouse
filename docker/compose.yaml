@@ -9,6 +9,8 @@ services:
     environment:
       HOTMOUSE_AUTORUN: "${HOTMOUSE_AUTORUN:-1}"
       HOTMOUSE_AUTH_REQUIRED: "${HOTMOUSE_AUTH_REQUIRED:-1}"
+      HOTMOUSE_LOG_LEVEL: "${HOTMOUSE_LOG_LEVEL:-debug}"
+      HOTMOUSE_LOG_ENV: "${HOTMOUSE_LOG_ENV:-1}"
     volumes:
       - hotmouse-data:/data
       - hotmouse-home:/home/node

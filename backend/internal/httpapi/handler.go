@@ -39,7 +39,7 @@ var registrationUsernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func New(db *core.DB) *Handler {
 	runner := worker.New(db)
-	runner.SetLogOutput(os.Stdout)
+	runner.SetLogOutput(os.Stderr)
 	return &Handler{DB: db, Runner: runner, captchas: map[string]captchaChallenge{}}
 }
 func bad(ctx iris.Context, err error) {

@@ -284,7 +284,7 @@ func (r *Runner) runProvider(ctx context.Context, cfg workerConfig, phase, sessi
 	if err != nil {
 		return nil, session, processResult{}, err
 	}
-	r.logInvocation(cfg, vars["HOTMOUSE_PROJECT_ID"], vars["HOTMOUSE_STEP_ID"], vars["HOTMOUSE_TASK_TYPE"]+"/"+phase, argv)
+	logger := r.processLogger(cfg, vars["HOTMOUSE_PROJECT_ID"], vars["HOTMOUSE_STEP_ID"], vars["HOTMOUSE_TASK_TYPE"]+"/"+phase)
 	if canonicalDriver(cfg.driver) == "pi" && cfg.env["PI_MODEL"] != "" && cfg.env["PI_BASE_URL"] != "" && cfg.env["PI_API_KEY"] != "" && cfg.env["PI_PROVIDER_API"] != "" {
 		vars["PI_CODING_AGENT_DIR"] = filepath.Join(stateWorkspace, ".hotmouse", "pi-agent")
 	}
@@ -293,6 +293,7 @@ func (r *Runner) runProvider(ctx context.Context, cfg workerConfig, phase, sessi
 	var checkpointErr error
 	seen := session
 	observe := func(line []byte) {
+		logProviderEvent(logger, cfg.driver, line)
 		if id := eventSession(cfg.driver, line); id != "" && seen == "" {
 			seen = id
 			if onSession != nil {
@@ -303,8 +304,11 @@ func (r *Runner) runProvider(ctx context.Context, cfg workerConfig, phase, sessi
 			}
 		}
 	}
-	result := runProcess(runCtx, argv, cfg.env, workspace, vars, timeout, observe)
+	result := runProcess(runCtx, argv, cfg.env, workspace, vars, timeout, observe, logger)
 	response, responseErr := providerResponse(cfg.driver, result.stdout)
+	if responseErr != nil && logger != nil {
+		logger.Warn("provider.response_failed", "error", responseErr, "response_bytes", len(response))
+	}
 	if seen == "" && canonicalDriver(cfg.driver) == "codex" {
 		if match := codexSessionPattern.FindSubmatch(result.stderr); len(match) > 1 {
 			seen = string(match[1])

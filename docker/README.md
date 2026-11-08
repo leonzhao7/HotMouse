@@ -68,6 +68,32 @@ docker load -i hotmouse-image.tar
 
 从根目录直接构建的等价命令：`DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile -t hotmouse:latest .`。`Dockerfile.dockerignore` 仅允许必要的源码、依赖清单、入口脚本和许可证进入构建上下文，排除本机数据库、Worker 产物、登录信息及 `.env` 文件。
 
+## 终端日志
+
+Docker 镜像默认开启 `HOTMOUSE_LOG_LEVEL=debug` 和 `HOTMOUSE_LOG_ENV=1`，启动后直接向终端写日志。Go 服务、Dispatcher、Worker 和 CTFy Agent 的诊断写入 stderr，由 Docker 收集，无需挂载日志目录。
+
+```bash
+docker compose -f docker/compose.yaml logs --tail=200 -f
+docker logs --tail=200 -f <容器名或ID>
+```
+
+启动日志包含时间、组件、进程 PID、UID/GID、主机名、工作目录、系统架构、Go 版本、监听地址、数据库路径、认证策略和 Worker 数量。运行时记录任务与项目标识、Agent 驱动和模型、模型网关、原生 CLI 的会话及工具事件、实时 stderr、HTTP 状态和耗时、退出码、取消/超时与输出限制。子进程每 30 秒输出一次运行心跳，包含耗时和已产生的输出字节数。
+
+启动时打印进程环境变量；每次启动 Agent 时打印合并继承环境、Worker 配置和任务变量后的实际环境。API Key、Token、密码、Cookie、认证信息以及 URL 中的账号密码和敏感查询值会脱敏；空变量单独标记为 `empty`，便于发现配置覆盖问题。任务提示词和图上下文仅记录长度，单条输出内容最多保留 4 KiB。
+
+| 环境变量 | Docker 默认值 | 用途 |
+| --- | --- | --- |
+| `HOTMOUSE_LOG_LEVEL` | `debug` | `debug`、`info`、`warn`、`error`；debug 包含子进程 stdout 和成功 HTTP 请求 |
+| `HOTMOUSE_LOG_ENV` | `1` | `0` 关闭环境变量快照；不影响其他日志 |
+
+例如将工作台调整为 info 日志：
+
+```bash
+HOTMOUSE_LOG_LEVEL=info docker compose -f docker/compose.yaml up -d
+```
+
+直接运行镜像时使用 `-e HOTMOUSE_LOG_LEVEL=info` 或 `-e HOTMOUSE_LOG_ENV=0`。本地 `hotmouse serve` 默认 info，`--verbose` 开启 debug。排障完毕后可以调低日志级别。
+
 ## 数据和模型配置
 
 容器以 UID/GID `1000:1000` 的非 root 用户运行。Compose 自动建立两个持久卷：

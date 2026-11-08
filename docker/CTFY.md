@@ -24,3 +24,7 @@ For a local dry-run smoke test, create a writable directory named ctfy-smoke con
     cat ctfy-smoke/result.json
 
 The container user is UID 1000, so the mounted directory must be writable by that UID. The official ctfy agent check performs the platform's own manifest and dry-run validation. A scored run additionally requires a funded, reachable CTFy model gateway.
+
+The image emits detailed terminal diagnostics on stderr by default (`HOTMOUSE_LOG_LEVEL=debug`, `HOTMOUSE_LOG_ENV=1`). Logs include the container runtime and environment, task schema and mode, input-file availability and permissions, selected driver/model/gateway, effective child environment, offline knowledge export, live CLI session/tool events, process stderr, 30-second progress heartbeats, token usage, result-file location, and exit reason. Credentials and authenticated URLs are redacted; task prompts are summarized by byte length. Logs do not replace or modify `result.json`.
+
+Use `docker logs --tail=200 -f <container>` when running locally. Set `HOTMOUSE_LOG_LEVEL=info` for less output, or `HOTMOUSE_LOG_ENV=0` to omit environment snapshots. These settings can also be supplied by the external container runner. Rebuild and push the image after changing logging code, then update CTFy's registered image digest.

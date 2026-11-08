@@ -1,6 +1,7 @@
 package ctfy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -45,6 +46,8 @@ func TestDryRunWithoutCredentials(t *testing.T) {
 }
 
 func TestHostedRunUsesCTFyCredentialsAndReplacesRoundResult(t *testing.T) {
+	t.Setenv("HOTMOUSE_LOG_LEVEL", "info")
+	t.Setenv("HOTMOUSE_LOG_ENV", "1")
 	dir := taskFixture(t, `{"schema_version":3,"run_mode":"instance","max_turns":10}`)
 	t.Setenv("LLM_FLAVOR", "anthropic")
 	t.Setenv("LLM_API_KEY", "run-key")
@@ -59,7 +62,8 @@ func TestHostedRunUsesCTFyCredentialsAndReplacesRoundResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	called := false
-	code := Run(context.Background(), func(string) {}, func(string) {}, func(_ context.Context, a worker.HostedAgent) (worker.HostedAgentResult, error) {
+	var logs bytes.Buffer
+	code := Run(context.Background(), func(string) {}, func(message string) { logs.WriteString(message + "\n") }, func(_ context.Context, a worker.HostedAgent) (worker.HostedAgentResult, error) {
 		called = true
 		if a.Driver != "claudecode" || a.Model != "funded-model" || a.BaseURL != "https://gateway.example/v1" || a.MaxTurns != 10 {
 			t.Fatalf("agent=%+v", a)
@@ -67,6 +71,10 @@ func TestHostedRunUsesCTFyCredentialsAndReplacesRoundResult(t *testing.T) {
 		if a.Environment["ANTHROPIC_AUTH_TOKEN"] != "run-key" || a.Environment["CTFY_TOKEN"] != "platform-token" || a.Environment["OPENAI_API_KEY"] != "" {
 			t.Fatal("wrong credential mapping")
 		}
+		if a.Logger == nil {
+			t.Fatal("hosted agent has no terminal logger")
+		}
+		a.Logger.Info("fixture.agent.progress", "message", "run-key platform-token")
 		return worker.HostedAgentResult{Response: []byte(`{"schema_version":3,"answers":{"flag":"ctfy{ok}"},"writeup":"run-key platform-token"}`), Usage: worker.AgentUsage{Turns: 2, ToolCallsMade: 3}}, nil
 	})
 	if code != 0 || !called {
@@ -85,6 +93,14 @@ func TestHostedRunUsesCTFyCredentialsAndReplacesRoundResult(t *testing.T) {
 	}
 	if got.Answers["flag"] != "ctfy{ok}" || got.Turns != 2 || got.ToolCallsMade != 3 {
 		t.Fatalf("result=%+v", got)
+	}
+	if strings.Contains(logs.String(), "run-key") || strings.Contains(logs.String(), "platform-token") {
+		t.Fatal("CTFy terminal logs exposed run credentials")
+	}
+	for _, event := range []string{"runtime.start", "environment.variable", "ctfy.task.loaded", "ctfy.config", "fixture.agent.progress", "ctfy.result.saved", "ctfy.exit"} {
+		if !strings.Contains(logs.String(), event) {
+			t.Fatalf("CTFy logs omitted %q", event)
+		}
 	}
 }
 

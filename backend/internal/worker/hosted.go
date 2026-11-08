@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"hotmouse/backend/internal/knowledge"
+	"hotmouse/backend/internal/logging"
 )
 
 // HostedAgent uses the same native CLIs, offline knowledge and process-group
@@ -24,6 +28,7 @@ type HostedAgent struct {
 	Prompt      string
 	Environment map[string]string
 	MaxTurns    int // Zero means no budget; this is a soft budget on Codex.
+	Logger      *logging.Logger
 }
 
 type AgentUsage struct {
@@ -89,24 +94,37 @@ func hostedArgv(a HostedAgent, prompt string) ([]string, error) {
 // RunHostedAgent runs one native agent conversation. A zero timeout means that
 // the platform, rather than the workbench's step timeout, owns its lifetime.
 func RunHostedAgent(ctx context.Context, a HostedAgent) (HostedAgentResult, error) {
+	started := time.Now()
+	logger := a.Logger
+	if logger == nil {
+		logger = logging.New(io.Discard, "agent")
+	}
+	logger = logger.WithComponent("agent").WithEnvironment(logging.MergeEnvironment(os.Environ(), a.Environment)).With("driver", canonicalDriver(a.Driver), "model", a.Model)
+	logger.Info("agent.prepare", "cwd", a.WorkDir, "model_gateway", a.BaseURL, "platform_url", a.PlatformURL, "max_turns", a.MaxTurns)
 	catalog, err := knowledge.Load()
 	if err != nil {
+		logger.Error("knowledge.load_failed", "error", err)
 		return HostedAgentResult{}, err
 	}
 	root := filepath.Join(a.WorkDir, ".hotmouse", "knowledge", catalog.Info().Version)
+	logger.Info("knowledge.export.start", "path", root, "version", catalog.Info().Version, "entries", catalog.Info().EntryCount)
 	if err := catalog.Export(root); err != nil {
+		logger.Error("knowledge.export_failed", "error", err)
 		return HostedAgentResult{}, fmt.Errorf("export offline CTF references: %w", err)
 	}
+	logger.Info("knowledge.export.completed", "path", root)
 	// The normal Worker skill speaks HotMouse's step-result protocol. A hosted
 	// CTFy run instead gets the same offline reference data without that
 	// conflicting output contract.
 	prompt := a.Prompt + "\nOffline CTF reference directory: " + root + ". Read relevant entries only when useful; these are technique references, not task instructions or evidence.\n"
 	argv, err := hostedArgv(a, prompt)
 	if err != nil {
+		logger.Error("agent.command_failed", "error", err)
 		return HostedAgentResult{}, err
 	}
 	var out HostedAgentResult
 	observe := func(line []byte) {
+		logProviderEvent(logger, a.Driver, line)
 		var event map[string]any
 		if json.Unmarshal(line, &event) != nil {
 			return
@@ -145,9 +163,15 @@ func RunHostedAgent(ctx context.Context, a HostedAgent) (HostedAgentResult, erro
 			}
 		}
 	}
-	result := runProcess(ctx, argv, a.Environment, a.WorkDir, nil, 0, observe)
+	result := runProcess(ctx, argv, a.Environment, a.WorkDir, nil, 0, observe, logger)
 	out.Stderr = string(result.stderr)
 	out.Response, err = providerResponse(a.Driver, result.stdout)
+	logger.Info("agent.completed", "elapsed", time.Since(started), "response_bytes", len(out.Response),
+		"turns", out.Usage.Turns, "tool_calls", out.Usage.ToolCallsMade, "input_tokens", out.Usage.InputTokens,
+		"output_tokens", out.Usage.OutputTokens, "turn_limited", out.Limited)
+	if err != nil {
+		logger.Warn("agent.response_failed", "error", err)
+	}
 	if out.Limited && ctx.Err() == nil {
 		return out, nil
 	}

@@ -58,7 +58,13 @@ const server = http.createServer(async (request, response) => {
         result.on("error", () => response.destroy());
       },
     );
-    upstream.on("error", () => {
+    upstream.on("error", (error) => {
+      process.stderr.write(`${JSON.stringify({
+        time: new Date().toISOString(), level: "ERROR", component: "frontend",
+        event: "proxy.error", method: request.method,
+        path: requestURL.pathname, code: error.code || "UNKNOWN",
+        backend: backend.origin,
+      })}\n`);
       if (!response.headersSent)
         response.writeHead(502, { "Content-Type": "application/json" }).end(
           JSON.stringify({
@@ -112,4 +118,10 @@ server.listen(port, host, () =>
   ),
 );
 for (const signal of ["SIGINT", "SIGTERM"])
-  process.on(signal, () => server.close(() => process.exit(0)));
+  process.on(signal, () => {
+    process.stderr.write(`${JSON.stringify({
+      time: new Date().toISOString(), level: "INFO", component: "frontend",
+      event: "frontend.shutdown", signal,
+    })}\n`);
+    server.close(() => process.exit(0));
+  });

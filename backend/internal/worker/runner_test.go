@@ -44,7 +44,7 @@ func TestAgentWorkerUsesIdentityAndLogsInvocation(t *testing.T) {
 		t.Fatalf("worker identity=%q err=%v", identity, err)
 	}
 	text := logs.String()
-	for _, want := range []string{"worker process start", project.Project.ID, step.ID, "local/worker/02", `"sh","-c"`} {
+	for _, want := range []string{"process.start", project.Project.ID, step.ID, "local/worker/02", "binary=sh", "driver=command"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("invocation log missing %q: %s", want, text)
 		}

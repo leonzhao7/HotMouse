@@ -3,7 +3,8 @@ package cli
 import (
 	"context"
 	"errors"
-	"fmt"
+	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"hotmouse/backend/internal/apiclient"
 	"hotmouse/backend/internal/core"
 	"hotmouse/backend/internal/httpapi"
+	"hotmouse/backend/internal/logging"
 )
 
 func (a *app) versionResult(_ *cobra.Command) error {
@@ -60,12 +62,27 @@ func (a *app) serveCommand() *cobra.Command {
 	c.Flags().String("auth", auth, "required 或 disabled")
 	c.Flags().Duration("shutdown-timeout", 15*time.Second, "等待 HTTP 与 Worker 停止的最长时间")
 	c.Example = "  hotmouse serve --db ./data/hotmouse.db --autorun"
-	c.RunE = func(c *cobra.Command, _ []string) error {
+	c.RunE = func(c *cobra.Command, _ []string) (runErr error) {
+		started := time.Now()
+		logger := logging.New(a.errOut, "server")
+		if a.verbose {
+			logger.SetLevel(slog.LevelDebug)
+		}
+		logger.Runtime()
+		logger.Info("server.build", "version", Version, "commit", Commit, "build_time", BuildTime)
+		defer func() {
+			if runErr != nil && !errors.Is(runErr, context.Canceled) {
+				logger.Error("server.exit", "elapsed", time.Since(started), "error", runErr)
+			} else {
+				logger.Info("server.exit", "elapsed", time.Since(started), "error", runErr)
+			}
+		}()
 		addr, _ := c.Flags().GetString("addr")
 		path, _ := c.Flags().GetString("db")
 		autorun, _ := c.Flags().GetBool("autorun")
 		policy, _ := c.Flags().GetString("auth")
 		shutdown, _ := c.Flags().GetDuration("shutdown-timeout")
+		logger.Info("server.config", "addr", addr, "db", path, "autorun", autorun, "auth_policy", policy, "shutdown_timeout", shutdown)
 		if !oneOf(policy, "required", "disabled") || shutdown <= 0 {
 			return invalid("invalid auth policy or shutdown timeout")
 		}
@@ -93,11 +110,13 @@ func (a *app) serveCommand() *cobra.Command {
 			return apiclient.Failure(5, "another HotMouse service owns this database")
 		}
 		defer lock.Close()
+		logger.Info("database.open.start", "path", path)
 		db, e := core.Open(path)
 		if e != nil {
 			return failed("open database: %s", e)
 		}
 		defer db.SQL.Close()
+		logger.Info("database.open.completed", "path", path)
 		previous, present := os.LookupEnv("HOTMOUSE_AUTH_REQUIRED")
 		value := "1"
 		if policy == "disabled" {
@@ -116,8 +135,21 @@ func (a *app) serveCommand() *cobra.Command {
 		serviceCtx, cancel := context.WithCancel(c.Context())
 		defer cancel()
 		api := iris.New()
-		api.Logger().SetOutput(a.errOut)
+		api.Logger().SetOutput(logger.WithComponent("http").Writer())
+		api.UseRouter(func(ctx iris.Context) {
+			requestStarted := time.Now()
+			ctx.Next()
+			fields := []any{"method", ctx.Method(), "path", ctx.Path(), "status", ctx.GetStatusCode(), "elapsed", time.Since(requestStarted)}
+			if ctx.GetStatusCode() >= 500 {
+				logger.Error("http.request", fields...)
+			} else if ctx.GetStatusCode() >= 400 {
+				logger.Warn("http.request", fields...)
+			} else {
+				logger.Debug("http.request", fields...)
+			}
+		})
 		handler := httpapi.New(db)
+		handler.Runner.SetLogger(logger)
 		handler.Runner.SetLifecycleContext(serviceCtx)
 		httpapi.Register(api, handler)
 		if e = api.Build(); e != nil {
@@ -127,19 +159,21 @@ func (a *app) serveCommand() *cobra.Command {
 		if e != nil {
 			return failed("listen: %s", e)
 		}
-		server := &http.Server{Handler: api, BaseContext: func(net.Listener) context.Context { return serviceCtx }, ReadHeaderTimeout: 10 * time.Second}
+		server := &http.Server{Handler: api, BaseContext: func(net.Listener) context.Context { return serviceCtx }, ReadHeaderTimeout: 10 * time.Second,
+			ErrorLog: log.New(logger.WithComponent("http").Writer(), "", 0)}
 		done := make(chan error, 1)
 		go func() { done <- server.Serve(listener) }()
 		var workerDone <-chan struct{}
 		if autorun {
 			workerDone = handler.Runner.Start(serviceCtx)
 		}
-		fmt.Fprintf(a.errOut, "HotMouse listening on %s (db=%s, autorun=%t)\n", listener.Addr(), path, autorun)
+		logger.Info("server.listening", "addr", listener.Addr().String(), "db", path, "autorun", autorun, "auth_policy", policy)
 		var serveErr error
 		select {
 		case <-c.Context().Done():
 		case serveErr = <-done:
 		}
+		logger.Info("server.shutdown.start", "timeout", shutdown, "context_error", c.Context().Err(), "serve_error", serveErr)
 		cancel()
 		shutdownCtx, finish := context.WithTimeout(context.Background(), shutdown)
 		defer finish()
@@ -155,6 +189,7 @@ func (a *app) serveCommand() *cobra.Command {
 			}
 		}
 		handler.Runner.StopTargetProbes()
+		logger.Info("server.shutdown.completed")
 		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			return failed("server: %s", serveErr)
 		}

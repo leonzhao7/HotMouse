@@ -187,8 +187,8 @@ func (r *Runner) analyzeTargetProbe(parent context.Context, project, runID strin
 				}
 			} else if err == nil && cfg.command != "" {
 				argv := []string{"sh", "-c", cfg.command}
-				r.logInvocation(cfg, project, "", "target_probe", argv)
-				result := runProcess(ctx, argv, cfg.env, workspace, vars, time.Duration(cfg.runtime.DecideTimeoutSeconds)*time.Second, nil)
+				logger := r.processLogger(cfg, project, "", "target_probe")
+				result := runProcess(ctx, argv, cfg.env, workspace, vars, time.Duration(cfg.runtime.DecideTimeoutSeconds)*time.Second, nil, logger)
 				payload, err = result.stdout, result.err
 			} else if err == nil {
 				err = fmt.Errorf("worker command is empty")

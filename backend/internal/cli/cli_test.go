@@ -346,6 +346,9 @@ func (w *snapshotWriter) Write(p []byte) (int, error) {
 }
 
 func TestServerLockAndGracefulShutdown(t *testing.T) {
+	t.Setenv("HOTMOUSE_LOG_LEVEL", "info")
+	t.Setenv("HOTMOUSE_LOG_ENV", "1")
+	t.Setenv("OPENAI_API_KEY", "serve-test-credential")
 	dir := t.TempDir()
 	db := filepath.Join(dir, "serve.db")
 	ctx, cancel := context.WithCancel(t.Context())
@@ -380,6 +383,14 @@ func TestServerLockAndGracefulShutdown(t *testing.T) {
 		}
 	case <-time.After(7 * time.Second):
 		t.Fatal("shutdown did not finish")
+	}
+	if strings.Contains(logs.String(), "serve-test-credential") {
+		t.Fatal("server terminal logs exposed a model credential")
+	}
+	for _, event := range []string{"runtime.start", "environment.variable", "database.open.completed", "server.listening", "worker.pool.start", "server.shutdown.completed"} {
+		if !strings.Contains(logs.String(), event) {
+			t.Fatalf("server logs omitted %q", event)
+		}
 	}
 }
 

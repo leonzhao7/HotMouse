@@ -69,6 +69,8 @@ COPY LICENSE /usr/share/doc/hotmouse/LICENSE
 COPY backend/internal/knowledge/LICENSE.sapper-v2 backend/internal/knowledge/DISCLAIMER.sapper-v2.md backend/internal/knowledge/NOTICE.md /usr/share/doc/hotmouse/sapper-v2/
 
 ENV NODE_ENV=production \
+    HOTMOUSE_LOG_LEVEL=debug \
+    HOTMOUSE_LOG_ENV=1 \
     HOST=0.0.0.0 \
     PORT=9981 \
     HOTMOUSE_ADDR=127.0.0.1:9982 \
