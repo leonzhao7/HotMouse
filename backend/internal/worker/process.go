@@ -53,7 +53,13 @@ func (w *capture) Write(p []byte) (int, error) {
 }
 
 func runProcess(parent context.Context, argv []string, env map[string]string, cwd string, vars map[string]string, timeout time.Duration, onLine func([]byte)) processResult {
-	ctx, cancel := context.WithTimeout(parent, timeout)
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(parent, timeout)
+	} else {
+		ctx, cancel = context.WithCancel(parent)
+	}
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = cwd

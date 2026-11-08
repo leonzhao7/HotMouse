@@ -13,6 +13,9 @@ COPY backend/internal ./internal
 RUN --mount=type=cache,id=hotmouse-go-mod,target=/go/pkg/mod \
     --mount=type=cache,id=hotmouse-go-build,target=/root/.cache/go-build \
     CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/hotmouse ./cmd/hotmouse
+RUN --mount=type=cache,id=hotmouse-go-mod,target=/go/pkg/mod \
+    --mount=type=cache,id=hotmouse-go-build,target=/root/.cache/go-build \
+    CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/ctfy-agent ./cmd/ctfy-agent
 
 FROM ${NODE_IMAGE} AS frontend-build
 ARG NPM_REGISTRY=https://registry.npmjs.org
@@ -83,3 +86,20 @@ VOLUME ["/data", "/home/node"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl --noproxy '*' --fail --silent --show-error --max-time 3 "http://127.0.0.1:${PORT}/healthz" >/dev/null || exit 1
 ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/hotmouse-entrypoint"]
+
+# CTFy starts the container in /ctfy/work and gives it a briefing there. This
+# target keeps HotMouse's offline CTF knowledge and native CLI tools, but runs
+# one bounded platform task instead of starting the workbench service.
+FROM runtime AS ctfy-agent
+USER root
+RUN --mount=type=cache,id=hotmouse-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+    --mount=type=cache,id=hotmouse-apt-cache,target=/var/cache/apt,sharing=locked \
+    apt-get -o Acquire::Retries=3 update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends openssh-client sshpass
+COPY --from=backend-build /out/ctfy-agent /usr/local/bin/ctfy-agent
+USER node
+HEALTHCHECK NONE
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/ctfy-agent"]
+
+# Keep the historical workbench image as the default docker build target.
+FROM runtime AS default

@@ -44,6 +44,7 @@ npm run dev
 
 - [前端使用、构建与验证](frontend/README.md)
 - [Docker 镜像构建与启动](docker/README.md)
+- [CTFy agent 镜像构建与接入](docker/CTFY.md)
 - [后端与 Worker 配置](backend/README.md)
 - [完整命令行接口](docs/cli.md)
 - [HTTP 接口范围](docs/routes.md)
