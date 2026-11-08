@@ -82,7 +82,6 @@ ENV NODE_ENV=production \
 RUN mkdir -p /data/context && chown -R node:node /data
 USER node
 EXPOSE 9981
-VOLUME ["/data", "/home/node"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl --noproxy '*' --fail --silent --show-error --max-time 3 "http://127.0.0.1:${PORT}/healthz" >/dev/null || exit 1
 ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/hotmouse-entrypoint"]
@@ -103,3 +102,5 @@ ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/ctfy-agent"]
 
 # Keep the historical workbench image as the default docker build target.
 FROM runtime AS default
+# CTFy forbids image volumes because they escape the platform's disk budget.
+VOLUME ["/data", "/home/node"]

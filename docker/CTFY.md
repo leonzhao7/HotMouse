@@ -6,6 +6,10 @@ Build from the repository root:
 
     docker build --target ctfy-agent -f docker/Dockerfile -t hotmouse-ctfy:v1 .
 
+The CTFy target declares no Docker volumes, so writes remain within the platform's disk budget. After building, verify that the image's volume metadata is `null`:
+
+    docker image inspect hotmouse-ctfy:v1 --format '{{json .Config.Volumes}}'
+
 Push the image to a registry reachable by the CTFy workers. Then run the platform's check and register the same image digest:
 
     docker tag hotmouse-ctfy:v1 ghcr.io/YOUR_ORG/hotmouse-ctfy:v1
