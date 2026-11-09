@@ -88,6 +88,13 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl --noproxy '*' --fail --silent --show-error --max-time 3 "http://127.0.0.1:${PORT}/healthz" >/dev/null || exit 1
 ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/hotmouse-entrypoint"]
 
+# TSec uses the workbench platform adapter and project/flag ledger. Supply
+# BENCHMARK_BASE_URL and BENCHMARK_TOKEN at runtime, after connecting the VPN.
+FROM runtime AS tsec
+LABEL org.opencontainers.image.title="HotMouse TSec" \
+      org.opencontainers.image.description="HotMouse workbench with TSec Benchmark platform integration"
+VOLUME ["/data", "/home/node"]
+
 # CTFy starts the container in /ctfy/work and gives it a briefing there. This
 # target keeps HotMouse's offline CTF knowledge and native CLI tools, but runs
 # one bounded platform task instead of starting the workbench service.

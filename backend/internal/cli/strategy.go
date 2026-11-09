@@ -51,6 +51,13 @@ func (a *app) strategyCommands(root *cobra.Command) {
 	experiences.AddCommand(create)
 	root.AddCommand(experiences)
 	flags := group("flag", "保存 flag 与平台结果台账")
+	flags.AddCommand(a.leaf("submit <FLAG>", "向项目绑定的平台提交 flag 并记录判定结果", 1, 1, "project", func(c *cobra.Command, args []string) (any, error) {
+		p, err := a.project(c, nil)
+		if err != nil {
+			return nil, err
+		}
+		return a.request(c, "POST", apiclient.Path("projects", p, "flags", args[0], "submit"), nil)
+	}))
 	flags.AddCommand(a.leaf("list", "列出 flag、状态与提交尝试", 0, 0, "project", func(c *cobra.Command, _ []string) (any, error) {
 		p, e := a.project(c, nil)
 		if e != nil {

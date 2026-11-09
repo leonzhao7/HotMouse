@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"html"
@@ -76,8 +77,25 @@ func (d *DB) CreateProject(ctx context.Context, req CreateProject) (ProjectDetai
 	if req.BudgetSeconds != nil && *req.BudgetSeconds < 0 {
 		return ProjectDetail{}, fmt.Errorf("project budget_seconds must be nonnegative")
 	}
+	if binding := req.PlatformBinding; binding != nil {
+		if binding.Platform == "" || binding.ScopeID == "" || binding.ChallengeID == "" || !json.Valid(binding.Challenge) || !json.Valid(binding.Delivery) {
+			return ProjectDetail{}, fmt.Errorf("invalid platform binding")
+		}
+	}
 	var out ProjectDetail
+	created := false
 	err := tx(ctx, d, func(t *sql.Tx) error {
+		if binding := req.PlatformBinding; binding != nil {
+			var existing string
+			err := t.QueryRow(`SELECT project_id FROM platform_projects WHERE platform=? AND scope_id=? AND challenge_id=?`, binding.Platform, binding.ScopeID, binding.ChallengeID).Scan(&existing)
+			if err == nil {
+				out, err = d.getProjectTx(ctx, t, existing)
+				return err
+			}
+			if err != sql.ErrNoRows {
+				return err
+			}
+		}
 		nowv := now()
 		var budget int
 		if err := t.QueryRow(`SELECT COALESCE(?,default_project_budget_seconds) FROM settings WHERE id=1`, req.BudgetSeconds).Scan(&budget); err != nil {
@@ -100,6 +118,11 @@ func (d *DB) CreateProject(ctx context.Context, req CreateProject) (ProjectDetai
 		if _, err := t.Exec(`INSERT INTO goals(id,project_id,description,created_at) VALUES('g001',?,?,?)`, pid, clean(req.Goal), nowv); err != nil {
 			return err
 		}
+		if binding := req.PlatformBinding; binding != nil {
+			if _, err := t.Exec(`INSERT INTO platform_projects(project_id,platform,scope_id,challenge_id,challenge_json,delivery_json) VALUES(?,?,?,?,?,?)`, pid, binding.Platform, binding.ScopeID, binding.ChallengeID, string(binding.Challenge), string(binding.Delivery)); err != nil {
+				return err
+			}
+		}
 		for _, h := range req.Hints {
 			h.Content = normalizeHint(h.Content)
 			h.Creator = clean(h.Creator)
@@ -119,9 +142,10 @@ func (d *DB) CreateProject(ctx context.Context, req CreateProject) (ProjectDetai
 		}
 		var getErr error
 		out, getErr = d.getProjectTx(ctx, t, pid)
+		created = getErr == nil
 		return getErr
 	})
-	if err == nil {
+	if err == nil && created {
 		d.ensureProjectContextFile(ctx, out.Project.ID, req.Origin, req.Goal)
 	}
 	return out, err
@@ -143,6 +167,9 @@ func (d *DB) getProjectTx(ctx context.Context, q queryer, id string) (ProjectDet
 		return ProjectDetail{}, err
 	}
 	out := ProjectDetail{Project: p, Facts: []Fact{}, Steps: []Step{}, Goals: []Goal{}, Findings: []Finding{}, Hints: []Hint{}}
+	if out.Platform, err = platformBinding(ctx, q, id); err != nil {
+		return out, err
+	}
 	rows, err := q.QueryContext(ctx, `SELECT id,description,title,detail,result_type FROM facts WHERE project_id=? ORDER BY rowid`, id)
 	if err != nil {
 		return out, err

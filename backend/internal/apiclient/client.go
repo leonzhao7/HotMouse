@@ -146,17 +146,28 @@ func (c *Client) Request(ctx context.Context, method, path string, body any, ses
 			exit = 4
 		case 409:
 			exit = 5
-		case 429:
+		case 429, 502, 503, 504:
 			exit = 6
 		}
 		message := http.StatusText(resp.StatusCode)
 		var payload struct {
-			Detail string `json:"detail"`
+			Detail  json.RawMessage `json:"detail"`
+			Code    string          `json:"code"`
+			Message string          `json:"message"`
 		}
-		if json.Unmarshal(data, &payload) == nil && payload.Detail != "" {
-			message = payload.Detail
+		if json.Unmarshal(data, &payload) == nil {
+			var detail string
+			if json.Unmarshal(payload.Detail, &detail) == nil && detail != "" {
+				message = detail
+			}
+			if payload.Message != "" {
+				message = payload.Message
+			}
 		}
 		failure := Failure(exit, message)
+		if payload.Code != "" {
+			failure.Code = payload.Code
+		}
 		var result any
 		if json.Unmarshal(data, &result) == nil {
 			failure.Result = result

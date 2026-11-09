@@ -97,6 +97,7 @@ type ProjectSummary struct {
 }
 
 type ProjectDetail struct {
+	Platform    *PlatformBinding `json:"platform,omitempty" yaml:"platform,omitempty"`
 	TargetProbe TargetProbeState `json:"target_probe" yaml:"target_probe"`
 	Project     Project          `json:"project" yaml:"project"`
 	Facts       []Fact           `json:"facts" yaml:"facts"`
@@ -108,12 +109,14 @@ type ProjectDetail struct {
 }
 
 type CreateProject struct {
-	Title         string       `json:"title"`
-	Origin        string       `json:"origin"`
-	Goal          string       `json:"goal"`
-	Hints         []CreateHint `json:"hints"`
-	MaxWorkers    int          `json:"max_workers,omitempty"`
-	BudgetSeconds *int         `json:"budget_seconds,omitempty"`
+	// Set only by the platform bridge, never accepted from a project JSON body.
+	PlatformBinding *PlatformBinding `json:"-"`
+	Title           string           `json:"title"`
+	Origin          string           `json:"origin"`
+	Goal            string           `json:"goal"`
+	Hints           []CreateHint     `json:"hints"`
+	MaxWorkers      int              `json:"max_workers,omitempty"`
+	BudgetSeconds   *int             `json:"budget_seconds,omitempty"`
 }
 type CreateHint struct {
 	Content string `json:"content"`

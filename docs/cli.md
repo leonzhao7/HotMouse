@@ -4,6 +4,8 @@
 
 `kb` 是离线参考命令，直接读取二进制内置的 CTF 知识和技能，无需服务或客户端 Profile。检索、全文、导出与自动召回见 [knowledge.md](knowledge.md)。
 
+`platform` 提供独立 CTF 平台接入；目前支持 TSec。`platform list/challenges/start/import/hint/submit/close` 通过服务访问平台，`flag submit <FLAG>` 使用项目绑定并记录平台判定。配置、完整流程和路由见 [ctf_platforms.md](ctf_platforms.md)。
+
 本设计以现有 Go、Iris、SQLite 后端为基础，覆盖项目图协议、认证、本地 Worker、漏洞审核、模板、系统设置、审计和通知。接口范围依据 [routes.md](routes.md)；实现入口见 [handler.go](../backend/internal/httpapi/handler.go)。
 
 ## 1. 基本结构

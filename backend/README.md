@@ -6,6 +6,8 @@ The React workbench is in [frontend](../frontend/README.md). Start this backend,
 
 The command-line interface and examples are documented in [docs/cli.md](../docs/cli.md). The binary runs a service with `serve`; all business commands use its HTTP API. Running `hotmouse` without a subcommand prints help.
 
+Independent CTF platform adapters live in `internal/ctfplatform`. The first adapter supports TSec Benchmark challenge listing, instance delivery, paid hints, multi-flag submission and cleanup. Set `BENCHMARK_BASE_URL` and `BENCHMARK_TOKEN` in the service environment, then use `hotmouse platform import tsec CODE --use` and `hotmouse flag submit ID`. See [CTF platform integration](../docs/ctf_platforms.md) for configuration, API routes and task-isolated project bindings.
+
 The binary also bundles 56 offline CTF references and the `hotmouse-dispatcher` and `hotmouse-ctf` skills adapted from sapper-v2. `hotmouse kb search 'SSRF'`, `kb show kb006 --output json`, and `kb export ./ctf-reference` work without a running service or client Profile. Planning and execution recall up to three reference summaries and receive their role's skill plus readable full-entry paths in their own workspace. Native and custom providers share this prompt integration; startup target classification and recovery summaries retain their stage-specific contracts. See [knowledge.md](../docs/knowledge.md) for provenance, frontend access, variables and API routes.
 
 ```bash

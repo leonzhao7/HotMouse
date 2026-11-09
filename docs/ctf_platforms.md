@@ -1,0 +1,109 @@
+# CTF 平台接入
+
+平台接入由独立的 Go 模块 `backend/internal/ctfplatform` 提供。第一版实现 TSec Benchmark 的五个接口，支持通过 HotMouse HTTP API 或 CLI 获取题目、启动容器、导入项目、获取提示、提交 flag 和关闭容器。TSec 原始协议见 [tsec_challenges_api.md](tsec_challenges_api.md)。
+
+本版采用手动选择题目、导入解题项目和提交答案的流程。导入后的项目使用现有 Dispatcher / Worker 解题机制；服务使用 `--autorun` 时会开始处理新项目。平台接入不自动遍历全部题目，不自动获取扣分提示；解题完成后显式提交答案、关闭容器。
+
+## 配置和使用
+
+在**后端服务进程**的环境中设置平台下发的配置，启动或重启后生效：
+
+```bash
+export BENCHMARK_BASE_URL='https://your-tsec-platform.example'
+export BENCHMARK_TOKEN='your-benchmark-task-token'
+cd backend
+go build -o hotmouse ./cmd/hotmouse
+./hotmouse serve --db ./data/hotmouse.db --autorun
+```
+
+必须按平台要求连接 VPN，并让运行 Worker 的主机或容器能通过该 VPN 访问靶场地址。模块不代替 SSLVPN 客户端建立连接。Docker Compose 已透传这两个变量；在启动 Compose 的环境中设置它们即可。一个服务当前配置一个 TSec 跑分任务。
+
+在另一个终端登录 HotMouse 后操作：
+
+```bash
+./hotmouse platform list
+./hotmouse platform challenges tsec --output json
+
+# import 会启动题目并导入项目，已就绪的容器直接复用。
+./hotmouse platform import tsec web_sql_injection_01 \
+  --budget-seconds 1200 --max-workers 1 --use
+./hotmouse project campaign --watch
+./hotmouse flag list --output json
+
+# 使用 flag list 中的台账 ID；先保存提交尝试，再请求平台并记录判定。
+./hotmouse flag submit 1
+
+# 多 flag 题目逐个提交；通过 challenges 查看最新作答进度。
+./hotmouse platform challenges tsec --output json
+./hotmouse platform close tsec web_sql_injection_01
+```
+
+`import` 的预算省略时使用系统默认，`0` 表示不限时。题目 ID 对应 TSec `unique_code`。同一平台、跑分任务、题目重复导入会返回原项目，保留已保存的证据和解题进度；它不会重启已关闭的容器，也不会刷新既有项目的地址。需要继续使用已关闭的容器时先显式 `start`，并确认最新入口地址。
+
+也可以独立调用平台接口，不创建项目：
+
+```bash
+./hotmouse platform start tsec web_sql_injection_01
+./hotmouse platform hint tsec web_sql_injection_01  # TSec 查看提示会扣分
+printf '%s' 'flag{example}' | \
+  ./hotmouse platform submit tsec web_sql_injection_01 --flag-file -
+./hotmouse platform close tsec web_sql_injection_01
+```
+
+直接 `platform submit` 不创建本地 flag 台账。`--flag`、`--flag-file` 或 `--file`（仅包含 `flag` 的 JSON/YAML 对象）可提供答案；输入保持原值，文本文件的尾部换行也会作为 flag 提交。
+
+## 题目与提交台账
+
+导入项目的 origin 包含题目说明、难度、关卡、分数、flag 数量和全部靶场地址。项目目标指导 Worker 保存带 `challenge_id` 的 flag finding。地址保留平台原值，如 `10.0.1.5:8080`、`10.0.1.6:22`，不为 SSH / 原始 TCP 服务强加 HTTP 协议。
+
+项目详情的 `platform` 保存题目与下发结果快照。SQLite 的 `platform_projects` 表使用 `platform + scope_id + challenge_id` 唯一约束，绑定与项目在同一事务创建，删除项目时级联删除。`scope_id` 是平台、基地址和任务令牌的 SHA-256 摘要，令牌本身不会写入绑定。更换跑分任务后，即使题目 ID 相同，也会导入新项目；向旧项目提交时返回 `platform_task_changed`。
+
+`flag submit` 使用项目绑定的题目 ID。flag 的题目 ID 为空时使用该绑定，非空且不一致时拒绝提交。适配器检查 flag 的 1~4096 Unicode 字符约束后才开始本地提交尝试。
+
+| 平台结果 | 本地台账状态 |
+| --- | --- |
+| `correct: true` | `accepted` |
+| `correct: false` | `rejected` |
+| `409 duplicate` | `accepted`，返回 `duplicate: true` |
+| 其他明确的 4xx 拒绝 | `rejected`，API 保留平台错误 |
+| 网络中断、无法解析的响应、5xx | `submission_unknown` |
+
+已经 accepted、pending 或 unknown 的 flag 会阻止重新开始提交。未知结果需先查询平台进度并使用现有 `flag resolve` 台账命令核对；TSec 列表只提供正确 flag 数，无法凭该数字判断某个具体 flag 是否通过。所有写操作均不自动重试。
+
+TSec 同时最多允许 3 道活跃题目，上限由平台强制执行，`invalid_state` 和 `resource_unavailable` 会原样保留。`pending / available / stop_pending / stopped` 状态全部保留，只有 `available` 的列表条目携带地址。导入项目失败时会尝试关闭本次新启动的容器；已有容器不在该补偿操作范围内。
+
+## HTTP API
+
+这些路由使用现有 HotMouse 服务认证，平台认证由适配器在出站请求中添加。客户端不需要传递 `BENCHMARK_TOKEN`。
+
+| 方法 | 路径 | 参数 |
+| --- | --- | --- |
+| GET | `/api/platforms` | 返回平台能力及 configured 状态 |
+| GET | `/api/platforms/tsec/challenges` | 返回标准化题目列表 |
+| POST | `/api/platforms/tsec/start?challenge_id=CODE` | 下发 / 启动题目 |
+| GET | `/api/platforms/tsec/hint?challenge_id=CODE` | 显式获取提示 |
+| POST | `/api/platforms/tsec/close?challenge_id=CODE` | 关闭题目 |
+| POST | `/api/platforms/tsec/submit` | JSON：`{"challenge_id":"CODE","flag":"flag{...}"}` |
+| POST | `/api/platforms/tsec/import` | JSON：`{"challenge_id":"CODE","title":"可选标题","max_workers":1,"budget_seconds":1200}` |
+| POST | `/projects/PROJECT/flags/FLAG_ID/submit` | 使用已保存的 flag，无请求体 |
+
+标准化字段包括 `id`（TSec `unique_code`）、`completed`（`is_completed`）、`instance_status`（`container_status`）、`addresses`（`container_addr`）。提交评分和 `matched_flag_index` 原样保留，索引 `0` 与 `null` 区分处理。
+
+业务失败保留上游 HTTP 状态、`code`、`message`、`detail`。FastAPI 422 的数组 detail 使用 `validation_error` 标识；传输和协议问题返回 502。未配置平台返回 `503 platform_not_configured`。CLI 的错误输出也保留平台 code 和 message。
+
+## 添加新平台
+
+`ctfplatform.Platform` 定义 `Descriptor / ListChallenges / Deliver / SubmitFlag`。认证由平台构造器及适配器内部处理，配置只存在于内存。`Delivery` 可表达远程实例地址、附件 URL / 本地文件和平台特定 metadata，`SubmissionMode` 表达 API 或结果文件等提交机制。`HintProvider`、`InstanceCloser`、`SubmissionValidator` 是可选接口。
+
+新增适配器时实现这些接口，通过 `Registry.Register` 注册工厂，在服务入口提供配置。项目和台账代码不包含 TSec 路径或认证逻辑。具体协议差异在适配器中转换为统一模型，专有信息可以放进 metadata。注册机制不会自动为尚未实现的平台提供接入能力。
+
+TSec 实现位于 `backend/internal/ctfplatform/tsec`；HTTP / 项目桥接位于 `backend/internal/httpapi/platform.go`；CLI 位于 `backend/internal/cli/platform.go`。现有 CTFy 运行入口可继续独立使用。
+
+验证：
+
+```bash
+cd backend
+go test ./...
+```
+
+测试使用本地模拟 TSec 服务验证五个接口的请求协议、错误码、Unicode 长度、重定向与超时、多地址 / 多 flag、任务隔离、项目事务与重启持久化、flag 台账状态及 CLI 流程。真实平台连通性需使用下发的配置和 VPN 验证。

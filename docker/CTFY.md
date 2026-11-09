@@ -4,6 +4,10 @@ This separate image target implements CTFY-0001 schema v3. It runs one CTFy task
 
 Build from the repository root:
 
+    HOTMOUSE_IMAGE=hotmouse-ctfy:v1 ./docker/build.sh ctfy
+
+The equivalent direct Docker command is:
+
     docker build --target ctfy-agent -f docker/Dockerfile -t hotmouse-ctfy:v1 .
 
 The CTFy target declares no Docker volumes, so writes remain within the platform's disk budget. After building, verify that the image's volume metadata is `null`:

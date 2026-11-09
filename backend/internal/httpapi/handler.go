@@ -20,14 +20,18 @@ import (
 	"github.com/kataras/iris/v12"
 	iriscontext "github.com/kataras/iris/v12/context"
 	"hotmouse/backend/internal/core"
+	"hotmouse/backend/internal/ctfplatform"
 	"hotmouse/backend/internal/worker"
 )
 
 type Handler struct {
-	DB        *core.DB
-	Runner    *worker.Runner
-	captchaMu sync.Mutex
-	captchas  map[string]captchaChallenge
+	Platforms       *ctfplatform.Registry
+	PlatformConfigs map[string]ctfplatform.Config
+	platformMu      sync.Mutex
+	DB              *core.DB
+	Runner          *worker.Runner
+	captchaMu       sync.Mutex
+	captchas        map[string]captchaChallenge
 }
 
 type captchaChallenge struct {
@@ -40,7 +44,8 @@ var registrationUsernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 func New(db *core.DB) *Handler {
 	runner := worker.New(db)
 	runner.SetLogOutput(os.Stderr)
-	return &Handler{DB: db, Runner: runner, captchas: map[string]captchaChallenge{}}
+	platforms, configs := configurePlatforms()
+	return &Handler{DB: db, Runner: runner, Platforms: platforms, PlatformConfigs: configs, captchas: map[string]captchaChallenge{}}
 }
 func bad(ctx iris.Context, err error) {
 	status := iris.StatusBadRequest
@@ -2190,6 +2195,7 @@ func Register(app *iris.Application, h *Handler) {
 	app.Put("/api/auth/password", h.ChangePassword)
 	app.Put("/auth/password", h.ChangePassword)
 	h.registerStrategy(app)
+	h.registerPlatforms(app)
 	h.registerKnowledge(app)
 	app.Get("/projects", h.ListProjects)
 	app.Post("/projects", h.CreateProject)

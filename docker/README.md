@@ -40,6 +40,13 @@ docker compose -f docker/compose.yaml down
 `build.sh` 可以从任意目录执行，额外参数原样传给 `docker build`：
 
 ```bash
+# 单独构建平台镜像。
+./docker/build.sh tsec   # hotmouse-tsec:latest，Dockerfile target: tsec
+./docker/build.sh ctfy   # hotmouse-ctfy:latest，Dockerfile target: ctfy-agent
+
+# 省略类型或指定 workbench，构建 hotmouse:latest。
+./docker/build.sh workbench
+
 HOTMOUSE_IMAGE=hotmouse:v1 ./docker/build.sh --no-cache
 HOTMOUSE_IMAGE=hotmouse:v1 docker compose -f docker/compose.yaml up -d --no-build
 
@@ -53,6 +60,10 @@ HOTMOUSE_IMAGE=hotmouse:core ./docker/build.sh --build-arg AGENT_PACKAGES=
 docker save hotmouse:latest -o hotmouse-image.tar
 docker load -i hotmouse-image.tar
 ```
+
+`HOTMOUSE_IMAGE` 对所有镜像类型生效，例如 `HOTMOUSE_IMAGE=hotmouse-tsec:v1 ./docker/build.sh tsec`。额外 Docker 参数仍会透传：`--target` 可覆盖默认构建阶段，`--tag` 可增加镜像标签。
+
+TSec 镜像启动工作台，在运行时接收 `BENCHMARK_BASE_URL` 和 `BENCHMARK_TOKEN`，通过 `hotmouse platform import` 导入题目。使用 Compose 时设置 `HOTMOUSE_IMAGE=hotmouse-tsec:latest`；平台配置和 VPN 访问要求见 [CTF 平台接入](../docs/ctf_platforms.md)。CTFy 镜像启动专用 Agent，平台负责下发任务，运行方式见 [CTFY.md](CTFY.md)。
 
 | 构建参数 | 默认值 | 用途 |
 | --- | --- | --- |

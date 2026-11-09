@@ -11,6 +11,8 @@ services:
       HOTMOUSE_AUTH_REQUIRED: "${HOTMOUSE_AUTH_REQUIRED:-1}"
       HOTMOUSE_LOG_LEVEL: "${HOTMOUSE_LOG_LEVEL:-debug}"
       HOTMOUSE_LOG_ENV: "${HOTMOUSE_LOG_ENV:-1}"
+      BENCHMARK_BASE_URL: "${BENCHMARK_BASE_URL:-}"
+      BENCHMARK_TOKEN: "${BENCHMARK_TOKEN:-}"
     volumes:
       - hotmouse-data:/data
       - hotmouse-home:/home/node
