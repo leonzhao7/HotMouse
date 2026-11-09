@@ -33,18 +33,17 @@ func configurePlatforms() (*ctfplatform.Registry, map[string]ctfplatform.Config)
 }
 
 func (h *Handler) platform(id string) (ctfplatform.Platform, string, error) {
-	config, configured := h.PlatformConfigs[id]
+	config, source, err := h.platformConfig(id)
+	if err != nil {
+		return nil, "", err
+	}
 	// Check registration first so unsupported and unconfigured platforms have
 	// distinct errors even when no credentials have been supplied.
-	if !configured {
-		found := false
-		for _, descriptor := range h.Platforms.Descriptors() {
-			found = found || descriptor.ID == id
-		}
-		if !found {
+	if source == "none" {
+		if !h.platformRegistered(id) {
 			return nil, "", &ctfplatform.Error{HTTPStatus: 404, Code: "platform_not_found", Message: "platform is not registered"}
 		}
-		return nil, "", &ctfplatform.Error{HTTPStatus: 503, Code: "platform_not_configured", Message: "configure platform credentials in the HotMouse service environment"}
+		return nil, "", &ctfplatform.Error{HTTPStatus: 503, Code: "platform_not_configured", Message: "configure platform credentials in the Web UI or HotMouse service environment"}
 	}
 	platform, err := h.Platforms.Connect(id, config)
 	return platform, config.ScopeID(id), err
@@ -268,11 +267,16 @@ func (h *Handler) submitPlatformFlag(ctx context.Context, project string, flagID
 }
 
 func (h *Handler) registerPlatforms(app *iris.Application) {
+	h.registerPlatformConfig(app)
 	app.Get("/api/platforms", func(ctx iris.Context) {
 		out := []iris.Map{}
 		for _, descriptor := range h.Platforms.Descriptors() {
-			_, configured := h.PlatformConfigs[descriptor.ID]
-			out = append(out, iris.Map{"id": descriptor.ID, "name": descriptor.Name, "configured": configured, "capabilities": descriptor})
+			_, source, err := h.platformConfig(descriptor.ID)
+			if err != nil {
+				platformError(ctx, err)
+				return
+			}
+			out = append(out, iris.Map{"id": descriptor.ID, "name": descriptor.Name, "configured": source != "none", "capabilities": descriptor})
 		}
 		ctx.JSON(out)
 	})

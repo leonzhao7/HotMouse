@@ -73,6 +73,8 @@ func (h *Handler) StartCompetition(ctx context.Context, id string, config core.C
 	if err := config.Normalize(); err != nil {
 		return core.CompetitionRun{}, &ctfplatform.Error{HTTPStatus: 422, Code: "invalid_input", Message: err.Error()}
 	}
+	h.platformMu.Lock()
+	defer h.platformMu.Unlock()
 	platform, scope, err := h.platform(id)
 	if err != nil {
 		return core.CompetitionRun{}, err
@@ -108,6 +110,9 @@ func (h *Handler) competitionRun(ctx iris.Context) (core.CompetitionRun, bool) {
 }
 
 func (h *Handler) registerCompetitions(app *iris.Application) {
+	app.Get("/api/competitions/status", func(ctx iris.Context) {
+		ctx.JSON(iris.Map{"scheduler_enabled": h.Competitions.Running()})
+	})
 	app.Post("/api/platforms/{platform:string}/runs", func(ctx iris.Context) {
 		var config core.CompetitionConfig
 		if !read(ctx, &config) {

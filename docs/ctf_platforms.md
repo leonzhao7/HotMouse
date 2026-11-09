@@ -6,7 +6,11 @@
 
 ## 比赛总调度入口
 
-先设置 `BENCHMARK_BASE_URL`、`BENCHMARK_TOKEN`，连接靶场 VPN，并配置 HotMouse 的 Dispatcher / Worker 模型。总调度使用已保存的 Dispatcher 模型；每题的执行继续使用 Worker 配置。
+Web 入口：以 `--autorun` 启动后端，并使前端代理指向同一后端；登录后打开侧栏“比赛”，选择 TSec，在“配置平台”中保存平台地址和任务令牌，上传 `rules.md` 或粘贴规则，再设置题目并发、每题 Worker 上限和超时并启动。页面每 5 秒更新比赛与题目队列，可调整并发、停止比赛，也可进入题目项目查看步骤和 flag。服务数据库会保存任务令牌，Web 响应只返回是否已设置；保存时数据库及 SQLite WAL/SHM 文件会限制为当前用户可读写。已有比赛运行时不能更换任务凭据。当前仅接入 TSec，其他平台需先实现适配器。
+
+例如已有 `./hotmouse serve --db ./data/hotmouse.db --competition-rules-file ./rules.md` 启动的比赛，更新后端和前端后，保持前端代理到同一服务、同一数据库，即可在“比赛”中看到原有运行记录。Web 启动新比赛只要求后端以 `--autorun` 运行；无需在启动命令中指定规则文件。平台配置可通过 Web 保存，也可在启动后端前设置 `BENCHMARK_BASE_URL`、`BENCHMARK_TOKEN`；Web 保存的配置优先于环境变量。
+
+运行服务的主机仍需连接靶场 VPN，并配置 HotMouse 的 Dispatcher / Worker 模型。总调度使用已保存的 Dispatcher 模型；每题的执行继续使用 Worker 配置。默认 `mock` 驱动只用于验证流程，不会实际解题。
 
 启动服务时直接传入比赛规则文件：
 
@@ -140,6 +144,9 @@ TSec 同时最多允许 3 道活跃题目，上限由平台强制执行，`inval
 | 方法 | 路径 | 参数 |
 | --- | --- | --- |
 | GET | `/api/platforms` | 返回平台能力及 configured 状态 |
+| GET | `/api/platforms/tsec/config` | 查看脱敏的平台配置 |
+| PUT | `/api/platforms/tsec/config` | 保存平台地址及任务令牌 |
+| GET | `/api/competitions/status` | 返回比赛调度是否已启用 |
 | GET | `/api/platforms/tsec/challenges` | 返回标准化题目列表 |
 | POST | `/api/platforms/tsec/start?challenge_id=CODE` | 下发 / 启动题目 |
 | GET | `/api/platforms/tsec/hint?challenge_id=CODE` | 显式获取提示 |
@@ -159,7 +166,7 @@ TSec 同时最多允许 3 道活跃题目，上限由平台强制执行，`inval
 
 ## 添加新平台
 
-`ctfplatform.Platform` 定义 `Descriptor / ListChallenges / Deliver / SubmitFlag`。认证由平台构造器及适配器内部处理，配置只存在于内存。`Delivery` 可表达远程实例地址、附件 URL / 本地文件和平台特定 metadata，`SubmissionMode` 表达 API 或结果文件等提交机制。`HintProvider`、`InstanceCloser`、`SubmissionValidator` 是可选接口。
+`ctfplatform.Platform` 定义 `Descriptor / ListChallenges / Deliver / SubmitFlag`。认证由平台构造器及适配器内部处理，平台配置由服务内存和受限权限的 SQLite 配置表提供。`Delivery` 可表达远程实例地址、附件 URL / 本地文件和平台特定 metadata，`SubmissionMode` 表达 API 或结果文件等提交机制。`HintProvider`、`InstanceCloser`、`SubmissionValidator` 是可选接口。
 
 新增适配器时实现这些接口，通过 `Registry.Register` 注册工厂，在服务入口提供配置。项目和台账代码不包含 TSec 路径或认证逻辑。具体协议差异在适配器中转换为统一模型，专有信息可以放进 metadata。注册机制不会自动为尚未实现的平台提供接入能力。
 

@@ -15,6 +15,7 @@ import {
   Settings,
   ShieldAlert,
   Sun,
+  Trophy,
   X,
 } from "lucide-react";
 import { api, post, remove } from "./api.js";
@@ -50,10 +51,12 @@ import Workers from "./pages/Workers.jsx";
 import Templates from "./pages/Templates.jsx";
 import SystemSettings from "./pages/Settings.jsx";
 import Audit from "./pages/Audit.jsx";
+import Competitions from "./pages/Competitions.jsx";
 
 const navigation = [
   ["dashboard", "总览", Home],
   ["projects", "项目", FolderKanban],
+  ["competitions", "比赛", Trophy],
   ["vulnerabilities", "漏洞", ShieldAlert],
   ["workers", "本地 Worker", Monitor],
   ["templates", "项目模板", FileText],
@@ -204,6 +207,8 @@ export default function App() {
       ) : (
         <Projects />
       )
+    ) : route.page === "competitions" ? (
+      <Competitions />
     ) : route.page === "vulnerabilities" ? (
       <Vulnerabilities
         key={route.params.toString()}

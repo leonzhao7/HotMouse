@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS worker_execute_recovery (project_id TEXT NOT NULL REF
 CREATE TABLE IF NOT EXISTS worker_decide_state (project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE, fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS project_target_health (project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE, run_id TEXT NOT NULL DEFAULT (lower(hex(randomblob(16)))), status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','ready')), analysis_json TEXT NOT NULL DEFAULT '', failure_counts_json TEXT NOT NULL DEFAULT '[]', last_checked_at TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', analysis_failures INTEGER NOT NULL DEFAULT 0, retry_after TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS platform_projects (project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE, platform TEXT NOT NULL, scope_id TEXT NOT NULL, challenge_id TEXT NOT NULL, challenge_json TEXT NOT NULL, delivery_json TEXT NOT NULL, UNIQUE(platform,scope_id,challenge_id));
+CREATE TABLE IF NOT EXISTS platform_configs (id TEXT PRIMARY KEY, base_url TEXT NOT NULL, token TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_steps_open ON steps(project_id, concluded_at, abandoned, priority DESC, created_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
 `
