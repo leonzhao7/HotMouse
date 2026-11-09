@@ -68,6 +68,9 @@ func platformError(ctx iris.Context, err error) {
 }
 
 type platformImportRequest struct {
+	CompetitionID string `json:"-"`
+	Rules         string `json:"-"`
+	RulesSummary  string `json:"-"`
 	ChallengeID   string `json:"challenge_id"`
 	Title         string `json:"title"`
 	MaxWorkers    int    `json:"max_workers"`
@@ -98,6 +101,9 @@ func (h *Handler) importPlatformChallenge(ctx context.Context, id string, reques
 		return core.ProjectDetail{}, err
 	}
 	if existing != "" {
+		if err := h.ensureCompetitionRules(ctx, request.CompetitionID, request.Rules, request.RulesSummary, existing); err != nil {
+			return core.ProjectDetail{}, err
+		}
 		return h.DB.GetProject(ctx, existing)
 	}
 	challenges, err := platform.ListChallenges(ctx)
@@ -169,6 +175,7 @@ func (h *Handler) importPlatformChallenge(ctx context.Context, id string, reques
 	goal := fmt.Sprintf("Solve challenge %s and capture every remaining flag (%d total, %d already accepted). Record flag findings with challenge_id=%s and their exact value backed by target evidence.", challenge.ID, challenge.FlagCount, challenge.CorrectFlagCount, challenge.ID)
 	project, err = h.DB.CreateProject(ctx, core.CreateProject{
 		Title: title, Origin: origin, Goal: goal, MaxWorkers: request.MaxWorkers, BudgetSeconds: request.BudgetSeconds,
+		Hints:           competitionHints(request.CompetitionID, request.Rules, request.RulesSummary),
 		PlatformBinding: &core.PlatformBinding{Platform: id, ScopeID: scope, ChallengeID: challenge.ID, Challenge: challengeData, Delivery: deliveryData},
 	})
 	return project, err

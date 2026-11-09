@@ -19,12 +19,14 @@ import (
 
 	"github.com/kataras/iris/v12"
 	iriscontext "github.com/kataras/iris/v12/context"
+	"hotmouse/backend/internal/competition"
 	"hotmouse/backend/internal/core"
 	"hotmouse/backend/internal/ctfplatform"
 	"hotmouse/backend/internal/worker"
 )
 
 type Handler struct {
+	Competitions    *competition.Manager
 	Platforms       *ctfplatform.Registry
 	PlatformConfigs map[string]ctfplatform.Config
 	platformMu      sync.Mutex
@@ -45,7 +47,9 @@ func New(db *core.DB) *Handler {
 	runner := worker.New(db)
 	runner.SetLogOutput(os.Stderr)
 	platforms, configs := configurePlatforms()
-	return &Handler{DB: db, Runner: runner, Platforms: platforms, PlatformConfigs: configs, captchas: map[string]captchaChallenge{}}
+	handler := &Handler{DB: db, Runner: runner, Platforms: platforms, PlatformConfigs: configs, captchas: map[string]captchaChallenge{}}
+	handler.Competitions = newCompetitionManager(handler)
+	return handler
 }
 func bad(ctx iris.Context, err error) {
 	status := iris.StatusBadRequest
@@ -2196,6 +2200,7 @@ func Register(app *iris.Application, h *Handler) {
 	app.Put("/auth/password", h.ChangePassword)
 	h.registerStrategy(app)
 	h.registerPlatforms(app)
+	h.registerCompetitions(app)
 	h.registerKnowledge(app)
 	app.Get("/projects", h.ListProjects)
 	app.Post("/projects", h.CreateProject)

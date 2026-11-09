@@ -2,7 +2,68 @@
 
 平台接入由独立的 Go 模块 `backend/internal/ctfplatform` 提供。第一版实现 TSec Benchmark 的五个接口，支持通过 HotMouse HTTP API 或 CLI 获取题目、启动容器、导入项目、获取提示、提交 flag 和关闭容器。TSec 原始协议见 [tsec_challenges_api.md](tsec_challenges_api.md)。
 
-本版采用手动选择题目、导入解题项目和提交答案的流程。导入后的项目使用现有 Dispatcher / Worker 解题机制；服务使用 `--autorun` 时会开始处理新项目。平台接入不自动遍历全部题目，不自动获取扣分提示；解题完成后显式提交答案、关闭容器。
+支持比赛总调度和单题操作两种入口。比赛总调度接收平台提供的规则提示词，解读规则、管理整场题目队列，并自动提交 flag、释放容器和开始下一题。每道题继续使用现有 Dispatcher / Worker 解题机制。
+
+## 比赛总调度入口
+
+先设置 `BENCHMARK_BASE_URL`、`BENCHMARK_TOKEN`，连接靶场 VPN，并配置 HotMouse 的 Dispatcher / Worker 模型。总调度使用已保存的 Dispatcher 模型；每题的执行继续使用 Worker 配置。
+
+启动服务时直接传入比赛规则文件：
+
+```bash
+./hotmouse serve --db ./data/hotmouse.db \
+  --competition-rules-file ./rules.md \
+  --competition-platform tsec \
+  --competition-concurrency 2 \
+  --competition-max-workers 1 \
+  --competition-challenge-timeout 20m
+```
+
+规则文件入口自动启动 Worker 池及比赛总调度，无需另加 `--autorun`。也可以向一个已经以 `--autorun` 启动的服务提交比赛：
+
+```bash
+hotmouse competition start tsec --rules-file ./rules.md \
+  --concurrency 2 --max-workers 1 --challenge-timeout-seconds 1200
+hotmouse competition status tsec competition_001 --watch --output json
+hotmouse competition concurrency tsec competition_001 --concurrency 3
+hotmouse competition stop tsec competition_001
+```
+
+`--concurrency` 控制同时解答的**题目数**，TSec 最大为 3，默认 1。`--max-workers` 控制每道题内部的 Worker 上限，默认 1；执行进程还受服务全局 `worker_count` 限制。减少题目并发不会中断已有解题，等当前题目退出后再遵守新上限。`--challenge-timeout-seconds` 默认 1200 秒，从启动题目开始计时，包含准备与解题；新项目也以相同秒数作为项目投资预算。
+
+总调度启动时获取题目列表，由 Dispatcher 模型读取总规则并返回规则摘要与完整题目顺序。原始规则及摘要在新项目创建事务中作为提示保存，首次规划、靶场识别和后续执行均可读取，原文优先于摘要。模型不能增加、漏掉题目或修改配置的并发数；实际下发、提交、关闭和队列切换由一个总调度协程负责。自定义 Dispatcher 命令需要支持 `HOTMOUSE_TASK_TYPE=competition_plan`，返回 `{"summary":"规则摘要","challenge_ids":["题目ID", "..."]}`；请求环境包含 `HOTMOUSE_COMPETITION_RULES` 和 `HOTMOUSE_COMPETITION_CHALLENGES`。mock 模式按平台顺序排列，用于本地验证。
+
+题目流程：
+
+```text
+queued → starting → running → closing → succeeded / failed
+```
+
+每次调度优先处理已有题目，再填补空闲名额：
+
+- Worker 保存的新 flag 自动提交，错误答案不会重复提交；多 flag 题继续解答剩余 flag。
+- 平台确认全部 flag 通过时，记录成功证据并完成项目。项目失败、提前结束或达到每题总时限时，记录失败；已保存且未提交的 flag 仍会处理。
+- 退出解题时取消该项目的执行，等待在途 Worker 返回，再关闭容器。关闭未确认时停留在 `closing` 并保留名额，确认后自动开始下一题。
+- 提交结果未知时保留 `submission_unknown`，不自动重放该 flag；继续通过题目列表检查通关进度，超时后释放该题并继续队列。
+- 单题失败不终止比赛。全部题目处理完后比赛为 `completed`，每题的 `succeeded / failed` 结果仍可查询。
+- 停止比赛取消当前任务并关闭活跃容器，未开始的题目为 `skipped`。任务结束或认证失效时停止全局调度，避免继续启动题目。
+
+`competition_runs / competition_items` 保存规则、配置、项目关联、队列状态和时间戳；`--autorun` 服务重启后恢复未结束的队列，复用已启动的项目和容器。同一任务只允许一个活跃比赛。规则文件入口是幂等的：同一任务、同一规则已有运行时直接使用已有记录，包括用户已停止或已完成的比赛；要主动开始新的运行，使用 `competition start`。恢复时保留已保存的并发设置；运行中用 `competition concurrency` 调整。
+
+环境变量入口适用于 TSec 镜像：
+
+```bash
+docker run --rm -p 127.0.0.1:9981:9981 \
+  -v hotmouse-data:/data -v hotmouse-home:/home/node \
+  -v "$PWD/rules.md:/rules.md:ro" \
+  -e BENCHMARK_BASE_URL -e BENCHMARK_TOKEN \
+  -e HOTMOUSE_COMPETITION_RULES_FILE=/rules.md \
+  -e HOTMOUSE_COMPETITION_CONCURRENCY=2 \
+  -e HOTMOUSE_COMPETITION_CHALLENGE_TIMEOUT=20m \
+  hotmouse-tsec:latest
+```
+
+`HOTMOUSE_COMPETITION_PLATFORM` 默认 `tsec`，`HOTMOUSE_COMPETITION_MAX_WORKERS` 默认 1。Compose 也透传这些变量，规则文件路径须是容器内可读路径。保存的模型配置放在数据卷中，运行容器仍须能够通过 VPN 访问靶场。
 
 ## 配置和使用
 
@@ -86,6 +147,11 @@ TSec 同时最多允许 3 道活跃题目，上限由平台强制执行，`inval
 | POST | `/api/platforms/tsec/submit` | JSON：`{"challenge_id":"CODE","flag":"flag{...}"}` |
 | POST | `/api/platforms/tsec/import` | JSON：`{"challenge_id":"CODE","title":"可选标题","max_workers":1,"budget_seconds":1200}` |
 | POST | `/projects/PROJECT/flags/FLAG_ID/submit` | 使用已保存的 flag，无请求体 |
+| POST | `/api/platforms/tsec/runs` | JSON：`{"rules":"比赛规则原文","concurrency":2,"max_workers":1,"challenge_timeout_seconds":1200}` |
+| GET | `/api/platforms/tsec/runs` | 列出比赛运行 |
+| GET | `/api/platforms/tsec/runs/RUN_ID` | 查询规则、配置、队列及每题结果 |
+| PATCH | `/api/platforms/tsec/runs/RUN_ID` | JSON：`{"concurrency":3}` |
+| POST | `/api/platforms/tsec/runs/RUN_ID/stop` | 停止比赛 |
 
 标准化字段包括 `id`（TSec `unique_code`）、`completed`（`is_completed`）、`instance_status`（`container_status`）、`addresses`（`container_addr`）。提交评分和 `matched_flag_index` 原样保留，索引 `0` 与 `null` 区分处理。
 
@@ -106,4 +172,4 @@ cd backend
 go test ./...
 ```
 
-测试使用本地模拟 TSec 服务验证五个接口的请求协议、错误码、Unicode 长度、重定向与超时、多地址 / 多 flag、任务隔离、项目事务与重启持久化、flag 台账状态及 CLI 流程。真实平台连通性需使用下发的配置和 VPN 验证。
+测试使用本地模拟 TSec 服务验证五个接口的请求协议、错误码、Unicode 长度、重定向与超时、多地址 / 多 flag、任务隔离、项目事务与重启持久化、flag 台账状态及 CLI 流程。比赛测试还验证 24 道题连续处理、成功与失败接续、动态并发、关闭等待、每题超时、规则传递、重启恢复和停止。真实平台连通性需使用下发的配置和 VPN 验证。

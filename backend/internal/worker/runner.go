@@ -21,6 +21,8 @@ import (
 // External commands receive a graph snapshot and task contract in environment
 // variables and return one JSON contract on stdout.
 type Runner struct {
+	activeMu       sync.Mutex
+	activeProjects map[string]map[*context.CancelFunc]struct{}
 	DB             *core.DB
 	Interval       time.Duration
 	logger         *logging.Logger
@@ -398,6 +400,8 @@ func (r *Runner) executeAsDispatcherCommit(parent context.Context, project, step
 }
 
 func (r *Runner) executeAsRole(parent context.Context, project, step, description, identity string, deferGraphCommit bool, taskType string) (core.ConcludeResult, error) {
+	parent, finishProject := r.projectContext(parent, project)
+	defer finishProject()
 	unlock := r.lockStep(project, step)
 	defer unlock()
 	started := time.Now().UTC().Format(time.RFC3339Nano)
@@ -778,6 +782,8 @@ func (r *Runner) decideProject(parent context.Context, project string) {
 }
 
 func (r *Runner) dispatchProject(ctx context.Context, project string) {
+	ctx, finishProject := r.projectContext(ctx, project)
+	defer finishProject()
 	// Apply terminal stop-loss before startup analysis or another LLM call,
 	// including routes shelved by an earlier build or restored from storage.
 	if err := r.DB.RefreshRouteLimits(ctx); err != nil {

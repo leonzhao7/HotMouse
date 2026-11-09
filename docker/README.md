@@ -65,6 +65,8 @@ docker load -i hotmouse-image.tar
 
 TSec 镜像启动工作台，在运行时接收 `BENCHMARK_BASE_URL` 和 `BENCHMARK_TOKEN`，通过 `hotmouse platform import` 导入题目。使用 Compose 时设置 `HOTMOUSE_IMAGE=hotmouse-tsec:latest`；平台配置和 VPN 访问要求见 [CTF 平台接入](../docs/ctf_platforms.md)。CTFy 镜像启动专用 Agent，平台负责下发任务，运行方式见 [CTFY.md](CTFY.md)。
 
+TSec 整场比赛可挂载规则文件，并设置 `HOTMOUSE_COMPETITION_RULES_FILE` 为容器内路径、`HOTMOUSE_COMPETITION_CONCURRENCY` 为题目并发数（1..3），容器启动后总调度会自动管理全部题目。`HOTMOUSE_COMPETITION_CHALLENGE_TIMEOUT` 默认 `20m`，`HOTMOUSE_COMPETITION_MAX_WORKERS` 默认 1。也可启动容器后使用 `hotmouse competition start tsec --rules-file ... --concurrency 2`；数据卷须已有可用的 Dispatcher / Worker 模型配置，完整示例见平台接入文档。
+
 | 构建参数 | 默认值 | 用途 |
 | --- | --- | --- |
 | `GO_IMAGE` | `golang:1.25-bookworm` | CGO 后端构建环境 |

@@ -79,6 +79,10 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("initialize sqlite: %w", err)
 	}
+	if _, err = d.Exec(competitionSchema); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("initialize competition scheduler: %w", err)
+	}
 	if _, err = d.Exec(`PRAGMA busy_timeout = 5000`); err != nil {
 		d.Close()
 		return nil, err

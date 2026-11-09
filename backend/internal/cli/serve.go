@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,6 +62,11 @@ func (a *app) serveCommand() *cobra.Command {
 	}
 	c.Flags().String("auth", auth, "required 或 disabled")
 	c.Flags().Duration("shutdown-timeout", 15*time.Second, "等待 HTTP 与 Worker 停止的最长时间")
+	c.Flags().String("competition-rules-file", env("HOTMOUSE_COMPETITION_RULES_FILE", ""), "启动服务时读取比赛总提示词并开始/恢复循环解题")
+	c.Flags().String("competition-platform", env("HOTMOUSE_COMPETITION_PLATFORM", "tsec"), "比赛接入平台，默认 tsec")
+	c.Flags().Int("competition-concurrency", 1, "比赛同时解答题目数，TSec 最大 3")
+	c.Flags().Int("competition-max-workers", 1, "比赛每道题的 Worker 并发上限")
+	c.Flags().Duration("competition-challenge-timeout", 20*time.Minute, "每题从启动到完成的总时限")
 	c.Example = "  hotmouse serve --db ./data/hotmouse.db --autorun"
 	c.RunE = func(c *cobra.Command, _ []string) (runErr error) {
 		started := time.Now()
@@ -80,6 +86,47 @@ func (a *app) serveCommand() *cobra.Command {
 		addr, _ := c.Flags().GetString("addr")
 		path, _ := c.Flags().GetString("db")
 		autorun, _ := c.Flags().GetBool("autorun")
+		rulesFile, _ := c.Flags().GetString("competition-rules-file")
+		competitionPlatform, _ := c.Flags().GetString("competition-platform")
+		competitionConfig := core.CompetitionConfig{}
+		if rulesFile != "" {
+			data, err := a.readFile(rulesFile)
+			if err != nil {
+				return err
+			}
+			competitionConfig.Rules = string(data)
+			competitionConfig.Concurrency, _ = c.Flags().GetInt("competition-concurrency")
+			competitionConfig.MaxWorkers, _ = c.Flags().GetInt("competition-max-workers")
+			for flag, name := range map[string]string{"competition-concurrency": "HOTMOUSE_COMPETITION_CONCURRENCY", "competition-max-workers": "HOTMOUSE_COMPETITION_MAX_WORKERS"} {
+				if value, present := os.LookupEnv(name); present && !c.Flags().Changed(flag) {
+					parsed, err := strconv.Atoi(value)
+					if err != nil || parsed < 1 {
+						return invalid("%s must be a positive integer", name)
+					}
+					if flag == "competition-concurrency" {
+						competitionConfig.Concurrency = parsed
+					} else {
+						competitionConfig.MaxWorkers = parsed
+					}
+				}
+			}
+			timeout, _ := c.Flags().GetDuration("competition-challenge-timeout")
+			if value, present := os.LookupEnv("HOTMOUSE_COMPETITION_CHALLENGE_TIMEOUT"); present && !c.Flags().Changed("competition-challenge-timeout") {
+				var err error
+				timeout, err = time.ParseDuration(value)
+				if err != nil {
+					return invalid("HOTMOUSE_COMPETITION_CHALLENGE_TIMEOUT must be a duration")
+				}
+			}
+			if timeout < time.Second || timeout > 24*time.Hour {
+				return invalid("competition-challenge-timeout must be 1s..24h")
+			}
+			competitionConfig.ChallengeTimeoutSeconds = int(timeout / time.Second)
+			if err := competitionConfig.Normalize(); err != nil {
+				return invalid("%s", err)
+			}
+			autorun = true
+		}
 		policy, _ := c.Flags().GetString("auth")
 		shutdown, _ := c.Flags().GetDuration("shutdown-timeout")
 		logger.Info("server.config", "addr", addr, "db", path, "autorun", autorun, "auth_policy", policy, "shutdown_timeout", shutdown)
@@ -161,11 +208,33 @@ func (a *app) serveCommand() *cobra.Command {
 		}
 		server := &http.Server{Handler: api, BaseContext: func(net.Listener) context.Context { return serviceCtx }, ReadHeaderTimeout: 10 * time.Second,
 			ErrorLog: log.New(logger.WithComponent("http").Writer(), "", 0)}
+		defer server.Close()
 		done := make(chan error, 1)
 		go func() { done <- server.Serve(listener) }()
-		var workerDone <-chan struct{}
+		var workerDone, competitionDone <-chan struct{}
 		if autorun {
 			workerDone = handler.Runner.Start(serviceCtx)
+			handler.Competitions.Logger = logger.WithComponent("competition")
+			competitionDone = handler.Competitions.Start(serviceCtx)
+			defer func() {
+				cancel()
+				cleanup, cancelCleanup := context.WithTimeout(context.Background(), shutdown)
+				defer cancelCleanup()
+				for _, done := range []<-chan struct{}{competitionDone, workerDone} {
+					select {
+					case <-done:
+					case <-cleanup.Done():
+						return
+					}
+				}
+			}()
+		}
+		if rulesFile != "" {
+			run, err := handler.ResumeOrStartCompetition(serviceCtx, competitionPlatform, competitionConfig)
+			if err != nil {
+				return failed("start competition: %s", err)
+			}
+			logger.Info("competition.entry", "run", run.ID, "platform", run.Platform, "concurrency", run.Concurrency, "rules_file", rulesFile)
 		}
 		logger.Info("server.listening", "addr", listener.Addr().String(), "db", path, "autorun", autorun, "auth_policy", policy)
 		var serveErr error
@@ -186,6 +255,13 @@ func (a *app) serveCommand() *cobra.Command {
 			case <-workerDone:
 			case <-shutdownCtx.Done():
 				return failed("worker shutdown timed out")
+			}
+		}
+		if competitionDone != nil {
+			select {
+			case <-competitionDone:
+			case <-shutdownCtx.Done():
+				return failed("competition coordinator shutdown timed out")
 			}
 		}
 		handler.Runner.StopTargetProbes()

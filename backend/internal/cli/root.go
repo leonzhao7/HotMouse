@@ -115,6 +115,7 @@ func (a *app) command() *cobra.Command {
 	a.knowledgeCommands(root)
 	a.productCommands(root)
 	a.platformCommands(root)
+	a.competitionCommands(root)
 	root.AddCommand(a.leaf("status", "查询服务、健康和 Worker 状态", 0, 0, "none", func(c *cobra.Command, _ []string) (any, error) {
 		service, e := a.get(c, "/healthz")
 		if e != nil {
