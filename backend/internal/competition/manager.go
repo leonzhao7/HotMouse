@@ -176,7 +176,7 @@ func (m *Manager) advance(ctx context.Context, id string) error {
 				return ctx.Err()
 			}
 			attempts := run.PlanningAttempts + 1
-			_, saveErr := m.DB.SQL.ExecContext(ctx, `UPDATE competition_runs SET planning_attempts=?,last_error=?,retry_after=? WHERE id=? AND status='planning'`, attempts, err.Error(), now.Add(5*time.Second).UTC().Format(time.RFC3339Nano), id)
+			_, saveErr := m.DB.SQL.ExecContext(ctx, `UPDATE competition_runs SET planning_attempts=?,last_error=?,retry_after=? WHERE id=? AND status='planning'`, attempts, err.Error(), m.Now().Add(5*time.Second).UTC().Format(time.RFC3339Nano), id)
 			if saveErr != nil {
 				return saveErr
 			}

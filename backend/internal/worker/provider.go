@@ -238,6 +238,9 @@ func providerResponse(driver string, stdout []byte) ([]byte, error) {
 		if stop == "length" {
 			return []byte(answer), fmt.Errorf("provider output_limit")
 		}
+		if detail, ok := message["errorMessage"].(string); ok && detail != "" {
+			return []byte(answer), fmt.Errorf("provider response is incomplete: %s", detail)
+		}
 		if stop == "error" || stop == "toolUse" || stop == "aborted" || (message["errorMessage"] != nil && message["errorMessage"] != "") {
 			return []byte(answer), fmt.Errorf("provider response is incomplete")
 		}
@@ -316,6 +319,9 @@ func (r *Runner) runProvider(ctx context.Context, cfg workerConfig, phase, sessi
 	}
 	if checkpointErr != nil {
 		return response, seen, result, fmt.Errorf("save provider session: %w", checkpointErr)
+	}
+	if result.timedOut {
+		return response, seen, result, fmt.Errorf("worker provider %s timed out after %s: %w", phase, timeout, context.DeadlineExceeded)
 	}
 	if result.err != nil {
 		return response, seen, result, fmt.Errorf("worker provider process: %w", result.err)

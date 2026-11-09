@@ -2,7 +2,9 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"hotmouse/backend/internal/core"
@@ -28,6 +30,21 @@ func TestCompetitionPlannerUsesRulesAndSeparateContract(t *testing.T) {
 	var count int
 	if err := db.SQL.QueryRow(`SELECT COUNT(*) FROM worker_task_history WHERE task_type='competition_plan' AND project_id IS NULL AND status='completed'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("planning history: %d %v", count, err)
+	}
+}
+
+func TestCompetitionPlannerReportsTimeoutInHistory(t *testing.T) {
+	runtime := core.DefaultWorkerRuntime()
+	runtime.DecideTimeoutSeconds = 1
+	db, _, _, _ := fakePi(t, `printf '%s\n' '{"type":"session","id":"planning-timeout"}'; sleep 30`, runtime)
+	run := core.CompetitionRun{ID: "competition_001", CompetitionConfig: core.CompetitionConfig{Rules: "respect scope"}, Items: []core.CompetitionItem{{ChallengeID: "one"}}}
+	_, err := New(db).PlanCompetition(t.Context(), run, []ctfplatform.Challenge{{ID: "one"}})
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "decide timed out after 1s") {
+		t.Fatalf("planner timeout omitted its cause: %v", err)
+	}
+	var status, detail string
+	if err := db.SQL.QueryRow(`SELECT status,detail FROM worker_task_history WHERE task_type='competition_plan'`).Scan(&status, &detail); err != nil || status != "failed" || !strings.Contains(detail, "decide timed out after 1s") {
+		t.Fatalf("planner timeout history: status=%s detail=%s err=%v", status, detail, err)
 	}
 }
 

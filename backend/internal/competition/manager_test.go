@@ -140,6 +140,32 @@ func (f *fixture) capture(t *testing.T, id, value string) {
 	}
 }
 
+func TestPlanningRetryWaitsAfterSlowFailure(t *testing.T) {
+	f := newFixture(t, 1, 1, 1)
+	f.manager.Backend.Plan = func(context.Context, core.CompetitionRun, []ctfplatform.Challenge) (Plan, error) {
+		f.planCalls++
+		f.clock = f.clock.Add(5 * time.Minute)
+		return Plan{}, fmt.Errorf("planner timed out")
+	}
+	f.manager.RunOnce(t.Context())
+	run := f.run(t)
+	deadline, err := time.Parse(time.RFC3339Nano, run.RetryAfter)
+	if err != nil || !deadline.Equal(f.clock.Add(5*time.Second)) || run.PlanningAttempts != 1 {
+		t.Fatalf("retry deadline must follow failure: %+v %v", run, err)
+	}
+	f.manager.RunOnce(t.Context())
+	f.clock = f.clock.Add(4 * time.Second)
+	f.manager.RunOnce(t.Context())
+	if f.planCalls != 1 {
+		t.Fatalf("retried slow planner before the delay: %d calls", f.planCalls)
+	}
+	f.clock = f.clock.Add(time.Second)
+	f.manager.RunOnce(t.Context())
+	if f.planCalls != 2 {
+		t.Fatalf("did not retry after the delay: %d calls", f.planCalls)
+	}
+}
+
 func TestDozensOfChallengesContinueAfterSuccessAndFailure(t *testing.T) {
 	f := newFixture(t, 24, 2, 1)
 	for cycle := 0; cycle < 30; cycle++ {

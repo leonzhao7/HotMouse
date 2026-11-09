@@ -21,6 +21,26 @@ func logProviderEvent(logger *logging.Logger, driver string, raw []byte) {
 		logger.Info("provider.session", "session", eventSession(driver, raw))
 	case "turn.started":
 		logger.Info("provider.turn.start")
+	case "agent_start", "turn_start":
+		logger.Info("provider.turn.start", "event", kind)
+	case "message_end":
+		message, _ := event["message"].(map[string]any)
+		if message["role"] == "assistant" {
+			if message["stopReason"] == "error" || message["stopReason"] == "aborted" {
+				logger.Error("provider.error", "type", kind, "reason", message["stopReason"], "error", message["errorMessage"])
+			} else {
+				logger.Info("provider.message.completed", "reason", message["stopReason"], "model", message["model"], "usage", message["usage"])
+			}
+		}
+	case "auto_retry_start":
+		logger.Warn("provider.retry.start", "attempt", event["attempt"], "max_attempts", event["maxAttempts"],
+			"delay_ms", event["delayMs"], "error", event["errorMessage"])
+	case "auto_retry_end":
+		if event["success"] == true {
+			logger.Info("provider.retry.completed", "attempt", event["attempt"])
+		} else {
+			logger.Error("provider.retry.failed", "attempt", event["attempt"], "error", event["finalError"])
+		}
 	case "turn.completed":
 		logger.Info("provider.turn.completed", "usage", event["usage"])
 	case "error", "turn.failed":
