@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -427,7 +428,7 @@ func TestCoreValidationUsesUnprocessableEntity(t *testing.T) {
 	}
 }
 
-func TestSessionCookieUsesSecureOnTLS(t *testing.T) {
+func TestSessionCookieMatchesRequestScheme(t *testing.T) {
 	t.Setenv("HOTMOUSE_AUTH_REQUIRED", "0")
 	db, err := core.Open(filepath.Join(t.TempDir(), "cookie.db"))
 	if err != nil {
@@ -443,31 +444,110 @@ func TestSessionCookieUsesSecureOnTLS(t *testing.T) {
 	if err := app.Build(); err != nil {
 		t.Fatal(err)
 	}
-	loginRecorder := httptest.NewRecorder()
-	request := httptest.NewRequest("GET", "http://example.test/fixture", nil)
-	request.TLS = &tls.ConnectionState{}
-	app.ServeHTTP(loginRecorder, request)
-	secure := false
-	for _, cookie := range loginRecorder.Result().Cookies() {
-		if cookie.Name == "session_token" {
-			secure = cookie.Secure
+	for _, tc := range []struct {
+		name   string
+		url    string
+		tls    bool
+		secure bool
+	}{
+		{name: "TLS", url: "http://example.test/fixture", tls: true, secure: true},
+		{name: "HTTPS", url: "https://example.test/fixture", secure: true},
+		{name: "localhost HTTP", url: "http://localhost/fixture"},
+		{name: "loopback HTTP", url: "http://127.0.0.1:9982/fixture"},
+		{name: "IPv6 HTTP", url: "http://[::1]:9982/fixture"},
+		{name: "proxy target HTTP", url: "http://0.0.0.0:9982/fixture"},
+		{name: "LAN HTTP", url: "http://192.168.1.10:9982/fixture"},
+		{name: "public IP HTTP", url: "http://198.51.100.25:9982/fixture"},
+		{name: "hostname HTTP", url: "http://example.test/fixture"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest("GET", tc.url, nil)
+			if tc.tls {
+				request.TLS = &tls.ConnectionState{}
+			}
+			app.ServeHTTP(recorder, request)
+			cookies := recorder.Result().Cookies()
+			if len(cookies) != 2 {
+				t.Fatalf("expected canonical and alias cookies, got %+v", cookies)
+			}
+			for _, cookie := range cookies {
+				if cookie.Secure != tc.secure {
+					t.Errorf("%s Secure=%v, want %v", cookie.Name, cookie.Secure, tc.secure)
+				}
+				if !cookie.HttpOnly || cookie.Path != "/" || cookie.SameSite != http.SameSiteStrictMode || cookie.MaxAge != 24*60*60 {
+					t.Errorf("unexpected session cookie attributes: %+v", cookie)
+				}
+			}
+		})
+	}
+}
+
+func TestAuthSessionPersistsOverRemoteHTTP(t *testing.T) {
+	t.Setenv("HOTMOUSE_AUTH_REQUIRED", "1")
+	t.Setenv("CAIRN_ALLOW_REGISTRATION", "1")
+	db, err := core.Open(filepath.Join(t.TempDir(), "http-session.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.SQL.Close()
+	app := iris.New()
+	Register(app, New(db))
+	if err := app.Build(); err != nil {
+		t.Fatal(err)
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, "http://198.51.100.25:9981"+path, strings.NewReader(body))
+		req.Header.Set("Accept", "application/json")
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
 		}
-	}
-	if !secure {
-		t.Fatal("session cookie is not Secure on TLS")
-	}
-	localRecorder := httptest.NewRecorder()
-	app.ServeHTTP(localRecorder, httptest.NewRequest("GET", "http://localhost/fixture", nil))
-	for _, cookie := range localRecorder.Result().Cookies() {
-		if cookie.Name == "session_token" && cookie.Secure {
-			t.Fatal("HTTP localhost session cookie should remain usable for local development")
+		for _, cookie := range jar.Cookies(req.URL) {
+			req.AddCookie(cookie)
 		}
+		recorder := httptest.NewRecorder()
+		app.ServeHTTP(recorder, req)
+		jar.SetCookies(req.URL, recorder.Result().Cookies())
+		return recorder
 	}
-	remoteRecorder := httptest.NewRecorder()
-	app.ServeHTTP(remoteRecorder, httptest.NewRequest("GET", "http://example.test/fixture", nil))
-	for _, cookie := range remoteRecorder.Result().Cookies() {
-		if cookie.Name == "session_token" && !cookie.Secure {
-			t.Fatal("remote HTTP session cookie should be Secure")
+	for _, mode := range []string{"register", "login"} {
+		response := request("GET", "/api/auth/captcha", "")
+		var captcha struct {
+			ID       string `json:"captcha_id"`
+			Question string `json:"question"`
+		}
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &captcha) != nil {
+			t.Fatalf("captcha status=%d body=%s", response.Code, response.Body.String())
+		}
+		var left, right int
+		if _, err := fmt.Sscanf(captcha.Question, "%d + %d = ?", &left, &right); err != nil {
+			t.Fatal(err)
+		}
+		response = request("POST", "/api/auth/"+mode, fmt.Sprintf(`{"username":"http-user","password":"Testing123!","captcha_id":%q,"captcha_answer":%q}`, captcha.ID, fmt.Sprint(left+right)))
+		want := http.StatusOK
+		if mode == "register" {
+			want = http.StatusCreated
+		}
+		if response.Code != want {
+			t.Fatalf("%s status=%d body=%s", mode, response.Code, response.Body.String())
+		}
+		// A browser only sends cookies accepted for the origin and protocol.
+		// Exercise both /api and core routes, including sliding cookie refresh.
+		for _, path := range []string{"/api/auth/me", "/api/competitions/status", "/projects", "/api/auth/me"} {
+			if response := request("GET", path, ""); response.Code != http.StatusOK {
+				t.Fatalf("%s session failed at %s: status=%d body=%s", mode, path, response.Code, response.Body.String())
+			}
+		}
+		if response := request("POST", "/api/auth/logout", ""); response.Code != http.StatusNoContent {
+			t.Fatalf("logout status=%d body=%s", response.Code, response.Body.String())
+		}
+		if response := request("GET", "/projects", ""); response.Code != http.StatusUnauthorized {
+			t.Fatalf("logout left the session usable: status=%d body=%s", response.Code, response.Body.String())
 		}
 	}
 }

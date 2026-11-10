@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"net"
 	"os"
 	"os/exec"
 	"regexp"
@@ -266,23 +265,9 @@ func (h *Handler) Logout(ctx iris.Context) {
 
 func sessionCookieSecure(ctx iris.Context) iris.CookieOption {
 	req := ctx.Request()
-	host := strings.ToLower(req.URL.Hostname())
-	if host == "" {
-		host = req.Host
-		if splitHost, _, err := net.SplitHostPort(host); err == nil {
-			host = splitHost
-		} else {
-			host = strings.Trim(host, "[]")
-		}
-		host = strings.ToLower(host)
-	}
-	scheme := strings.ToLower(req.URL.Scheme)
-	if req.TLS != nil {
-		scheme = "https"
-	} else if scheme == "" {
-		scheme = "http"
-	}
-	secure := !(scheme == "http" && (host == "localhost" || host == "127.0.0.1" || host == "::1"))
+	// Secure cookies are only accepted and sent over HTTPS. The host may be
+	// a public IP or a proxy target such as 0.0.0.0 even for plain HTTP.
+	secure := req.TLS != nil || strings.EqualFold(req.URL.Scheme, "https")
 	return func(_ *iriscontext.Context, cookie *iris.Cookie, _ uint8) {
 		cookie.Secure = secure
 	}
