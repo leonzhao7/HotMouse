@@ -198,8 +198,33 @@ func TestCancelledProcessDoesNotRunSummary(t *testing.T) {
 	db, project, step, marker := fakePi(t, `printf '%s\n' "$HOTMOUSE_TASK_TYPE" >> "$TEST_CALLS"
 printf '%s\n' '{"type":"session","id":"cancel-session"}'
 sleep 30`, core.DefaultWorkerRuntime())
-	go func() { time.Sleep(150 * time.Millisecond); cancel() }()
-	if _, err := New(db).ExecuteNow(ctx, project, step); err == nil {
+	executed := make(chan error, 1)
+	go func() {
+		_, err := New(db).ExecuteNow(ctx, project, step)
+		executed <- err
+	}()
+	// Cancel after the session checkpoint is saved, independent of process
+	// startup time and the volume of terminal diagnostics.
+	deadline := time.Now().Add(3 * time.Second)
+	var session string
+	for time.Now().Before(deadline) {
+		_ = db.SQL.QueryRow(`SELECT session_id FROM worker_execute_recovery WHERE project_id=? AND step_id=?`, project, step).Scan(&session)
+		if session == "cancel-session" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	var executeErr error
+	select {
+	case executeErr = <-executed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancelled process did not exit")
+	}
+	if session != "cancel-session" {
+		t.Fatal("provider did not save its session before cancellation")
+	}
+	if executeErr == nil {
 		t.Fatal("cancelled execution succeeded")
 	}
 	calls, _ := os.ReadFile(marker)

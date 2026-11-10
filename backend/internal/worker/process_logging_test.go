@@ -77,7 +77,10 @@ func TestProcessLogsBeforeExitWithoutChangingProtocolOutput(t *testing.T) {
 	if strings.Contains(text, "child-credential") || strings.Contains(text, "inherited-credential") {
 		t.Fatal("process logs exposed an inherited or overridden credential")
 	}
-	for _, expected := range []string{"process.start", "process.started", "process.stderr", "process.stdout", "process.exit", "exit_code=0", "name=LLM_API_KEY", "stdout_bytes=", "stderr_bytes="} {
+	if strings.Contains(text, "environment.snapshot") || strings.Contains(text, "environment.variable") {
+		t.Fatal("child process logs repeated the startup environment snapshot")
+	}
+	for _, expected := range []string{"process.start", "process.started", "process.stderr", "process.stdout", "process.exit", "exit_code=0", "stdout_bytes=", "stderr_bytes="} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("process diagnostics omitted %q", expected)
 		}

@@ -163,6 +163,8 @@ func (r *Runner) preprocessWeb(parent context.Context, project string, state cor
 		return false, err
 	}
 	history := r.historyStart(project, "", "preprocess", time.Now().UTC().Format(time.RFC3339Nano), identity)
+	cfg.identity = identity
+	r.setTaskLogger(history, r.processLogger(cfg, project, "", "preprocess"))
 	r.logger.Printf("web preprocessing project=%s urls=%v", project, urls)
 	result := core.PreprocessingState{Status: "ready", Pages: make([]core.PreprocessingPage, len(urls))}
 	responses := make([][]homepageResponse, len(urls))
@@ -220,6 +222,12 @@ func (r *Runner) preprocessWeb(parent context.Context, project string, state cor
 			summary += "; fetch error: " + page.Error
 		}
 		summaries = append(summaries, summary)
+		logger := r.processLogger(cfg, project, "", "preprocess")
+		if page.Error != "" {
+			logger.Warn("web.preprocessing.fetch_failed", "url", page.URL, "error", page.Error, "response_path", page.ResponsePath)
+		} else {
+			logger.Info("web.preprocessing.completed", "url", page.URL, "http_status", page.StatusCode, "body_bytes", page.BodyBytes, "response_path", page.ResponsePath)
+		}
 	}
 	err = r.DB.SavePreprocessing(ctx, project, state.RunID, result, strings.Join(summaries, "\n"), string(detail))
 	if err != nil {

@@ -10,6 +10,8 @@
 
 脚本会检查端口、按需安装前端依赖、编译后端，默认启用自动调度并启动 Vite。前端默认监听 **http://127.0.0.1:9981**，后端默认监听 **http://127.0.0.1:9982**。前端同源代理后端的 `/api`、`/projects` 和 `/healthz`。按 Ctrl+C 停止前后端。需要 Bash 4.3+、Go/CGO 与 C 编译器、Node.js、npm、curl 和 `setsid`（Linux 的 util-linux）。日志位于 `.hotmouse/run/`，数据库默认保存至 `backend/data/hotmouse.db`。
 
+后端日志会实时显示在启动终端，并保存到 `.hotmouse/run/backend.log`（自定义 `HOTMOUSE_LOG_DIR` 时使用该目录）。比赛运行时会显示整体策略和选题顺序、每题实例启动、解题步骤与目的、Agent 的公开进展说明和工具结果、执行结果与证据摘要、Flag 提交、超时和资源清理。状态变化立即输出，比赛状态未变化时每 30 秒输出进度和每道活跃题目的阶段、已用时间、剩余时间及最近错误；外部 Agent 进程也每 30 秒输出运行心跳。日志带时间、级别及比赛/项目/步骤/Worker 标识，凭据脱敏，长内容截断。默认 `info` 即可查看进度；需要详细诊断时运行 `HOTMOUSE_LOG_LEVEL=debug ./start.sh`。
+
 运行构建后的前端：
 
 ```bash

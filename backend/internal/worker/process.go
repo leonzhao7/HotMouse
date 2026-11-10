@@ -76,7 +76,6 @@ func runProcess(parent context.Context, argv []string, env map[string]string, cw
 	if len(diagnostics) > 0 && diagnostics[0] != nil {
 		logger = diagnostics[0].WithEnvironment(cmd.Env)
 		logger.Info("process.start", "binary", argv[0], "cwd", cwd, "timeout", timeout, "argv", processArguments(argv))
-		logger.Environment("process", cmd.Env)
 	}
 	// The shell and its descendants share a process group. Cancellation first
 	// lets the CLI flush its session, then kills the entire remaining group.

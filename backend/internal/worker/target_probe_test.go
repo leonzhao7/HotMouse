@@ -75,8 +75,17 @@ func TestRemoteProbeFailsProjectWhilePlannerIsRunning(t *testing.T) {
 	r, p := startupWorker(t)
 	r.Interval = 5 * time.Millisecond
 	r.probeInterval = 30 * time.Millisecond
-	r.probeDial = func(context.Context, core.TargetEndpoint) error { return fmt.Errorf("connection refused") }
 	marker := filepath.Join(t.TempDir(), "planner-started")
+	// Start failing after the planner enters, so this verifies cancellation
+	// during planning without depending on startup completing within 90 ms.
+	r.probeDial = func(context.Context, core.TargetEndpoint) error {
+		if _, err := os.Stat(marker); err != nil {
+			return nil
+		}
+		return fmt.Errorf("connection refused")
+	}
+	logs := &processLogRecorder{stderr: make(chan struct{})}
+	r.SetLogOutput(logs)
 	env, _ := json.Marshal(map[string]string{"PLANNER_MARKER": marker})
 	command := `if [ "$HOTMOUSE_TASK_TYPE" = target_probe ]; then printf '%s' '{"accepted":true,"data":{"required":true,"reason":"remote CTF","targets":[{"host":"127.0.0.1","port":31337}]}}'; else printf started > "$PLANNER_MARKER"; exec sleep 10; fi`
 	if _, err := r.DB.SQL.Exec(`UPDATE worker_config SET driver='command',command=?,environment_json=?`, command, string(env)); err != nil {
@@ -101,6 +110,13 @@ func TestRemoteProbeFailsProjectWhilePlannerIsRunning(t *testing.T) {
 			state, err := r.DB.TargetProbe(t.Context(), p)
 			if err != nil || state.ConsecutiveFailures[0] != 3 {
 				t.Fatalf("failure threshold incorrect: %+v err=%v", state, err)
+			}
+			// Recording the project failure and logging it occur in sequence.
+			r.StopTargetProbes()
+			for _, expected := range []string{"target.probe.failed", "consecutive_failures=1", "consecutive_failures=3", "failure_limit=3", "connection refused", "target=127.0.0.1:31337"} {
+				if !strings.Contains(logs.String(), expected) {
+					t.Fatalf("probe diagnostics omitted %q: %s", expected, logs.String())
+				}
 			}
 			return
 		}

@@ -53,6 +53,7 @@ Competition rules:
 	config.identity, config.logger = "competition/"+run.ID+"/dispatcher", r.logger
 	vars := map[string]string{"HOTMOUSE_TASK_TYPE": "competition_plan", "HOTMOUSE_COMPETITION_ID": run.ID, "HOTMOUSE_COMPETITION_RULES": run.Rules, "HOTMOUSE_COMPETITION_CHALLENGES": string(data), "HOTMOUSE_WORKER_PROMPT": prompt, "HOTMOUSE_WORKSPACE_DIR": workspace, "TMPDIR": filepath.Join(workspace, "tmp")}
 	history := r.historyStart("", "", "competition_plan", time.Now().UTC().Format(time.RFC3339Nano), config.identity)
+	r.setTaskLogger(history, r.processLogger(config, "", "", "competition_plan").With("run", run.ID))
 	var payload []byte
 	if builtinProvider(config) {
 		payload, _, _, err = r.runProvider(ctx, config, "decide", "", workspace, vars, time.Duration(config.runtime.DecideTimeoutSeconds)*time.Second, nil)

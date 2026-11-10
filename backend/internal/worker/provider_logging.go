@@ -30,6 +30,7 @@ func logProviderEvent(logger *logging.Logger, driver string, raw []byte) {
 				logger.Error("provider.error", "type", kind, "reason", message["stopReason"], "error", message["errorMessage"])
 			} else {
 				logger.Info("provider.message.completed", "reason", message["stopReason"], "model", message["model"], "usage", message["usage"])
+				logPublicContent(logger, message["content"])
 			}
 		}
 	case "auto_retry_start":
@@ -56,6 +57,14 @@ func logProviderEvent(logger *logging.Logger, driver string, raw []byte) {
 				fields = append(fields, key, value)
 			}
 		}
+		if kind == "item.completed" {
+			if item["type"] == "agent_message" {
+				logger.Info("provider.message", "text", item["text"])
+			}
+			if output, ok := item["aggregated_output"].(string); ok && output != "" {
+				fields = append(fields, "output", output)
+			}
+		}
 		logger.Info("provider.item", fields...)
 	case "system":
 		logger.Info("provider.system", "subtype", event["subtype"], "session", event["session_id"])
@@ -66,24 +75,54 @@ func logProviderEvent(logger *logging.Logger, driver string, raw []byte) {
 			entry, _ := block.(map[string]any)
 			if entry["type"] == "tool_use" {
 				input, _ := entry["input"].(map[string]any)
-				logger.Info("provider.tool.start", "id", entry["id"], "tool", entry["name"], "command", input["command"])
+				logger.Info("provider.tool.start", "id", entry["id"], "tool", entry["name"], "command", input["command"], "input", input)
 			}
 		}
+		logPublicContent(logger, message["content"])
 	case "user":
 		message, _ := event["message"].(map[string]any)
 		content, _ := message["content"].([]any)
 		for _, block := range content {
 			entry, _ := block.(map[string]any)
 			if entry["type"] == "tool_result" {
-				logger.Info("provider.tool.completed", "id", entry["tool_use_id"], "is_error", entry["is_error"])
+				fields := []any{"id", entry["tool_use_id"], "is_error", entry["is_error"], "output", entry["content"]}
+				if entry["is_error"] == true {
+					logger.Warn("provider.tool.completed", fields...)
+				} else {
+					logger.Info("provider.tool.completed", fields...)
+				}
 			}
 		}
 	case "result":
 		logger.Info("provider.result", "subtype", event["subtype"], "is_error", event["is_error"],
 			"turns", event["num_turns"], "usage", event["usage"], "duration_ms", event["duration_ms"])
 	case "tool_execution_start", "tool_execution_end":
-		logger.Info("provider.tool", "event", kind, "tool", event["toolName"], "id", event["toolCallId"], "is_error", event["isError"])
+		fields := []any{"event", kind, "tool", event["toolName"], "id", event["toolCallId"], "is_error", event["isError"]}
+		if kind == "tool_execution_start" {
+			fields = append(fields, "input", event["args"])
+		} else {
+			fields = append(fields, "output", event["result"])
+		}
+		if event["isError"] == true {
+			logger.Warn("provider.tool", fields...)
+		} else {
+			logger.Info("provider.tool", fields...)
+		}
 	default:
 		logger.Debug("provider.event", "type", kind)
+	}
+}
+
+// Only public assistant text is progress. Provider thinking/reasoning blocks
+// and incremental deltas are deliberately excluded from terminal summaries.
+func logPublicContent(logger *logging.Logger, value any) {
+	content, _ := value.([]any)
+	for _, block := range content {
+		entry, _ := block.(map[string]any)
+		if entry["type"] == "text" {
+			if text, ok := entry["text"].(string); ok && text != "" {
+				logger.Info("provider.message", "text", text)
+			}
+		}
 	}
 }

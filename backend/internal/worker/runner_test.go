@@ -44,7 +44,7 @@ func TestAgentWorkerUsesIdentityAndLogsInvocation(t *testing.T) {
 		t.Fatalf("worker identity=%q err=%v", identity, err)
 	}
 	text := logs.String()
-	for _, want := range []string{"process.start", project.Project.ID, step.ID, "local/worker/02", "binary=sh", "driver=command"} {
+	for _, want := range []string{"process.start", project.Project.ID, step.ID, "local/worker/02", "binary=sh", "driver=command", "step.execute.start", "description=inspect", "step.result", "result_type=progress", "summary=confirmed", "detail=evidence", "status=submitted"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("invocation log missing %q: %s", want, text)
 		}
@@ -71,6 +71,8 @@ func TestDispatcherCommitsAgentWorkerResultToProjectGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := New(db)
+	var logs bytes.Buffer
+	runner.SetLogOutput(&logs)
 	NewAgentWorker(runner, "local/worker/01").RunOnce(t.Context())
 	before, err := db.GetProject(t.Context(), project.Project.ID)
 	if err != nil {
@@ -127,6 +129,11 @@ func TestDispatcherCommitsAgentWorkerResultToProjectGraph(t *testing.T) {
 	if !plannedByDispatcher {
 		t.Fatalf("dispatcher did not own project planning: %+v", planned.Steps)
 	}
+	for _, want := range []string{"step.committed", "fact=f001", "dispatcher.plan.start", "dispatcher.plan.committed", "dispatcher.step.planned", `description="follow up"`, "step=s002"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("progress omitted %q: %s", want, logs.String())
+		}
+	}
 }
 
 func TestRunnerStartsConfiguredParallelAgentWorkers(t *testing.T) {
@@ -150,7 +157,7 @@ func TestRunnerStartsConfiguredParallelAgentWorkers(t *testing.T) {
 	}
 	workerIDs := filepath.Join(t.TempDir(), "worker-identities")
 	env, _ := json.Marshal(map[string]string{"WORKER_IDS": workerIDs})
-	command := `if [ "$HOTMOUSE_TASK_TYPE" = execute ]; then printf '%s\n' "$HOTMOUSE_WORKER_ID" >> "$WORKER_IDS"; deadline=$((SECONDS+3)); while [ "$(wc -l < "$WORKER_IDS")" -lt 2 ] && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.02; done; [ "$(wc -l < "$WORKER_IDS")" -ge 2 ] || exit 9; printf '%s' '{"accepted":true,"data":{"description":"confirmed","result":{"type":"progress","detail":"evidence"}}}'; else printf '{}'; fi`
+	command := `if [ "$HOTMOUSE_TASK_TYPE" = execute ]; then printf '%s\n' "$HOTMOUSE_WORKER_ID" >> "$WORKER_IDS"; attempt=0; while [ "$(wc -l < "$WORKER_IDS")" -lt 2 ] && [ "$attempt" -lt 150 ]; do attempt=$((attempt+1)); sleep 0.02; done; [ "$(wc -l < "$WORKER_IDS")" -ge 2 ] || exit 9; printf '%s' '{"accepted":true,"data":{"description":"confirmed","result":{"type":"progress","detail":"evidence"}}}'; else printf '{}'; fi`
 	if _, err := db.SQL.Exec(`UPDATE worker_config SET driver='command',command=?,environment_json=?,worker_count=2,enabled=1 WHERE id=1`, command, string(env)); err != nil {
 		t.Fatal(err)
 	}

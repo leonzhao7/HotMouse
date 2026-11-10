@@ -64,6 +64,8 @@ func (m *Manager) Start(ctx context.Context) <-chan struct{} {
 	go func() {
 		defer close(done)
 		defer m.started.Store(false)
+		m.log("competition.coordinator.start")
+		defer m.log("competition.coordinator.stop")
 		interval := m.Interval
 		if interval <= 0 {
 			interval = time.Second
@@ -92,6 +94,7 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 		cancel()
 	}
 	m.cancelMu.Unlock()
+	m.log("competition.stop_requested", "run", id)
 	m.Wake()
 	return nil
 }
@@ -101,7 +104,7 @@ func (m *Manager) RunOnce(ctx context.Context) {
 	defer m.stepMu.Unlock()
 	ids, err := m.DB.CompetitionRunIDs(ctx, true)
 	if err != nil {
-		m.log("competition.list_failed", "error", err)
+		m.warn("competition.list_failed", "error", err)
 		return
 	}
 	for _, id := range ids {
@@ -119,7 +122,7 @@ func (m *Manager) RunOnce(ctx context.Context) {
 		m.cancelMu.Unlock()
 		if err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
 			_, _ = m.DB.SQL.ExecContext(ctx, `UPDATE competition_runs SET last_error=? WHERE id=? AND status IN ('planning','running','stopping')`, err.Error(), id)
-			m.log("competition.advance_failed", "run", id, "error", err)
+			m.warn("competition.advance_failed", "run", id, "error", err)
 		}
 	}
 }
@@ -127,6 +130,11 @@ func (m *Manager) RunOnce(ctx context.Context) {
 func (m *Manager) log(event string, fields ...any) {
 	if m.Logger != nil {
 		m.Logger.Info(event, fields...)
+	}
+}
+func (m *Manager) warn(event string, fields ...any) {
+	if m.Logger != nil {
+		m.Logger.Warn(event, fields...)
 	}
 }
 func due(deadline string, now time.Time) bool {
@@ -158,6 +166,7 @@ func (m *Manager) advance(ctx context.Context, id string) error {
 		if !due(run.RetryAfter, now) {
 			return nil
 		}
+		m.log("competition.planning.start", "run", id, "attempt", run.PlanningAttempts+1, "challenges", len(run.Items))
 		challenges, err := platform.ListChallenges(ctx)
 		if err == nil {
 			plan := Plan{Summary: "Use the supplied competition rules for every challenge", ChallengeIDs: []string{}}
@@ -181,15 +190,21 @@ func (m *Manager) advance(ctx context.Context, id string) error {
 				return saveErr
 			}
 			if attempts >= 3 {
+				m.warn("competition.planning.failed", "run", id, "attempts", attempts, "error", err)
 				return m.DB.FinishCompetitionRun(ctx, id, "failed", "competition rule planning failed: "+err.Error())
 			}
+			m.warn("competition.planning.retry", "run", id, "attempt", attempts, "retry_in", "5s", "error", err)
 			return err
 		}
 		run, err = m.DB.GetCompetitionRun(ctx, id)
 		if err != nil {
 			return err
 		}
-		m.log("competition.rules_processed", "run", id, "challenges", len(run.Items), "concurrency", run.Concurrency)
+		order := make([]string, 0, len(run.Items))
+		for _, item := range run.Items {
+			order = append(order, item.ChallengeID)
+		}
+		m.log("competition.rules_processed", "run", id, "challenges", len(run.Items), "concurrency", run.Concurrency, "strategy", run.RulesSummary, "challenge_order", order)
 	}
 	remote := map[string]ctfplatform.Challenge{}
 	listed := false
@@ -204,12 +219,18 @@ func (m *Manager) advance(ctx context.Context, id string) error {
 				return ctx.Err()
 			}
 			_, _ = m.DB.SQL.ExecContext(ctx, `UPDATE competition_runs SET last_error=? WHERE id=?`, listErr.Error(), id)
+			if run.LastError != listErr.Error() {
+				m.warn("competition.platform.list_failed", "run", id, "error", listErr, "action", "retry; new challenges wait for platform listing")
+			}
 		} else {
 			listed = true
 			for _, challenge := range challenges {
 				remote[challenge.ID] = challenge
 			}
 			_, _ = m.DB.SQL.ExecContext(ctx, `UPDATE competition_runs SET last_error='' WHERE id=?`, id)
+			if run.LastError != "" {
+				m.log("competition.platform.recovered", "run", id)
+			}
 		}
 	}
 	// Retire old work and release resources before opening any new instances.
@@ -256,6 +277,7 @@ func (m *Manager) advance(ctx context.Context, id string) error {
 					if err := m.DB.SaveCompetitionItem(ctx, item); err != nil {
 						return err
 					}
+					m.warn("competition.challenge_missing", "run", id, "challenge", item.ChallengeID, "error", item.LastError)
 				}
 				continue
 			}
@@ -269,6 +291,7 @@ func (m *Manager) advance(ctx context.Context, id string) error {
 			stamp := now.UTC().Format(time.RFC3339Nano)
 			item.Status, item.StartedAt = "starting", &stamp
 			active++
+			m.log("competition.challenge.starting", "run", id, "challenge", item.ChallengeID, "title", remote[item.ChallengeID].Title, "position", item.Ordinal+1, "total", len(run.Items), "timeout_seconds", run.ChallengeTimeoutSeconds)
 			if err := m.advanceItem(ctx, run, platform, remote, &item); err != nil {
 				return err
 			}
@@ -297,6 +320,7 @@ func terminal(status string) bool {
 
 func (m *Manager) advanceItem(ctx context.Context, run core.CompetitionRun, platform ctfplatform.Platform, remote map[string]ctfplatform.Challenge, item *core.CompetitionItem) error {
 	now := m.Now()
+	previousStatus := item.Status
 	if item.ProjectID == nil && m.Backend.Lookup != nil {
 		project, err := m.Backend.Lookup(ctx, run, item.ChallengeID)
 		if err != nil {
@@ -317,6 +341,7 @@ func (m *Manager) advanceItem(ctx context.Context, run core.CompetitionRun, plat
 		} else if item.ProjectID != nil {
 			item.Status = "running"
 		} else if challenge, known := remote[item.ChallengeID]; known && challenge.InstanceStatus != "pending" && challenge.InstanceStatus != "stop_pending" && due(item.RetryAfter, now) {
+			m.log("competition.challenge.import", "run", run.ID, "challenge", item.ChallengeID, "instance_status", challenge.InstanceStatus)
 			project, err := m.Backend.Import(ctx, run, item.ChallengeID)
 			if err != nil {
 				if ctx.Err() != nil {
@@ -324,6 +349,7 @@ func (m *Manager) advanceItem(ctx context.Context, run core.CompetitionRun, plat
 				}
 				item.LastError = err.Error()
 				item.RetryAfter = now.Add(5 * time.Second).UTC().Format(time.RFC3339Nano)
+				m.warn("competition.challenge.import_failed", "run", run.ID, "challenge", item.ChallengeID, "retry_after", item.RetryAfter, "error", err)
 				var failure *ctfplatform.Error
 				if errors.As(err, &failure) && failure.Code == "challenge_not_found" {
 					item.Status, item.Outcome = "closing", "failed"
@@ -355,18 +381,28 @@ func (m *Manager) advanceItem(ctx context.Context, run core.CompetitionRun, plat
 				if solved || flag.Status != "captured" {
 					continue
 				}
+				m.log("competition.flag.submit", "run", run.ID, "challenge", item.ChallengeID, "project", *item.ProjectID, "flag_id", flag.ID)
 				result, err := m.Backend.Submit(ctx, *item.ProjectID, flag.ID)
 				if err != nil {
 					if ctx.Err() != nil {
 						return ctx.Err()
 					}
 					item.LastError = err.Error()
-				} else if result != nil && result.Correct && result.TotalFlagCount > 0 && result.CorrectFlagCount >= result.TotalFlagCount {
-					solved = true
-					confirmation := remote[item.ChallengeID]
-					confirmation.ID, confirmation.Completed = item.ChallengeID, true
-					confirmation.FlagCount, confirmation.CorrectFlagCount = result.TotalFlagCount, result.CorrectFlagCount
-					remote[item.ChallengeID] = confirmation
+					m.warn("competition.flag.submit_failed", "run", run.ID, "challenge", item.ChallengeID, "flag_id", flag.ID, "error", err)
+				} else if result != nil {
+					fields := []any{"run", run.ID, "challenge", item.ChallengeID, "flag_id", flag.ID, "correct", result.Correct, "accepted_flags", result.CorrectFlagCount, "total_flags", result.TotalFlagCount}
+					if result.Correct {
+						m.log("competition.flag.accepted", fields...)
+					} else {
+						m.warn("competition.flag.rejected", fields...)
+					}
+					if result.Correct && result.TotalFlagCount > 0 && result.CorrectFlagCount >= result.TotalFlagCount {
+						solved = true
+						confirmation := remote[item.ChallengeID]
+						confirmation.ID, confirmation.Completed = item.ChallengeID, true
+						confirmation.FlagCount, confirmation.CorrectFlagCount = result.TotalFlagCount, result.CorrectFlagCount
+						remote[item.ChallengeID] = confirmation
+					}
 				}
 			}
 			if solved {
@@ -391,6 +427,14 @@ func (m *Manager) advanceItem(ctx context.Context, run core.CompetitionRun, plat
 	if item.Status != "closing" {
 		return nil
 	}
+	if previousStatus != "closing" {
+		fields := []any{"run", run.ID, "challenge", item.ChallengeID, "outcome", item.Outcome, "reason", item.LastError, "action", "cancel workers and release instance"}
+		if item.Outcome == "failed" {
+			m.warn("competition.challenge.closing", fields...)
+		} else {
+			m.log("competition.challenge.closing", fields...)
+		}
+	}
 	if item.ProjectID != nil {
 		var err error
 		if item.Outcome == "succeeded" {
@@ -413,6 +457,7 @@ func (m *Manager) advanceItem(ctx context.Context, run core.CompetitionRun, plat
 		return nil
 	}
 	if closer, ok := platform.(ctfplatform.InstanceCloser); ok {
+		m.log("competition.cleanup.start", "run", run.ID, "challenge", item.ChallengeID)
 		closed, err := closer.Close(ctx, item.ChallengeID)
 		if err != nil || !closed.Closed {
 			if ctx.Err() != nil {
@@ -424,18 +469,21 @@ func (m *Manager) advanceItem(ctx context.Context, run core.CompetitionRun, plat
 				item.LastError = "container cleanup not confirmed"
 			}
 			item.RetryAfter = now.Add(5 * time.Second).UTC().Format(time.RFC3339Nano)
+			m.warn("competition.cleanup.retry", "run", run.ID, "challenge", item.ChallengeID, "retry_after", item.RetryAfter, "error", item.LastError)
 			return m.DB.SaveCompetitionItem(ctx, *item)
 		}
+		m.log("competition.cleanup.completed", "run", run.ID, "challenge", item.ChallengeID)
 	}
 	item.Status = item.Outcome
 	item.RetryAfter = ""
 	stamp := now.UTC().Format(time.RFC3339Nano)
 	item.FinishedAt = &stamp
-	m.log("competition.challenge_finished", "run", run.ID, "challenge", item.ChallengeID, "status", item.Status)
+	m.log("competition.challenge_finished", "run", run.ID, "challenge", item.ChallengeID, "status", item.Status, "reason", item.LastError)
 	return m.DB.SaveCompetitionItem(ctx, *item)
 }
 
 func (m *Manager) abort(ctx context.Context, run core.CompetitionRun, message string) error {
+	m.warn("competition.aborted", "run", run.ID, "reason", message)
 	for _, item := range run.Items {
 		if terminal(item.Status) {
 			continue

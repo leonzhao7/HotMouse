@@ -9,7 +9,7 @@ usage() {
 用法：./start.sh [--production] [--help]
 
 默认启动后端及 Vite 开发界面；--production 构建并启动正式界面。
-前端默认监听 http://127.0.0.1:9981，后端默认监听 http://127.0.0.1:9982。
+前端默认监听 http://0.0.0.0:9981，后端默认监听 http://0.0.0.0:9982。
 前端同源代理后端 API。
 按 Ctrl+C 停止前后端。需要 Bash 4.3+、Go/CGO、Node.js、npm、curl 和 setsid。
 
@@ -20,6 +20,7 @@ usage() {
   HOTMOUSE_AUTORUN        自动调度，默认 1；设为 0 关闭
   HOTMOUSE_AUTH_REQUIRED  默认启用认证；设为 0 关闭
   HOTMOUSE_LOG_DIR        日志及运行文件目录，默认 .hotmouse/run
+  HOTMOUSE_LOG_LEVEL      日志级别，默认 info；debug 显示详细诊断
 
 相对的数据库和日志路径以项目根目录为基准。
 HELP
@@ -36,7 +37,7 @@ fail() { printf '错误：%s\n' "$*" >&2; exit 1; }
 if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3) )); then
   fail '需要 Bash 4.3 或更新版本。'
 fi
-for dependency in go node npm curl setsid; do
+for dependency in go node npm curl setsid tail; do
   command -v "$dependency" >/dev/null 2>&1 || fail "缺少 $dependency，请先安装。"
 done
 node -e '
@@ -63,8 +64,8 @@ database="${HOTMOUSE_DB:-$PROJECT_DIR/backend/data/hotmouse.db}"
 log_dir="${HOTMOUSE_LOG_DIR:-$PROJECT_DIR/.hotmouse/run}"
 [[ "$database" == /* ]] || database="$PROJECT_DIR/$database"
 [[ "$log_dir" == /* ]] || log_dir="$PROJECT_DIR/$log_dir"
-backend_url="http://127.0.0.1:$backend_port"
-frontend_url="http://127.0.0.1:$frontend_port"
+backend_url="http://0.0.0.0:$backend_port"
+frontend_url="http://0.0.0.0:$frontend_port"
 
 # Binding checks work without ss/lsof and include wildcard-listener conflicts.
 node --input-type=module - "$backend_port" "$frontend_port" <<'JS'
@@ -73,7 +74,7 @@ for (const port of process.argv.slice(2).map(Number)) {
   await new Promise((resolve, reject) => {
     const server = net.createServer();
     server.once('error', () => reject(new Error(`端口 ${port} 已被占用或无法监听，请停止现有服务或修改端口。`)));
-    server.listen(port, '127.0.0.1', () => server.close(resolve));
+    server.listen(port, '0.0.0.0', () => server.close(resolve));
   }).catch(error => { process.stderr.write(`错误：${error.message}\n`); process.exit(1); });
 }
 JS
@@ -85,6 +86,7 @@ frontend_log="$log_dir/frontend.log"
 backend_pid=''
 frontend_pid=''
 setup_pid=''
+log_pid=''
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
@@ -109,6 +111,10 @@ cleanup() {
       wait "$pid" 2>/dev/null
     fi
   done
+  if [[ -n "$log_pid" ]]; then
+    kill -TERM -- "-$log_pid" 2>/dev/null
+    wait "$log_pid" 2>/dev/null
+  fi
   exit "$status"
 }
 trap cleanup EXIT
@@ -161,25 +167,29 @@ wait_ready() {
 
 printf '启动后端（自动调度：%s）…\n' "$autorun"
 setsid bash -c 'cd -- "$1" || exit; shift; exec "$@"' hotmouse-backend "$PROJECT_DIR/backend" \
-  "$log_dir/hotmouse" serve --addr "127.0.0.1:$backend_port" --db "$database" --autorun="$autorun" \
+  "$log_dir/hotmouse" serve --addr "0.0.0.0:$backend_port" --db "$database" --autorun="$autorun" \
   >"$backend_log" 2>&1 &
 backend_pid=$!
+# Keep the file for later inspection and stream the same diagnostics to the
+# terminal, including startup and long-running competition/worker progress.
+setsid tail -n +1 -f -- "$backend_log" >&2 &
+log_pid=$!
 wait_ready "$backend_pid" "$backend_url/healthz" "$backend_log" 后端
 
 printf '启动前端（%s）…\n' "$mode"
 if [[ "$mode" == production ]]; then
-  HOST=127.0.0.1 PORT="$frontend_port" HOTMOUSE_BACKEND_URL="$backend_url" \
+  HOST=0.0.0.0 PORT="$frontend_port" HOTMOUSE_BACKEND_URL="$backend_url" \
     setsid node "$PROJECT_DIR/frontend/server.mjs" >"$frontend_log" 2>&1 &
 else
   HOTMOUSE_BACKEND_URL="$backend_url" setsid bash -c 'cd -- "$1" || exit; shift; exec "$@"' \
     hotmouse-frontend "$PROJECT_DIR/frontend" node ./node_modules/vite/bin/vite.js \
-    --host 127.0.0.1 --port "$frontend_port" --strictPort >"$frontend_log" 2>&1 &
+    --host 0.0.0.0 --port "$frontend_port" --strictPort >"$frontend_log" 2>&1 &
 fi
 frontend_pid=$!
 wait_ready "$frontend_pid" "$frontend_url/" "$frontend_log" 前端
 wait_ready "$frontend_pid" "$frontend_url/healthz" "$frontend_log" 前端代理
 
-printf '\nHotMouse 已启动\n  前端：%s\n  后端：%s\n  数据库：%s\n  日志：%s\n\n前端已配置后端 API 同源代理。按 Ctrl+C 停止前后端。\n' \
+printf '\nHotMouse 已启动\n  前端：%s\n  后端：%s\n  数据库：%s\n  日志：%s\n\n后端日志实时显示在此终端，并保存到 backend.log。按 Ctrl+C 停止前后端。\n' \
   "$frontend_url" "$backend_url" "$database" "$log_dir"
 status=0
 wait -n "$backend_pid" "$frontend_pid" || status=$?

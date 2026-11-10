@@ -159,6 +159,8 @@ func (r *Runner) analyzeTargetProbe(parent context.Context, project, runID strin
 		return err
 	}
 	history := r.historyStart(project, "", "target_probe", time.Now().UTC().Format(time.RFC3339Nano), worker)
+	cfg.identity, cfg.logger = worker, r.logger
+	r.setTaskLogger(history, r.processLogger(cfg, project, "", "target_probe"))
 	r.logger.Printf("target probe analysis project=%s", project)
 	var analysis core.TargetProbeAnalysis
 	var payload []byte
@@ -208,6 +210,7 @@ func (r *Runner) analyzeTargetProbe(parent context.Context, project, runID strin
 		}
 		r.historyFinish(history, "failed", err.Error())
 		retry := time.Now().Add(5 * time.Second).UTC().Format(time.RFC3339Nano)
+		r.processLogger(cfg, project, "", "target_probe").Warn("target.analysis.retry", "retry_after", retry, "error", err)
 		if _, recordErr := r.DB.RecordTargetProbeAnalysisFailure(ctx, project, runID, err.Error(), retry); recordErr != nil {
 			r.logger.Printf("target probe analysis failure project=%s: %v", project, recordErr)
 		}
@@ -293,8 +296,19 @@ func (r *Runner) monitorTargets(ctx context.Context, project string, state core.
 			r.logger.Printf("target probe recording project=%s: %v", project, err)
 			return
 		}
+		for i, message := range errors {
+			previous := 0
+			if i < len(current.ConsecutiveFailures) {
+				previous = current.ConsecutiveFailures[i]
+			}
+			if message != "" {
+				r.logger.Warn("target.probe.failed", "project", project, "target", state.Analysis.Targets[i].Address(), "consecutive_failures", previous+1, "failure_limit", 3, "error", message)
+			} else if previous > 0 {
+				r.logger.Info("target.probe.recovered", "project", project, "target", state.Analysis.Targets[i].Address(), "previous_failures", previous)
+			}
+		}
 		if failed {
-			r.logger.Printf("project failed project=%s: target unreachable for three consecutive probe windows", project)
+			r.logger.Warn("project.failed", "project", project, "reason", "target unreachable for three consecutive probe windows")
 			return
 		}
 	}
