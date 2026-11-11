@@ -10,6 +10,7 @@ COPY backend/go.mod backend/go.sum ./
 RUN --mount=type=cache,id=hotmouse-go-mod,target=/go/pkg/mod go mod download
 COPY backend/cmd ./cmd
 COPY backend/internal ./internal
+COPY backend/skills ./skills
 RUN --mount=type=cache,id=hotmouse-go-mod,target=/go/pkg/mod \
     --mount=type=cache,id=hotmouse-go-build,target=/root/.cache/go-build \
     CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/hotmouse ./cmd/hotmouse
@@ -37,8 +38,16 @@ RUN --mount=type=cache,id=hotmouse-apt-lists,target=/var/lib/apt/lists,sharing=l
     && rm -f /etc/apt/apt.conf.d/docker-clean \
     && apt-get -o Acquire::Retries=3 -o Acquire::http::Pipeline-Depth=0 update \
     && apt-get -o Acquire::Retries=3 -o Acquire::http::Pipeline-Depth=0 install -y --no-install-recommends \
-       bash ca-certificates curl git openssl python3 python3-venv \
-       ripgrep sqlite3 tini unzip util-linux
+       bash binutils ca-certificates curl ffuf file gdb git jq netcat-openbsd \
+       nmap openssh-client openssl p7zip-full python3 python3-venv ripgrep \
+       socat sqlmap sqlite3 squashfs-tools sshpass tini unzip util-linux xz-utils
+
+# Prepare Python tools before a task starts; agents reuse this interpreter.
+COPY docker/toolkit-requirements.txt /opt/hotmouse/toolkit-requirements.txt
+RUN --mount=type=cache,id=hotmouse-pip,target=/root/.cache/pip \
+    python3 -m venv /opt/hotmouse/venv \
+    && /opt/hotmouse/venv/bin/python -m pip install -r /opt/hotmouse/toolkit-requirements.txt \
+    && /opt/hotmouse/venv/bin/python -c 'import requests, jwt, flask, pwn, sympy, Crypto'
 
 ARG AGENT_PACKAGES="@openai/codex@0.167.0 @anthropic-ai/claude-code@2.1.318 @mariozechner/pi-coding-agent@0.73.1"
 ARG NPM_REGISTRY=https://registry.npmjs.org
@@ -67,10 +76,14 @@ COPY frontend/server.mjs ./frontend/server.mjs
 COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/hotmouse-entrypoint
 COPY LICENSE /usr/share/doc/hotmouse/LICENSE
 COPY backend/internal/knowledge/LICENSE.sapper-v2 backend/internal/knowledge/DISCLAIMER.sapper-v2.md backend/internal/knowledge/NOTICE.md /usr/share/doc/hotmouse/sapper-v2/
+COPY backend/pentest_toolkit /usr/local/share/hotmouse/pentest_toolkit
 
 ENV NODE_ENV=production \
     HOTMOUSE_LOG_LEVEL=debug \
     HOTMOUSE_LOG_ENV=1 \
+    HOTMOUSE_PENTEST_TOOLKIT_DIR=/usr/local/share/hotmouse/pentest_toolkit \
+    HOTMOUSE_PYTHON=/opt/hotmouse/venv/bin/python \
+    PATH=/opt/hotmouse/venv/bin:$PATH \
     HOST=0.0.0.0 \
     PORT=9981 \
     HOTMOUSE_ADDR=127.0.0.1:9982 \
@@ -99,13 +112,7 @@ VOLUME ["/data", "/home/node"]
 # target keeps HotMouse's offline CTF knowledge and native CLI tools, but runs
 # one bounded platform task instead of starting the workbench service.
 FROM runtime AS ctfy-agent
-USER root
-RUN --mount=type=cache,id=hotmouse-apt-lists,target=/var/lib/apt/lists,sharing=locked \
-    --mount=type=cache,id=hotmouse-apt-cache,target=/var/cache/apt,sharing=locked \
-    apt-get -o Acquire::Retries=3 update \
-    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends openssh-client sshpass
 COPY --from=backend-build /out/ctfy-agent /usr/local/bin/ctfy-agent
-USER node
 HEALTHCHECK NONE
 ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/ctfy-agent"]
 

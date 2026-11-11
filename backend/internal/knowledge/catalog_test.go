@@ -19,7 +19,7 @@ func testCatalog(t *testing.T) *Catalog {
 func TestBundleProvenanceAndRecordIsolation(t *testing.T) {
 	c := testCatalog(t)
 	info := c.Info()
-	if info.EntryCount != 56 || info.SkillCount != 2 || info.Commit != "ba3d3d49a3211b7d26e96cee9df9788506c3e16c" || info.License != "MIT" {
+	if info.EntryCount != 56 || info.SkillCount != 13 || info.Commit != "ba3d3d49a3211b7d26e96cee9df9788506c3e16c" || info.License != "MIT" {
 		t.Fatalf("incomplete migration: %+v", info)
 	}
 	entries := c.List("")
@@ -84,7 +84,7 @@ func TestExportWorksOfflineIsIdempotentAndPreservesEdits(t *testing.T) {
 	if err := c.Export(root); err != nil {
 		t.Fatalf("identical bundle cannot be reused: %v", err)
 	}
-	for _, name := range []string{"LICENSE.sapper-v2", "provenance.json", "skills/hotmouse-ctf/references/verification.md", "entries/kb056.json"} {
+	for _, name := range []string{"LICENSE.sapper-v2", "provenance.json", "skills/hotmouse-ctf/references/verification.md", "skills/README.md", "skills/web-exploit/SKILL.md", "skills/flag-hunting/SKILL.md", "entries/kb056.json"} {
 		if _, err := os.ReadFile(filepath.Join(root, name)); err != nil {
 			t.Fatalf("missing exported resource %s: %v", name, err)
 		}
@@ -114,5 +114,20 @@ func TestExportRejectsSymlinkDirectory(t *testing.T) {
 	entries, err := os.ReadDir(outside)
 	if err != nil || len(entries) != 0 {
 		t.Fatal("export wrote through the symlink")
+	}
+}
+
+func TestExportPreservesImportedSkillEdits(t *testing.T) {
+	c := testCatalog(t)
+	root := t.TempDir()
+	if err := c.Export(root); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(root, "skills", "web-exploit", "SKILL.md")
+	if err := os.WriteFile(file, []byte("operator's adapted skill"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Export(root); err == nil || !strings.Contains(err.Error(), "different content") {
+		t.Fatalf("imported skill overwritten: %v", err)
 	}
 }

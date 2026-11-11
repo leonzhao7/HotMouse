@@ -79,7 +79,18 @@ TSec 整场比赛可挂载规则文件，并设置 `HOTMOUSE_COMPETITION_RULES_F
 
 `build.sh` 自动转发当前 shell 的 HTTP(S) 代理及 `NO_PROXY`，兼容大小写变量。代理仅监听宿主机回环地址时，Linux 构建可追加 `--network=host`；代理连接信息使用 Docker 的预定义构建参数，不保存为镜像环境变量。
 
-从根目录直接构建的等价命令：`DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile -t hotmouse:latest .`。`Dockerfile.dockerignore` 仅允许必要的源码、依赖清单、入口脚本和许可证进入构建上下文，排除本机数据库、Worker 产物、登录信息及 `.env` 文件。
+从根目录直接构建的等价命令：`DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile -t hotmouse:latest .`。`Dockerfile.dockerignore` 允许必要的源码、`backend/skills`、`backend/pentest_toolkit`、依赖清单、入口脚本和许可证进入构建上下文，排除本机数据库、Worker 产物、登录信息及 `.env` 文件。
+
+工作台、TSec 与 CTFy 镜像都带有 13 个内置技能，以及 `/usr/local/share/hotmouse/pentest_toolkit`
+下的共享脚本、字典与离线资料。Agent 提示词会提供索引和绝对路径，专项技能按证据读取。
+工具库只复制一次，Worker 在自己的工作区保存输出。需要换工具库时可只读挂载其它目录，
+并通过 `HOTMOUSE_PENTEST_TOOLKIT_DIR` 指定容器内路径。
+
+镜像预装 nmap、ffuf、sqlmap、gdb、binutils、7z、unsquashfs、jq、nc、socat、SSH 与
+sshpass。`docker/toolkit-requirements.txt` 的 Python 工具在构建时安装到
+`/opt/hotmouse/venv`，包含 requests、PyJWT、Flask、pwntools、sympy、pycryptodome、
+ROPgadget 和 git-dumper。`HOTMOUSE_PYTHON` 指向此解释器，venv 的 bin 目录加入 PATH。
+nuclei 模板作为离线资料提供，radare2、binwalk、etcdctl 等可选工具以实际能力清单为准。
 
 ## 终端日志
 

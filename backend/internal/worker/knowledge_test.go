@@ -19,22 +19,30 @@ func TestCommandWorkerCanReadKnowledgeAndCommitResult(t *testing.T) {
 	}
 	r, p := strategyWorker(t)
 	s := workerStep(t, r, p, "inspect the supplied RSA crypto parameters")
+	toolkit := toolkitFixture(t)
 	script := filepath.Join(t.TempDir(), "read_knowledge.py")
-	code := `import json, os, pathlib
+	code := `import json, os, pathlib, subprocess, sys
 assert os.environ['HOTMOUSE_SKILL'] == 'hotmouse-ctf'
 root = pathlib.Path(os.environ['HOTMOUSE_KNOWLEDGE_DIR'])
 entry = json.loads((root / 'entries/kb041.json').read_text())
 assert entry['id'] == 'kb041' and entry['detail']
 assert 'kb041.json' in os.environ['HOTMOUSE_WORKER_PROMPT']
 assert pathlib.Path(os.environ['HOTMOUSE_SKILL_FILE']).is_file()
+skills = pathlib.Path(os.environ['HOTMOUSE_SKILLS_DIR'])
+assert 'name: web-exploit' in (skills / 'web-exploit/SKILL.md').read_text()
+assert 'name: flag-hunting' in os.environ['HOTMOUSE_WORKER_PROMPT']
+toolkit = pathlib.Path(os.environ['HOTMOUSE_PENTEST_TOOLKIT_DIR'])
+assert str(toolkit) in os.environ['HOTMOUSE_WORKER_PROMPT']
+decoded = subprocess.check_output([sys.executable, str(toolkit / 'weapons/decode.py'), 'aG90bW91c2U='], text=True).strip()
+assert decoded == 'hotmouse'
 evidence = pathlib.Path(os.environ['HOTMOUSE_WORKSPACE_DIR']) / 'lookup.json'
-evidence.write_text(json.dumps({'reference_id': entry['id'], 'title': entry['title']}))
+evidence.write_text(json.dumps({'reference_id': entry['id'], 'title': entry['title'], 'tool_result': decoded}))
 print(json.dumps({'accepted': True, 'data': {'description': 'Offline crypto method available; no target assertion', 'result': {'type': 'progress', 'detail': str(evidence), 'evidence': {'reference_id': entry['id']}}}}))
 `
 	if err := os.WriteFile(script, []byte(code), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	environment, _ := json.Marshal(map[string]string{"KNOWLEDGE_TEST_PYTHON": python, "KNOWLEDGE_TEST_SCRIPT": script})
+	environment, _ := json.Marshal(map[string]string{"KNOWLEDGE_TEST_PYTHON": python, "KNOWLEDGE_TEST_SCRIPT": script, toolkitDirectoryVariable: toolkit})
 	if _, err := r.DB.SQL.Exec(`UPDATE worker_config SET driver='command',command=?,environment_json=? WHERE id=1`, `"$KNOWLEDGE_TEST_PYTHON" "$KNOWLEDGE_TEST_SCRIPT"`, string(environment)); err != nil {
 		t.Fatal(err)
 	}
@@ -80,6 +88,12 @@ func TestCommandVarsBindSkillsAndReadableKnowledgeByRole(t *testing.T) {
 		if _, err := os.ReadFile(vars["HOTMOUSE_SKILL_FILE"]); err != nil {
 			t.Fatal("agent cannot read active skill", err)
 		}
+		for _, name := range []string{"flag-hunting", "web-exploit", "binary-pwn", "cloud-exploit"} {
+			file := filepath.Join(vars["HOTMOUSE_SKILLS_DIR"], name, "SKILL.md")
+			if _, err := os.ReadFile(file); err != nil || !strings.Contains(vars["HOTMOUSE_WORKER_PROMPT"], file) {
+				t.Fatalf("specialist skill inaccessible: %s %v", file, err)
+			}
+		}
 		if task.task == "execute" {
 			var view struct {
 				Knowledge []knowledge.Summary `yaml:"related_knowledge"`
@@ -106,6 +120,9 @@ func TestProbeAndRecoveryDoNotReceiveExecutionSkill(t *testing.T) {
 		vars := map[string]string{"HOTMOUSE_WORKER_PROMPT": "stage-specific contract"}
 		if err := bindKnowledge(vars, task, ""); err != nil {
 			t.Fatal(err)
+		}
+		if err := bindToolkit(vars, workerConfig{env: map[string]string{toolkitDirectoryVariable: "/missing/toolkit"}}, task); err != nil {
+			t.Fatal("non-action stage tried to bind toolkit", err)
 		}
 		if vars["HOTMOUSE_SKILL"] != "" || vars["HOTMOUSE_WORKER_PROMPT"] != "stage-specific contract" {
 			t.Fatalf("%s received action guidance", task)

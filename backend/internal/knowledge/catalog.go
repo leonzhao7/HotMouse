@@ -16,10 +16,34 @@ import (
 	"unicode"
 
 	"gopkg.in/yaml.v3"
+	"hotmouse/backend/skills"
 )
 
 //go:embed entries/*.json skills/*/SKILL.md skills/*/references/*.md provenance.json NOTICE.md LICENSE.sapper-v2 DISCLAIMER.sapper-v2.md
 var resources embed.FS
+
+// walkResources merges the original reference bundle and the imported skills.
+// Both catalog versioning and export use these same names and bytes.
+func walkResources(visit func(string, []byte) error) error {
+	for _, source := range []struct {
+		files  fs.FS
+		prefix string
+	}{{resources, ""}, {skills.Resources, "skills"}} {
+		if err := fs.WalkDir(source.files, ".", func(name string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return err
+			}
+			data, err := fs.ReadFile(source.files, name)
+			if err != nil {
+				return err
+			}
+			return visit(path.Join(source.prefix, name), data)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 type Entry struct {
 	ID          string   `json:"id" yaml:"id"`
@@ -153,40 +177,29 @@ func load() (*Catalog, error) {
 	for token, count := range frequency {
 		c.idf[token] = math.Log(1 + float64(len(files))/float64(count))
 	}
-	skillFiles, err := fs.Glob(resources, "skills/*/SKILL.md")
-	if err != nil {
-		return nil, err
-	}
-	for _, name := range skillFiles {
-		data, err := resources.ReadFile(name)
-		if err != nil {
-			return nil, err
+	seenSkills := map[string]bool{}
+	digest := sha256.New()
+	if err := walkResources(func(name string, data []byte) error {
+		fmt.Fprintf(digest, "%s\x00%d\x00", name, len(data))
+		_, _ = digest.Write(data)
+		if !strings.HasPrefix(name, "skills/") || path.Base(name) != "SKILL.md" {
+			return nil
 		}
 		parts := strings.SplitN(string(data), "---", 3)
 		var skill Skill
 		if len(parts) != 3 || strings.TrimSpace(parts[0]) != "" {
-			return nil, fmt.Errorf("invalid skill frontmatter %s", name)
+			return fmt.Errorf("invalid skill frontmatter %s", name)
 		}
 		if err := yaml.Unmarshal([]byte(parts[1]), &skill); err != nil {
-			return nil, fmt.Errorf("skill %s: %w", name, err)
+			return fmt.Errorf("skill %s: %w", name, err)
 		}
-		if skill.Name != path.Base(path.Dir(name)) || skill.Description == "" {
-			return nil, fmt.Errorf("invalid skill metadata %s", name)
+		if skill.Name != path.Base(path.Dir(name)) || skill.Description == "" || seenSkills[skill.Name] {
+			return fmt.Errorf("invalid or duplicate skill metadata %s", name)
 		}
+		seenSkills[skill.Name] = true
 		skill.Content = string(data)
 		c.skills = append(c.skills, skill)
-	}
-	digest := sha256.New()
-	if err := fs.WalkDir(resources, ".", func(name string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return err
-		}
-		data, err := resources.ReadFile(name)
-		if err == nil {
-			fmt.Fprintf(digest, "%s\x00%d\x00", name, len(data))
-			_, _ = digest.Write(data)
-		}
-		return err
+		return nil
 	}); err != nil {
 		return nil, err
 	}

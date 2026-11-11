@@ -1711,6 +1711,9 @@ func (r *Runner) commandVars(ctx context.Context, project, step, description, gr
 	if err := bindKnowledge(vars, taskType, graph); err != nil {
 		return nil, err
 	}
+	if err := bindToolkit(vars, cfg, taskType); err != nil {
+		return nil, err
+	}
 	if err := r.bindFastWorkflow(ctx, vars, cfg, graph, taskType); err != nil {
 		return nil, err
 	}

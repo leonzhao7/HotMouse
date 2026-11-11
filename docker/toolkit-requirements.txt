@@ -1,0 +1,10 @@
+# Installed at image build time, shared by the toolkit and task scripts.
+requests==2.32.5
+PyJWT==2.10.1
+Flask==3.1.2
+pwntools==4.14.1
+capstone==5.0.3
+sympy==1.14.0
+pycryptodome==3.23.0
+ROPgadget==7.6
+git-dumper==1.0.8

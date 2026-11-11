@@ -57,7 +57,9 @@ def command(args):
 
 
 def capabilities():
-    packages = {"sympy": "sympy", "pwn": "pwntools", "scapy.all": "scapy",
+    packages = {"requests": "requests", "jwt": "PyJWT", "flask": "Flask",
+                "itsdangerous": "itsdangerous",
+                "sympy": "sympy", "pwn": "pwntools", "scapy.all": "scapy",
                 "Crypto.Cipher.ChaCha20": "pycryptodome",
                 "Cryptodome.Cipher.ChaCha20": "pycryptodomex",
                 "cryptography": "cryptography", "gmpy2": "gmpy2",
@@ -84,8 +86,11 @@ def capabilities():
         imports = dict(pool.map(check, packages.items()))
     tool_path = str(Path(sys.prefix) / "bin") + os.pathsep + os.environ.get("PATH", "")
     tools = {name: shutil.which(name, path=tool_path) for name in
-             ("curl", "unzip", "file", "strings", "readelf", "objdump", "strace",
-              "upx", "tshark", "tcpdump", "ROPgadget", "gdb", "rizin", "radare2", "dotnet")}
+             ("curl", "rg", "jq", "nmap", "nc", "socat", "ssh", "sshpass",
+              "ffuf", "sqlmap", "git-dumper", "unzip", "7z", "unsquashfs",
+              "file", "strings", "readelf", "objdump", "strace", "binwalk",
+              "etcdctl", "nuclei", "upx", "tshark", "tcpdump", "ROPgadget",
+              "gdb", "rizin", "radare2", "dotnet")}
     return {"python": sys.executable, "prefix": sys.prefix, "version": sys.version.split()[0],
             "tools": tools, "imports": imports,
             "namespace_note": "pycryptodome imports Crypto; pycryptodomex imports Cryptodome. "

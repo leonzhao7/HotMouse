@@ -37,7 +37,7 @@ export default function Knowledge() {
         <ResourceState resource={info}>
           <p>
             {info.data?.entry_count} 条离线知识 · {info.data?.skill_count}{" "}
-            个技能 · 来源 sapper-v2
+            个技能 · 知识来源 sapper-v2
           </p>
           <p>
             Dispatcher 和 Worker 会根据当前目标、步骤与事实检索相关方法。

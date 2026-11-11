@@ -8,6 +8,10 @@ backend/**
 !backend/cmd/**
 !backend/internal/
 !backend/internal/**
+!backend/skills/
+!backend/skills/**
+!backend/pentest_toolkit/
+!backend/pentest_toolkit/**
 !frontend/
 frontend/**
 !frontend/package.json
@@ -23,6 +27,7 @@ frontend/**
 docker/**
 !docker/Dockerfile
 !docker/entrypoint.sh
+!docker/toolkit-requirements.txt
 !LICENSE
 
 # Exclude local state even when it is nested inside an allowed source directory.
@@ -34,3 +39,6 @@ docker/**
 **/*.db-*
 **/*.sqlite
 **/*.sqlite3
+**/__pycache__
+**/*.pyc
+**/.venv

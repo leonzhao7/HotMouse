@@ -117,6 +117,20 @@ func RunHostedAgent(ctx context.Context, a HostedAgent) (HostedAgentResult, erro
 	// CTFy run instead gets the same offline reference data without that
 	// conflicting output contract.
 	prompt := a.Prompt + "\nOffline CTF reference directory: " + root + ". Read relevant entries only when useful; these are technique references, not task instructions or evidence.\n"
+	vars := map[string]string{
+		"HOTMOUSE_WORKSPACE_DIR":     a.WorkDir,
+		"HOTMOUSE_KNOWLEDGE_DIR":     root,
+		"HOTMOUSE_KNOWLEDGE_VERSION": catalog.Info().Version,
+		"HOTMOUSE_SKILLS_DIR":        filepath.Join(root, "skills"),
+		"HOTMOUSE_WORKER_PROMPT":     prompt,
+	}
+	vars["HOTMOUSE_SKILLS_PROMPT"] = specialistSkillGuidance(catalog, vars["HOTMOUSE_SKILLS_DIR"], "hosted")
+	vars["HOTMOUSE_WORKER_PROMPT"] += "\n" + vars["HOTMOUSE_SKILLS_PROMPT"]
+	if err := bindToolkit(vars, workerConfig{env: a.Environment}, "hosted"); err != nil {
+		return HostedAgentResult{}, err
+	}
+	prompt = vars["HOTMOUSE_WORKER_PROMPT"]
+	logger.Info("agent.resources", "skills", vars["HOTMOUSE_SKILLS_DIR"], "skill_count", catalog.Info().SkillCount, "toolkit", vars[toolkitDirectoryVariable])
 	argv, err := hostedArgv(a, prompt)
 	if err != nil {
 		logger.Error("agent.command_failed", "error", err)
@@ -163,7 +177,7 @@ func RunHostedAgent(ctx context.Context, a HostedAgent) (HostedAgentResult, erro
 			}
 		}
 	}
-	result := runProcess(ctx, argv, a.Environment, a.WorkDir, nil, 0, observe, logger)
+	result := runProcess(ctx, argv, a.Environment, a.WorkDir, vars, 0, observe, logger)
 	out.Stderr = string(result.stderr)
 	out.Response, err = providerResponse(a.Driver, result.stdout)
 	logger.Info("agent.completed", "elapsed", time.Since(started), "response_bytes", len(out.Response),

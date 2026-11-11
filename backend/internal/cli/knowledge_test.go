@@ -41,7 +41,7 @@ func TestKnowledgeCLIWorksWithNoServerAndExportsSkills(t *testing.T) {
 	if len(array(call(0, "kb", "list"))) != 56 || object(call(0, "kb", "show", "kb041"))["detail"] == "" {
 		t.Fatal("offline full content missing")
 	}
-	if len(array(call(0, "kb", "skills"))) != 2 || object(call(0, "kb", "skill", "hotmouse-ctf"))["content"] == "" {
+	if len(array(call(0, "kb", "skills"))) != 13 || object(call(0, "kb", "skill", "hotmouse-ctf"))["content"] == "" || object(call(0, "kb", "skill", "web-exploit"))["content"] == "" {
 		t.Fatal("offline skills missing")
 	}
 	export := filepath.Join(directory, "bundle")

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kataras/iris/v12"
@@ -53,13 +54,17 @@ func TestKnowledgeAPISearchDetailAndAuthentication(t *testing.T) {
 	}
 	var info knowledge.Info
 	get("/api/knowledge", 200, &info)
-	if info.SkillCount != 2 || info.EntryCount != 56 {
+	if info.SkillCount != 13 || info.EntryCount != 56 {
 		t.Fatal("API bundle info missing")
 	}
 	var skill knowledge.Skill
 	get("/api/knowledge/skills/hotmouse-ctf", 200, &skill)
 	if skill.Content == "" {
 		t.Fatal("API skill body missing")
+	}
+	get("/api/knowledge/skills/web-exploit", 200, &skill)
+	if skill.Name != "web-exploit" || !strings.Contains(skill.Content, "name: web-exploit") {
+		t.Fatal("API imported skill missing")
 	}
 	get("/api/knowledge/entries/kb999", 404, nil)
 	get("/api/knowledge/skills/unknown", 404, nil)

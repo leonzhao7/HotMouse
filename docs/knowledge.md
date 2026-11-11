@@ -1,7 +1,8 @@
 # sapper-v2 技能与 CTF 知识迁移
 
 HotMouse 内置 sapper-v2 的 56 条离线知识，以及适配后的
-`hotmouse-dispatcher`、`hotmouse-ctf` 两个技能。知识随 Go 二进制分发，本地和
+`hotmouse-dispatcher`、`hotmouse-ctf` 两个角色技能，并接入 `backend/skills`
+的 11 个专项技能，共 13 个。知识与技能随 Go 二进制分发，本地和
 Docker 中均可使用。项目页的 **CTF 知识** 标签可按关键词和分类检索，查看
 条目方法、命令示例、来源与技能全文。
 
@@ -20,6 +21,7 @@ go build -o hotmouse ./cmd/hotmouse
 ./hotmouse kb show kb041 --output yaml
 ./hotmouse kb skills
 ./hotmouse kb skill hotmouse-dispatcher --select content
+./hotmouse kb skill web-exploit --select content
 ./hotmouse kb export ./ctf-reference
 ```
 
@@ -56,10 +58,39 @@ flag”一类通用词不触发自动召回，完整日志和整库正文不会�
 | `HOTMOUSE_KNOWLEDGE_DIR` | 完整知识与参考资料目录 |
 | `HOTMOUSE_KNOWLEDGE_VERSION` | 内容版本 |
 | `HOTMOUSE_KNOWLEDGE_PROMPT` | 本次技能与读取说明 |
+| `HOTMOUSE_SKILLS_DIR` | 全部角色与专项技能的绝对目录 |
+| `HOTMOUSE_SKILLS_PROMPT` | 专项技能索引、总纲与运行时适配说明 |
+| `HOTMOUSE_PENTEST_TOOLKIT_DIR` | 共享工具库绝对目录 |
+| `HOTMOUSE_PENTEST_TOOLKIT_PROMPT` | 本地工具与离线资料的入口说明 |
 
 提示词列出相关条目的绝对路径，CLI 不在 PATH 时也可直接读取 JSON。目标服务
 分类和执行恢复总结保留各自的阶段约束，不加载执行技能。恢复总结继续只整理
 保存的证据，不开展新检查。
+
+## 导入的专项技能与工具库
+
+`backend/skills` 是专项技能源码，构建时直接嵌入，不维护另一份 `.agents/skills`
+镜像。默认执行总纲为 `flag-hunting`，专项技能覆盖侦察、Web、认证、过滤、代码
+执行、云、二进制、逆向、多阶段与检测验证。提示词列出各技能的描述及绝对路径，
+Agent 根据现有证据读取所需正文。Dispatcher 只用来规划，执行 Worker 仍只处理
+当前 Step。原文中的 PI、driver、Cairn 和 memory 约定由运行时适配到当前 Agent、
+协调器、Finding/result、事实图与工作区证据。CTFy 同样接收专项技能，遵循平台
+自己的结果和提交协议。
+
+`backend/pentest_toolkit` 的脚本、字典、playbook、HackTricks、nuclei 模板和
+ExploitDB 保持在共享磁盘目录，避免为每个 Worker 复制整库。运行时从服务 cwd、
+二进制位置和工作区向上发现 `pentest_toolkit` 或 `backend/pentest_toolkit`。
+Docker 三种镜像都将工具库复制到 `/usr/local/share/hotmouse/pentest_toolkit`。
+环境变量 `HOTMOUSE_PENTEST_TOOLKIT_DIR` 可指定其它位置，Worker/Dispatcher
+保存的 provider environment 同名设置优先；显式配置的无效路径会报错。
+独立二进制未发现工具库时仍可使用内置知识与技能。
+
+提示词提供现象索引、各资料目录和脚本目录，只读取相关资料。执行脚本使用绝对
+路径，当前 cwd 保持在 Worker 工作区；输出、脚本改版、auth_queue 数据库和证据
+均写在自己的工作区。共享索引不回填修改。工具是否可用以实际能力清单为准；
+Docker 在构建时安装常用命令与 Python 依赖，见 [Docker 文档](../docker/README.md)。
+工具库根目录的独立 `go.mod` 将 ExploitDB 中的 Go/C 示例排除在后端 `go test ./...`
+之外，它们仍可作为文件读取和按需改编。
 
 ## 研究结论与适配
 
@@ -85,7 +116,8 @@ kb022、kb023、kb024、kb025、kb053）调整了 sapper 命令、平台配置�
 原 MIT 许可证和免责声明随知识包保留。
 
 KB 是方法参考，不是当前项目的已确认事实。历史 CVE、产品版本范围、赛制和
-工具预装假设须根据当前证据确认。工具和 nuclei 模板仍由运行环境提供。
+工具预装假设须根据当前证据确认。工具库和 nuclei 模板由上述共享目录提供，
+命令及可选依赖以运行环境为准。
 跨项目学习继续使用已有 `experience` 存储，知识召回不会写入项目事实或经验表。
 具体图协议见 [strategy.md](strategy.md)。
 

@@ -3,7 +3,6 @@ package knowledge
 import (
 	"bytes"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -15,16 +14,12 @@ func (c *Catalog) Export(root string) error {
 	if err != nil {
 		return err
 	}
-	return fs.WalkDir(resources, ".", func(name string, item fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
+	if err := ensureDirectory(root); err != nil {
+		return err
+	}
+	return walkResources(func(name string, data []byte) error {
 		destination := filepath.Join(root, filepath.FromSlash(name))
-		if item.IsDir() {
-			return ensureDirectory(destination)
-		}
-		data, err := resources.ReadFile(name)
-		if err != nil {
+		if err := ensureDirectory(filepath.Dir(destination)); err != nil {
 			return err
 		}
 		info, err := os.Lstat(destination)
