@@ -14,25 +14,31 @@ func decodeObject(raw []byte, out *map[string]json.RawMessage) error {
 	if segment == "" {
 		return fmt.Errorf("JSON object not found")
 	}
-	fenced := false
 	if !strings.HasPrefix(segment, "{") && !strings.HasPrefix(segment, "[") {
 		matches := responseFence.FindAllStringSubmatchIndex(segment, -1)
 		if len(matches) > 0 {
-			if len(matches) != 1 {
-				return fmt.Errorf("expected exactly one JSON response")
-			}
 			m := matches[0]
-			if strings.ContainsAny(segment[:m[0]]+segment[m[1]:], "{}[]\x60") {
+			if hasJSONResponse(segment[:m[0]]) || hasJSONResponse(segment[m[1]:]) {
 				return fmt.Errorf("ambiguous JSON outside response fence")
 			}
 			segment = strings.TrimSpace(segment[m[2]:m[3]])
-			fenced = true
 		} else if strings.HasPrefix(segment, "\x60\x60\x60") {
 			return fmt.Errorf("unclosed JSON response fence")
 		} else {
 			start := strings.IndexByte(segment, '{')
 			if start < 0 {
 				return fmt.Errorf("JSON object not found")
+			}
+			// Do not extract a nested object from a prose-prefixed JSON array.
+			for offset, char := range segment[:start] {
+				if char != '[' {
+					continue
+				}
+				decoder := json.NewDecoder(strings.NewReader(segment[offset:]))
+				var response json.RawMessage
+				if decoder.Decode(&response) == nil && decoder.InputOffset() > int64(start-offset) {
+					return fmt.Errorf("JSON response must be an object")
+				}
 			}
 			segment = segment[start:]
 		}
@@ -43,7 +49,7 @@ func decodeObject(raw []byte, out *map[string]json.RawMessage) error {
 		return fmt.Errorf("invalid JSON response")
 	}
 	remainder := strings.TrimSpace(segment[decoder.InputOffset():])
-	if remainder != "" && (fenced || strings.ContainsAny(remainder, "{}[]\x60")) {
+	if hasJSONResponse(remainder) {
 		return fmt.Errorf("unexpected content after JSON response")
 	}
 	if len(response) == 0 || response[0] != '{' {
@@ -58,6 +64,27 @@ func decodeObject(raw []byte, out *map[string]json.RawMessage) error {
 	}
 	*out = object
 	return nil
+}
+
+// A complete object or array starting the remaining output or a later line is
+// another response. Braces, inline examples and Markdown in explanatory prose
+// do not make the selected JSON ambiguous.
+func hasJSONResponse(raw string) bool {
+	for raw != "" {
+		candidate := strings.TrimLeft(raw, " \t\r")
+		if strings.HasPrefix(candidate, "{") || strings.HasPrefix(candidate, "[") {
+			var response json.RawMessage
+			if json.NewDecoder(strings.NewReader(candidate)).Decode(&response) == nil {
+				return true
+			}
+		}
+		newline := strings.IndexByte(raw, '\n')
+		if newline < 0 {
+			break
+		}
+		raw = raw[newline+1:]
+	}
+	return false
 }
 
 func uniqueJSONKeys(decoder *json.Decoder) error {

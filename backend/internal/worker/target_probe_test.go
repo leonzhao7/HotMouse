@@ -29,43 +29,168 @@ func startupWorker(t *testing.T) (*Runner, string) {
 	return r, p.Project.ID
 }
 
-func TestStartupAnalysisPrecedesPlanningAndPrecreatedSteps(t *testing.T) {
-	for _, precreated := range []bool{false, true} {
-		t.Run(fmt.Sprint(precreated), func(t *testing.T) {
-			r, p := startupWorker(t)
-			if precreated {
-				workerStep(t, r, p, "inspect")
+func TestBackgroundAnalysisDoesNotDelayPlanningOrExecution(t *testing.T) {
+	for _, entry := range []string{"run_once_plan", "run_once_execute", "dispatcher", "agent", "execute_now"} {
+		t.Run(entry, func(t *testing.T) {
+			r, project := startupWorker(t)
+			r.Interval = 5 * time.Millisecond
+			var step core.Step
+			if entry != "run_once_plan" && entry != "dispatcher" {
+				step = workerStep(t, r, project, "inspect")
 			}
-			marker := filepath.Join(t.TempDir(), "tasks")
-			env, _ := json.Marshal(map[string]string{"TASK_MARKER": marker})
-			command := `printf '%s\n' "$HOTMOUSE_TASK_TYPE" >> "$TASK_MARKER"
-case "$HOTMOUSE_TASK_TYPE" in
-target_probe) printf '%s' '{"accepted":true,"data":{"required":false,"reason":"offline fixture","targets":[]}}';;
-decide) printf '%s' '{"accepted":true,"data":{"steps":[{"from":["origin"],"description":"inspect","goal_id":"g001"}]}}';;
-execute) printf '%s' '{"accepted":true,"data":{"description":"confirmed","result":{"type":"progress"}}}';;
-esac`
+			dir := t.TempDir()
+			probeMarker, workMarker, release := filepath.Join(dir, "probe"), filepath.Join(dir, "work"), filepath.Join(dir, "release")
+			env, _ := json.Marshal(map[string]string{"PROBE_MARKER": probeMarker, "WORK_MARKER": workMarker, "PROBE_RELEASE": release})
+			command := `case "$HOTMOUSE_TASK_TYPE" in
+ target_probe) printf '%s\n' "$PWD" >> "$PROBE_MARKER"; while [ ! -f "$PROBE_RELEASE" ]; do sleep 0.01; done; printf '%s' '{"required":false,"reason":"offline fixture","targets":[]}';;
+ decide) printf '%s' "$PWD" > "$WORK_MARKER"; printf '%s' '{"accepted":true,"data":{"steps":[{"from":["origin"],"description":"inspect","goal_id":"g001"}]}}';;
+ execute) printf '%s' "$PWD" > "$WORK_MARKER"; printf '%s' '{"accepted":true,"data":{"description":"confirmed","result":{"type":"progress"}}}';;
+ esac`
 			if _, err := r.DB.SQL.Exec(`UPDATE worker_config SET driver='command',command=?,environment_json=?`, command, string(env)); err != nil {
 				t.Fatal(err)
 			}
-			NewAgentWorker(r, "local/worker/01").RunOnce(t.Context())
-			if _, err := os.Stat(marker); !os.IsNotExist(err) {
-				t.Fatalf("execution started before startup analysis: %v", err)
+			ctx, cancel := context.WithCancel(t.Context())
+			r.SetLifecycleContext(ctx)
+			done := make(chan struct{})
+			var workErr error
+			go func() {
+				defer close(done)
+				switch entry {
+				case "dispatcher":
+					NewDispatcher(r, project).RunOnce(ctx)
+				case "agent":
+					NewAgentWorker(r, "local/worker/01").RunOnce(ctx)
+				case "execute_now":
+					_, workErr = r.ExecuteNow(ctx, project, step.ID)
+				default:
+					r.RunOnce(ctx)
+				}
+			}()
+			defer func() { cancel(); <-done }()
+			// Provider capability inventory can take longer on a cold cache.
+			deadline := time.Now().Add(20 * time.Second)
+			for time.Now().Before(deadline) {
+				if _, err := os.Stat(workMarker); err == nil {
+					break
+				}
+				time.Sleep(5 * time.Millisecond)
 			}
-			r.RunOnce(t.Context())
-			if !precreated {
-				r.RunOnce(t.Context())
+			if _, err := os.Stat(workMarker); err != nil {
+				t.Fatalf("solving waited for slow target analysis: %v", err)
 			}
-			calls, err := os.ReadFile(marker)
-			want := "target_probe\nexecute\n"
-			if !precreated {
-				want = "target_probe\ndecide\nexecute\n"
+			awaitMarker(t, probeMarker)
+			awaitTask(t, done)
+			if workErr != nil {
+				t.Fatal(workErr)
 			}
-			if err != nil || string(calls) != want {
-				t.Fatalf("startup ordering: calls=%q want=%q err=%v", calls, want, err)
+			state, err := r.DB.TargetProbe(t.Context(), project)
+			if err != nil || state.Status != "pending" {
+				t.Fatalf("analysis was not concurrent with solving: %+v err=%v", state, err)
 			}
-			state, err := r.DB.TargetProbe(t.Context(), p)
-			if err != nil || state.Status != "ready" || state.Analysis.Required {
-				t.Fatalf("startup analysis not saved: %+v err=%v", state, err)
+			probeCWD, _ := os.ReadFile(probeMarker)
+			workCWD, _ := os.ReadFile(workMarker)
+			if strings.TrimSpace(string(probeCWD)) == strings.TrimSpace(string(workCWD)) {
+				t.Fatal("background analysis shared the solving provider workspace")
+			}
+			for i := 0; i < 3; i++ {
+				r.startTargetStartup(ctx, project)
+			}
+			r.probeMu.Lock()
+			startup := r.targetStartups[project]
+			r.probeMu.Unlock()
+			if err := os.WriteFile(release, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			awaitTask(t, startup.done)
+			state, err = r.DB.TargetProbe(t.Context(), project)
+			if err != nil || state.Status != "ready" || state.Preprocessing.Status != "skipped" {
+				t.Fatalf("background analysis was not saved: %+v err=%v", state, err)
+			}
+			var calls int
+			if err := r.DB.SQL.QueryRow(`SELECT count(*) FROM worker_task_history WHERE project_id=? AND task_type='target_probe'`, project).Scan(&calls); err != nil || calls != 1 {
+				t.Fatalf("duplicate target analysis: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
+
+func TestBackgroundStartupCancelsAndResumeReusesCompletedAnalysis(t *testing.T) {
+	for _, action := range []string{"shutdown", "stop_project"} {
+		t.Run(action, func(t *testing.T) {
+			r, project := startupWorker(t)
+			r.Interval = 5 * time.Millisecond
+			r.probeInterval = 20 * time.Millisecond
+			r.probeDial = func(context.Context, core.TargetEndpoint) error { return nil }
+			dir := t.TempDir()
+			marker, release := filepath.Join(dir, "analysis"), filepath.Join(dir, "release")
+			env, _ := json.Marshal(map[string]string{"PROBE_MARKER": marker, "PROBE_RELEASE": release})
+			command := `printf started > "$PROBE_MARKER"; while [ ! -f "$PROBE_RELEASE" ]; do sleep 0.01; done; printf '%s' '{"required":true,"reason":"remote CTF","targets":[{"host":"127.0.0.1","port":31337}]}'`
+			if _, err := r.DB.SQL.Exec(`UPDATE worker_config SET driver='command',command=?,environment_json=?`, command, string(env)); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			r.SetLifecycleContext(ctx)
+			r.startTargetStartup(ctx, project)
+			awaitMarker(t, marker)
+			r.probeMu.Lock()
+			startup := r.targetStartups[project]
+			r.probeMu.Unlock()
+			if action == "shutdown" {
+				r.StopTargetProbes()
+			} else {
+				if _, err := r.DB.SetProjectStatus(t.Context(), project, "stopped"); err != nil {
+					t.Fatal(err)
+				}
+				r.CancelProject(project)
+			}
+			awaitTask(t, startup.done)
+			state, err := r.DB.TargetProbe(t.Context(), project)
+			if err != nil || state.Status != "pending" || state.AnalysisFailures != 0 || r.ProjectBusy(project) {
+				t.Fatalf("canceled background task retained work or counted a failure: %+v err=%v", state, err)
+			}
+			if action == "stop_project" {
+				if _, err := r.DB.SetProjectStatus(t.Context(), project, "active"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(release, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r.startTargetStartup(ctx, project)
+			r.probeMu.Lock()
+			startup = r.targetStartups[project]
+			r.probeMu.Unlock()
+			awaitTask(t, startup.done)
+			// Monitoring must outlive the completed background analysis invocation.
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				state, err = r.DB.TargetProbe(t.Context(), project)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if state.LastCheckedAt != "" {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("monitor stopped when background analysis finished")
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			if _, err := r.DB.SetProjectStatus(t.Context(), project, "stopped"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.DB.SetProjectStatus(t.Context(), project, "active"); err != nil {
+				t.Fatal(err)
+			}
+			r.startTargetStartup(ctx, project)
+			r.probeMu.Lock()
+			startup = r.targetStartups[project]
+			r.probeMu.Unlock()
+			awaitTask(t, startup.done)
+			var calls int
+			if err := r.DB.SQL.QueryRow(`SELECT count(*) FROM worker_task_history WHERE project_id=? AND task_type='target_probe'`, project).Scan(&calls); err != nil || calls != 2 {
+				t.Fatalf("resume repeated completed target analysis: calls=%d err=%v", calls, err)
 			}
 		})
 	}
@@ -94,7 +219,7 @@ func TestRemoteProbeFailsProjectWhilePlannerIsRunning(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := r.Start(ctx)
 	defer func() { cancel(); <-done }()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		project, err := r.DB.GetProjectMeta(t.Context(), p)
 		if err != nil {
@@ -122,7 +247,7 @@ func TestRemoteProbeFailsProjectWhilePlannerIsRunning(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("target monitor was blocked by the planning process")
+	t.Fatalf("target monitor was blocked by the planning process: %s", logs.String())
 }
 
 func TestTargetProbeUsesTCPAndCancelsWithoutCountingFailure(t *testing.T) {
@@ -170,26 +295,48 @@ func TestTargetProbeUsesTCPAndCancelsWithoutCountingFailure(t *testing.T) {
 	}
 }
 
-func TestMalformedStartupAnalysisRetainsGateAndBoundsRetries(t *testing.T) {
-	r, p := startupWorker(t)
-	workerStep(t, r, p, "pending work")
-	if _, err := r.DB.SQL.Exec(`UPDATE worker_config SET driver='command',command='printf "{}"'`); err != nil {
+func TestMalformedBackgroundAnalysisDoesNotBlockWorkAndBoundsRetries(t *testing.T) {
+	r, project := startupWorker(t)
+	r.Interval = 5 * time.Millisecond
+	step := workerStep(t, r, project, "pending work")
+	command := `if [ "$HOTMOUSE_TASK_TYPE" = target_probe ]; then printf '{}'; else printf '%s' '{"accepted":true,"data":{"description":"confirmed","result":{"type":"progress"}}}'; fi`
+	if _, err := r.DB.SQL.Exec(`UPDATE worker_config SET driver='command',command=?`, command); err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	r.startTargetStartup(ctx, project)
 	for i := 1; i <= 3; i++ {
-		if _, err := r.DB.SQL.Exec(`UPDATE project_target_health SET retry_after='' WHERE project_id=?`, p); err != nil {
-			t.Fatal(err)
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			state, err := r.DB.TargetProbe(t.Context(), project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.AnalysisFailures == i {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("background retry did not finish: %+v", state)
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
-		r.dispatchProject(t.Context(), p)
-		NewAgentWorker(r, "local/worker/01").RunOnce(t.Context())
-		state, err := r.DB.TargetProbe(t.Context(), p)
-		if err != nil || state.Status != "pending" || state.AnalysisFailures != i {
-			t.Fatalf("invalid startup bypassed gate: %+v err=%v", state, err)
+		if i == 1 {
+			NewAgentWorker(r, "local/worker/01").RunOnce(ctx)
+			before, err := stepSnapshot(t, r, project, step.ID)
+			if err != nil || !before.LLMResponseRecorded {
+				t.Fatalf("analysis failure blocked execution: %+v err=%v", before, err)
+			}
+		}
+		if i < 3 {
+			if _, err := r.DB.SQL.Exec(`UPDATE project_target_health SET retry_after='' WHERE project_id=?`, project); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	detail, err := r.DB.GetProject(t.Context(), p)
-	if err != nil || detail.Project.Status != "failed" || detail.Steps[0].LLMResponseRecorded {
-		t.Fatalf("invalid startup executed work or failed to terminate: %+v err=%v", detail, err)
+	meta, err := r.DB.GetProjectMeta(t.Context(), project)
+	if err != nil || meta.Status != "failed" || !strings.Contains(meta.FailureReason, "目标探活分析连续失败 3 次") {
+		t.Fatalf("background analysis did not retain its failure limit: %+v err=%v", meta, err)
 	}
 }
 

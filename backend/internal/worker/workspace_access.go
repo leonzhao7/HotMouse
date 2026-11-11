@@ -35,6 +35,8 @@ func workspaceAccess(projectDir, workspace, taskType string) (string, error) {
 	case "execute":
 		view.Writable = workspace
 		guidance += "Save all new extracted data, scripts, evidence and outputs under writable_directory. Do not write into another worker's directory or leave new task outputs elsewhere. The step description may contain an output path chosen by a dispatcher or another worker before assignment; relocate that new output under your own writable_directory, keeping its relative filename/subpath. Keep existing input and evidence paths unchanged when reading them. Report the actual output path, not the originally planned destination.\n"
+	case "target_probe":
+		guidance += "Analyze the supplied initial scope for background target monitoring. Planning and execution run concurrently in their own workspaces. Read only the evidence needed to identify challenge services; preserve existing artifacts and perform no network requests or challenge-solving actions.\n"
 	default:
 		// Recovery summaries use saved evidence, including legacy sessions whose
 		// cwd differs from the directory used for new provider runtime state.

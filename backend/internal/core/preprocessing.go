@@ -33,7 +33,7 @@ func (d *DB) InitialTargetSources(ctx context.Context, project string) ([]string
 	return texts, err
 }
 
-// Record the evidence and startup gate atomically, bound to the active run.
+// Record background evidence atomically, bound to the active run.
 func (d *DB) SavePreprocessing(ctx context.Context, project, runID string, state PreprocessingState, description, detail string) error {
 	if state.Status != "ready" && state.Status != "skipped" {
 		return fmt.Errorf("invalid preprocessing status")

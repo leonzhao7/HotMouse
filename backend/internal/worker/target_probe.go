@@ -29,7 +29,7 @@ func (r *Runner) SetLifecycleContext(ctx context.Context) {
 
 func targetProbePrompt(graph string, scope ...string) string {
 	parsed, _ := json.Marshal(core.TargetProbeURLCandidates(append([]string{graph}, scope...)...))
-	return `You are the HotMouse project startup target analyst. This is the FIRST phase, before any planning or execution. Return exactly one raw JSON object and perform no network requests or challenge-solving actions.
+	return `You are the HotMouse background target analyst. Planning and challenge execution proceed concurrently with this analysis. Return exactly one raw JSON object and perform no network requests or challenge-solving actions.
 
 Determine whether this project is a remote CTF challenge that requires target liveness monitoring. Analyze the origin, goals, hints and operator project context. Local/offline file challenges and projects that are not remote CTFs do not require monitoring. An address alone does not make a project a remote CTF.
 For a remote CTF, extract every required challenge service's IP address or domain and TCP port from the supplied scope. Use an explicit URL port, otherwise 80 for http and 443 for https. Do not invent hosts or unknown ports, use placeholders, include URL paths, or monitor scoreboards, flag submission platforms or unrelated infrastructure. Hosts must be plain IP addresses or domains (IPv6 without brackets); ports must be integers from 1 to 65535. If a required endpoint cannot be determined, reject with a precise reason. HotMouse itself will open and close TCP connections; an HTTP error response still means the service is reachable.
@@ -88,6 +88,10 @@ func parseTargetProbeAnalysis(payload []byte) (core.TargetProbeAnalysis, error) 
 }
 
 func (r *Runner) ensureTargetProbe(ctx context.Context, project string) (bool, error) {
+	return r.ensureTargetProbeWithMonitor(ctx, ctx, project)
+}
+
+func (r *Runner) ensureTargetProbeWithMonitor(ctx, monitorParent context.Context, project string) (bool, error) {
 	state, err := r.DB.TargetProbe(ctx, project)
 	if err != nil {
 		return false, err
@@ -133,27 +137,14 @@ func (r *Runner) ensureTargetProbe(ctx context.Context, project string) (bool, e
 		return false, fmt.Errorf("target probe analysis is not ready")
 	}
 	if state.Analysis.Required {
-		r.startTargetMonitor(ctx, project, state)
+		r.startTargetMonitorWithContext(ctx, monitorParent, project, state)
 	}
 	return true, nil
 }
 
-func (r *Runner) analyzeTargetProbe(parent context.Context, project, runID string, cfg workerConfig) error {
-	worker := r.dispatcherIdentity(project)
-	invocation, err := newSessionID()
-	if err != nil {
-		return err
-	}
-	leaseWorker := worker + "/target-probe/" + invocation
-	if _, err := r.DB.ClaimDecide(parent, project, core.ClaimDecide{Worker: leaseWorker, Trigger: "startup target probe analysis"}); err != nil {
-		return err
-	}
-	defer r.releaseDecide(project, leaseWorker)
-	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
-	stop := r.keepDecideAlive(ctx, cancel, project, leaseWorker)
-	defer stop()
-	// Recheck under the lease, as another dispatcher may have finished analysis.
+func (r *Runner) analyzeTargetProbe(ctx context.Context, project, runID string, cfg workerConfig) error {
+	worker := r.dispatcherIdentity(project) + "/target-probe"
+	// The background startup owns its run; it never claims the planning lease.
 	state, err := r.DB.TargetProbe(ctx, project)
 	if err != nil || state.RunID != runID || state.Status != "pending" {
 		return err
@@ -221,9 +212,17 @@ func (r *Runner) analyzeTargetProbe(parent context.Context, project, runID strin
 }
 
 func (r *Runner) startTargetMonitor(parent context.Context, project string, state core.TargetProbeState) {
+	r.startTargetMonitorWithContext(parent, parent, project, state)
+}
+
+func (r *Runner) startTargetMonitorWithContext(startupCtx, parent context.Context, project string, state core.TargetProbeState) {
 	r.probeMu.Lock()
 	defer r.probeMu.Unlock()
-	if previous := r.targetMonitors[project]; previous != nil {
+	if startupCtx.Err() != nil || parent.Err() != nil {
+		return
+	}
+	previous := r.targetMonitors[project]
+	if previous != nil {
 		if previous.runID == state.RunID {
 			select {
 			case <-previous.done:
@@ -246,18 +245,29 @@ func (r *Runner) startTargetMonitor(parent context.Context, project string, stat
 	go func() {
 		defer close(monitor.done)
 		defer cancel()
+		if previous != nil {
+			<-previous.done
+		}
 		r.monitorTargets(ctx, project, state, interval)
 	}()
 }
 
 func (r *Runner) stopTargetMonitors() {
 	r.probeMu.Lock()
+	startups := r.targetStartups
 	monitors := r.targetMonitors
+	r.targetStartups = map[string]*targetMonitor{}
 	r.targetMonitors = map[string]*targetMonitor{}
+	for _, startup := range startups {
+		startup.cancel()
+	}
 	for _, monitor := range monitors {
 		monitor.cancel()
 	}
 	r.probeMu.Unlock()
+	for _, startup := range startups {
+		<-startup.done
+	}
 	for _, monitor := range monitors {
 		<-monitor.done
 	}

@@ -16,7 +16,7 @@ import (
 	"hotmouse/backend/internal/core"
 )
 
-func TestWebPreprocessingPreservesResponsesAndBlocksStartupClaims(t *testing.T) {
+func TestWebPreprocessingPreservesResponsesWhileExecutionProceeds(t *testing.T) {
 	r, project := startupWorker(t)
 	var requests atomic.Int32
 	started, release := make(chan struct{}), make(chan struct{})
@@ -61,9 +61,10 @@ func TestWebPreprocessingPreservesResponsesAndBlocksStartupClaims(t *testing.T) 
 	step := workerStep(t, r, project, "precreated execution")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	done := make(chan struct{})
-	var startupErr error
-	go func() { defer close(done); _, startupErr = r.ensureStartup(ctx, project) }()
+	r.startTargetStartup(ctx, project)
+	r.probeMu.Lock()
+	done := r.targetStartups[project].done
+	r.probeMu.Unlock()
 	select {
 	case <-started:
 	case <-time.After(3 * time.Second):
@@ -71,14 +72,15 @@ func TestWebPreprocessingPreservesResponsesAndBlocksStartupClaims(t *testing.T) 
 	}
 	NewAgentWorker(r, "local/worker/01").RunOnce(t.Context())
 	before, _ := stepSnapshot(t, r, project, step.ID)
-	if before.Worker != nil || before.LLMResponseRecorded {
-		t.Fatal("worker bypassed startup preprocessing")
+	if !before.LLMResponseRecorded {
+		t.Fatal("slow background preprocessing blocked execution")
+	}
+	pending, _ := r.DB.TargetProbe(t.Context(), project)
+	if pending.Preprocessing.Status != "pending" {
+		t.Fatal("preprocessing was not concurrent with execution")
 	}
 	close(release)
 	awaitTask(t, done)
-	if startupErr != nil {
-		t.Fatal(startupErr)
-	}
 	state, err := r.DB.TargetProbe(t.Context(), project)
 	if err != nil || state.Preprocessing.Status != "ready" || state.Preprocessing.FactID == "" || len(state.Preprocessing.Pages) != 1 {
 		t.Fatalf("preprocessing evidence missing: %+v err=%v", state, err)
@@ -181,7 +183,7 @@ func TestIncompleteHomepageBodyIsRecordedAsFailure(t *testing.T) {
 	}
 }
 
-func TestCancelledPreprocessingCannotOpenGateAndResumeReusesEvidence(t *testing.T) {
+func TestCancelledPreprocessingCannotSaveEvidenceAndResumeReusesEvidence(t *testing.T) {
 	r, project := startupWorker(t)
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { requests.Add(1); _, _ = w.Write([]byte("homepage")) }))
@@ -205,7 +207,7 @@ func TestCancelledPreprocessingCannotOpenGateAndResumeReusesEvidence(t *testing.
 	}
 	state, _ := r.DB.TargetProbe(t.Context(), project)
 	if state.Preprocessing.Status != "pending" {
-		t.Fatal("cancellation opened startup gate")
+		t.Fatal("cancellation saved completed preprocessing")
 	}
 	if _, err := r.ensureStartup(t.Context(), project); err != nil {
 		t.Fatal(err)

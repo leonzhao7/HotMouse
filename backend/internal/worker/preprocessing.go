@@ -89,7 +89,11 @@ type homepageResponse struct {
 }
 
 func (r *Runner) ensureStartup(ctx context.Context, project string) (bool, error) {
-	if ready, err := r.ensureTargetProbe(ctx, project); err != nil || !ready {
+	return r.ensureStartupWithMonitor(ctx, ctx, project)
+}
+
+func (r *Runner) ensureStartupWithMonitor(ctx, monitorParent context.Context, project string) (bool, error) {
+	if ready, err := r.ensureTargetProbeWithMonitor(ctx, monitorParent, project); err != nil || !ready {
 		return false, err
 	}
 	state, err := r.DB.TargetProbe(ctx, project)
@@ -102,21 +106,9 @@ func (r *Runner) ensureStartup(ctx context.Context, project string) (bool, error
 	return r.preprocessWeb(ctx, project, state)
 }
 
-func (r *Runner) preprocessWeb(parent context.Context, project string, state core.TargetProbeState) (bool, error) {
-	invocation, err := newSessionID()
-	if err != nil {
-		return false, err
-	}
-	identity := r.dispatcherIdentity(project)
-	lease := identity + "/preprocessing/" + invocation
-	if _, err := r.DB.ClaimDecide(parent, project, core.ClaimDecide{Worker: lease, Trigger: "startup web preprocessing"}); err != nil {
-		return false, err
-	}
-	defer r.releaseDecide(project, lease)
-	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
-	stop := r.keepDecideAlive(ctx, cancel, project, lease)
-	defer stop()
+func (r *Runner) preprocessWeb(ctx context.Context, project string, state core.TargetProbeState) (bool, error) {
+	identity := r.dispatcherIdentity(project) + "/target-probe"
+	var err error
 	state, err = r.DB.TargetProbe(ctx, project)
 	if err != nil {
 		return false, err

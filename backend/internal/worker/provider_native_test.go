@@ -18,13 +18,15 @@ func TestClaudeExecutionResponseIsPreservedBeforeValidationAndSummary(t *testing
 		{"invalid_schema", `{"accepted":true,"data":{"description":"initial answer","unexpected":true}}`, `unexpected execute data key "unexpected"`},
 		{"empty", "", "provider returned no completed assistant response"},
 		{"valid", "  {\"accepted\":true,\"data\":{\"description\":\"initial answer\"}}\n", ""},
+		{"valid_with_explanation", "{\"accepted\":true,\"data\":{\"description\":\"initial answer\"}}\n说明：附件 `source.py`，flag 格式 HTB{...}。", ""},
+		{"valid_fenced_with_explanation", "```json\n{\"accepted\":true,\"data\":{\"description\":\"initial answer\"}}\n```\n说明：[web] 附件 `source.py`。", ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			script := `printf '%s\n' "$HOTMOUSE_TASK_TYPE" >> "$TEST_CALLS"
 if test "$HOTMOUSE_TASK_TYPE" = execute; then
   cat "$TEST_DIR/original-event.json"
 else
-  printf '%s\n' '{"type":"result","is_error":false,"result":"{\"accepted\":true,\"data\":{\"description\":\"recovery summary only\"}}"}'
+  printf '%s\n' '{"type":"result","is_error":false,"result":"{\"accepted\":true,\"data\":{\"description\":\"recovery summary only\"}}\nExplanation: evidence in \u0060output.txt\u0060, format HTB{...}."}'
 fi`
 			db, project, step, marker := fakePi(t, script, core.DefaultWorkerRuntime())
 			directory := filepath.Dir(marker)

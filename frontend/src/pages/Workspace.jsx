@@ -293,13 +293,15 @@ export default function Workspace({ id }) {
             </span>
           </div>
           {active && data.target_probe?.status === "pending" && (
-            <div className="notice amber">正在分析初始事实并识别题目目标。</div>
+            <div className="notice amber">
+              正在后台识别题目目标，解题同步进行。
+            </div>
           )}
           {active &&
             data.target_probe?.status === "ready" &&
             data.target_probe?.preprocessing?.status === "pending" && (
               <div className="notice amber">
-                正在预处理目标首页，获取完整响应头和响应正文。
+                正在后台预处理目标首页，解题同步进行。
               </div>
             )}
           {data.target_probe?.preprocessing?.status === "ready" && (
