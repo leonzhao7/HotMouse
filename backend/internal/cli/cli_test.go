@@ -270,14 +270,23 @@ func TestInputValidationBeforeMutationAndReadLeaseBoundaries(t *testing.T) {
 	}
 }
 
+func TestRegistrationCommandRemoved(t *testing.T) {
+	h := newHarness(t, true)
+	code, out, errOut := h.run("", "auth", "--help")
+	if code != 0 || strings.Contains(out, "register") {
+		t.Fatalf("auth help still advertises registration: %d %s %s", code, out, errOut)
+	}
+	h.expect(2, "auth", "register", "--username", "new-user")
+}
+
 func TestAuthCookiesProfileIsolationAndLogout(t *testing.T) {
 	h := newHarness(t, true)
 	challenge := object(h.ok("auth", "captcha"))
 	var left, right int
 	fmt.Sscanf(textValue(challenge["question"]), "%d + %d = ?", &left, &right)
-	code, out, errOut := h.run("safe-password\n", "auth", "register", "--username", "operator", "--password-stdin", "--captcha-id", textValue(challenge["captcha_id"]), "--captcha-answer", fmt.Sprint(left+right), "--non-interactive", "--verbose")
-	if code != 0 || strings.Contains(out, "safe-password") || strings.Contains(errOut, "safe-password") {
-		t.Fatalf("register: %d %s %s", code, out, errOut)
+	code, out, errOut := h.run("admin123\n", "auth", "login", "--username", "admin", "--password-stdin", "--captcha-id", textValue(challenge["captcha_id"]), "--captcha-answer", fmt.Sprint(left+right), "--non-interactive", "--verbose")
+	if code != 0 || strings.Contains(out, "admin123") || strings.Contains(errOut, "admin123") {
+		t.Fatalf("login: %d %s %s", code, out, errOut)
 	}
 	h.ok("auth", "whoami")
 	status := object(h.ok("auth", "status"))
@@ -451,26 +460,26 @@ func TestDecideGoalsStructuredInputAndProfileSelection(t *testing.T) {
 
 func TestPasswordChangeAndExplicitLogin(t *testing.T) {
 	h := newHarness(t, true)
-	login := func(action, password string) int {
+	login := func(password string) int {
 		challenge := object(h.ok("auth", "captcha"))
 		var left, right int
 		fmt.Sscanf(textValue(challenge["question"]), "%d + %d = ?", &left, &right)
-		code, _, _ := h.run(password+"\n", "auth", action, "--username", "operator", "--password-stdin", "--captcha-id", textValue(challenge["captcha_id"]), "--captcha-answer", fmt.Sprint(left+right))
+		code, _, _ := h.run(password+"\n", "auth", "login", "--username", "admin", "--password-stdin", "--captcha-id", textValue(challenge["captcha_id"]), "--captcha-answer", fmt.Sprint(left+right))
 		return code
 	}
-	if login("register", "old-password") != 0 {
-		t.Fatal("register")
+	if login("admin123") != 0 {
+		t.Fatal("default admin login")
 	}
-	code, out, errOut := h.run("current_password: old-password\nnew_password: New-password1!\n", "auth", "password", "--file", "-")
+	code, out, errOut := h.run("current_password: admin123\nnew_password: New-password1!\n", "auth", "password", "--file", "-")
 	if code != 0 {
 		t.Fatalf("password: %d %s %s", code, out, errOut)
 	}
 	h.ok("auth", "whoami")
 	h.ok("auth", "logout")
-	if login("login", "old-password") != 3 {
+	if login("admin123") != 3 {
 		t.Fatal("old password still valid")
 	}
-	if login("login", "New-password1!") != 0 {
+	if login("New-password1!") != 0 {
 		t.Fatal("new password rejected")
 	}
 }

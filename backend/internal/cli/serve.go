@@ -232,6 +232,9 @@ func (a *app) serveCommand() *cobra.Command {
 		if rulesFile != "" {
 			run, err := handler.ResumeOrStartCompetition(serviceCtx, competitionPlatform, competitionConfig)
 			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return err
+				}
 				return failed("start competition: %s", err)
 			}
 			logger.Info("competition.entry", "run", run.ID, "platform", run.Platform, "concurrency", run.Concurrency, "rules_file", rulesFile)

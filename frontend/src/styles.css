@@ -2616,25 +2616,8 @@ td:first-child {
   color: var(--muted);
   font-size: 12px;
 }
-.auth-tabs {
-  display: flex;
-  padding: 4px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  margin: 28px 0;
-  gap: 3px;
-}
-.auth-tabs > button {
-  flex: 1;
-  color: var(--muted);
-  padding: 7px;
-  border-radius: 4px;
-  font-size: 12px;
-}
-.auth-tabs > button.active {
-  background: var(--surface-3);
-  color: var(--text);
+.auth-card > form {
+  margin-top: 28px;
 }
 .auth-card .field {
   margin-bottom: 20px;

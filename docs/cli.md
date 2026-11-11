@@ -43,7 +43,6 @@ hotmouse
 │       └── remove <NAME>
 ├── auth
 │   ├── captcha
-│   ├── register
 │   ├── login
 │   ├── logout
 │   ├── status
@@ -331,17 +330,16 @@ hotmouse config show --effective
 
 ```text
 hotmouse auth captcha
-hotmouse auth register --username NAME
-hotmouse auth login --username NAME
+hotmouse auth login --username admin
 hotmouse auth logout
 hotmouse auth status
 hotmouse auth whoami
 hotmouse auth password
 ```
 
-交互式注册/登录先请求算术验证码，显示 question，再读取答案和隐藏回显的密码；验证码不自动求解。注册成功也保存服务返回的会话。输入校验沿用后端：用户名长度 3–32，字符规则由服务校验；密码长度 8–72。
+注册功能已移除。数据库初始化时自动创建缺失的默认账号 `admin`，初始密码为 `admin123`，已有 admin 的密码不会重置。交互式登录先请求算术验证码，显示 question，再读取答案和隐藏回显的密码；验证码不自动求解。登录成功后保存服务返回的会话。
 
-自动化注册/登录使用 `--password-stdin --captcha-id ID --captcha-answer ANSWER --non-interactive`；先通过 `auth captcha --output json` 获取挑战。密码不能通过命令行参数、profile 或 verbose 日志传递。
+自动化登录使用 `--password-stdin --captcha-id ID --captcha-answer ANSWER --non-interactive`；先通过 `auth captcha --output json` 获取挑战。密码不能通过命令行参数、profile 或 verbose 日志传递。
 
 `auth password` 交互读取当前密码和新密码，或用 `--file PATH` 提供 `{current_password, new_password}`；敏感请求文件也可为 `-`。新密码除长度要求外，还须包含大小写字母、数字和特殊字符，沿用后端现有校验。修改后按服务语义保留当前会话，不自行假设其他会话仍有效。
 
@@ -649,7 +647,7 @@ hotmouse serve --db ./data/hotmouse.db --autorun
 终端二配置和创建项目：
 
 ```bash
-hotmouse auth register --username operator
+hotmouse auth login --username admin
 hotmouse worker config set driver pi
 hotmouse worker config set command ''
 hotmouse worker test
@@ -751,7 +749,7 @@ hints:
 
 | CLI | HTTP / 客户端逻辑 |
 | --- | --- |
-| `auth captcha/register/login/logout/whoami/password` | `GET captcha`、`POST register/login/logout`、`GET me`、`PUT password`，均位于 `/api/auth/` |
+| `auth captcha/login/logout/whoami/password` | `GET captcha`、`POST login/logout`、`GET me`、`PUT password`，均位于 `/api/auth/` |
 | `auth status` | 会话用 `/api/auth/me`；内部令牌用 `/api/settings/health`，无凭据返回本地未认证状态 |
 | `project list/create` | `GET/POST /projects` |
 | `project show/use/wait` | `GET /projects/P`；use 本地保存，wait 轮询 |
@@ -820,7 +818,7 @@ backend/internal/worker/          已有服务内串行 Worker
 
 关键验收：
 
-- 注册/登录保存并刷新 cookie，切换 profile/server 不串用凭据、默认项目或令牌；内部令牌和会话身份区分正确。
+- 默认 admin 登录保存并刷新 cookie，切换 profile/server 不串用凭据、默认项目或令牌；内部令牌和会话身份区分正确。
 - 手动完成 `project create → step create → claim → conclude → goal complete → export`，图和证据引用与 HTTP 协议一致。
 - 写操作不附带会改变租约边界的额外详情请求；不自动重试可能已提交的请求。
 - Worker 配置、settings 更新保留未修改字段和秘密；env 删除实际移除键。

@@ -18,12 +18,12 @@ go build -o hotmouse ./cmd/hotmouse
 ./hotmouse serve --db ./data/hotmouse.db --autorun
 ```
 
-The server listens on `127.0.0.1:8080` by default. Set `HOTMOUSE_ADDR` or `serve --addr` to change it. Local authentication is enabled by default. `./hotmouse auth register --username operator` prompts for an arithmetic challenge answer and a hidden password, then saves the HttpOnly session cookie in the private client credentials store. Use `auth login` for an existing user. Set `HOTMOUSE_AUTH_REQUIRED=0` or `serve --auth disabled` for an isolated local development session.
+The server listens on `127.0.0.1:8080` by default. Set `HOTMOUSE_ADDR` or `serve --addr` to change it. Local authentication is enabled by default. Registration is removed. Database initialization creates a missing `admin` account with the initial password `admin123`, including when upgrading an existing database; an existing admin account and its password are preserved. `./hotmouse auth login --username admin` prompts for an arithmetic challenge answer and a hidden password, then saves the HttpOnly session cookie in the private client credentials store. Change the password with `auth password` or the workbench user menu; the changed password persists across restarts. Set `HOTMOUSE_AUTH_REQUIRED=0` or `serve --auth disabled` for an isolated local development session.
 
 In another terminal:
 
 ```bash
-./hotmouse auth register --username operator
+./hotmouse auth login --username admin
 ./hotmouse project create --title demo --origin 'local demo target' --goal 'verify and record findings' --use
 ./hotmouse project campaign --watch
 ./hotmouse worker status --output json

@@ -173,4 +173,52 @@ CREATE TABLE templates(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,title TEXT NOT 
 	if violations != 0 {
 		t.Fatalf("auth migration left %d foreign key violations", violations)
 	}
+	if _, user, err := db.Login(t.Context(), "admin", "admin123"); err != nil || user.Username != "admin" || user.ID == newID {
+		t.Fatalf("migration did not add a usable default admin: user=%+v err=%v", user, err)
+	}
+}
+
+func TestDefaultAdminPasswordSurvivesReopen(t *testing.T) {
+	for _, username := range []string{"admin", "ADMIN"} {
+		t.Run(username, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "admin.db")
+			db, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.SQL.Close()
+			token, original, err := db.Login(t.Context(), "admin", "admin123")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.ChangePassword(t.Context(), token, "admin123", "Changed-password1!"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.SQL.Exec(`UPDATE users SET username=? WHERE id=?`, username, original.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.SQL.Close(); err != nil {
+				t.Fatal(err)
+			}
+			db, err = Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.SQL.Close()
+			var count int
+			if err := db.SQL.QueryRow(`SELECT count(*) FROM users`).Scan(&count); err != nil || count != 1 {
+				t.Fatalf("reopen duplicated admin: count=%d err=%v", count, err)
+			}
+			if _, _, err := db.Login(t.Context(), "admin", "admin123"); err == nil {
+				t.Fatal("reopen restored the default password")
+			}
+			_, current, err := db.Login(t.Context(), "admin", "Changed-password1!")
+			if err != nil || current.ID != original.ID || current.CreatedAt != original.CreatedAt || current.Username != username {
+				t.Fatalf("reopen changed the existing admin: user=%+v err=%v", current, err)
+			}
+			if user, err := db.Session(t.Context(), token); err != nil || user.ID != original.ID {
+				t.Fatalf("reopen invalidated the admin session: user=%+v err=%v", user, err)
+			}
+		})
+	}
 }

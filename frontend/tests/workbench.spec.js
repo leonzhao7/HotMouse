@@ -1,12 +1,13 @@
 import { expect, test } from "@playwright/test";
 
-async function register(page) {
+async function login(page) {
   await page.goto("/");
-  await page.getByRole("button", { name: "注册", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "创建账户" })).toBeVisible();
-  const username = `ui_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  await page.getByLabel("用户名", { exact: true }).fill(username);
-  await page.getByLabel("密码", { exact: true }).fill("Testing123!");
+  await expect(page.getByRole("heading", { name: "登录工作台" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "注册", exact: true }),
+  ).toHaveCount(0);
+  await page.getByLabel("用户名", { exact: true }).fill("admin");
+  await page.getByLabel("密码", { exact: true }).fill("admin123");
   await expect(page.getByRole("button", { name: "刷新验证码" })).toHaveText(
     /\d+ \+ \d+/,
   );
@@ -18,9 +19,10 @@ async function register(page) {
   await page
     .getByLabel("验证码", { exact: true })
     .fill(String(numbers[0] + numbers[1]));
-  await page.getByRole("button", { name: "注册并登录" }).click();
-  await expect(page.getByRole("heading", { name: "工作台总览" })).toBeVisible();
-  return username;
+  await page.getByRole("button", { name: "进入工作台" }).click();
+  await expect(page.getByRole("heading", { name: "工作台总览" })).toBeVisible({
+    timeout: 15000,
+  });
 }
 async function createProject(page, title) {
   await page
@@ -41,12 +43,12 @@ async function createProject(page, title) {
   ).toBeVisible();
   return decodeURIComponent(new URL(page.url()).hash.split("/").at(-1));
 }
-test("register, session persistence, theme and responsive navigation", async ({
+test("default admin login, session persistence, theme and responsive navigation", async ({
   page,
 }) => {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await register(page);
+  await login(page);
   await page.reload();
   await expect(page.getByRole("heading", { name: "工作台总览" })).toBeVisible();
   await page.getByRole("button", { name: "切换浅色主题" }).click();
@@ -79,7 +81,7 @@ test("offline CTF knowledge can be searched, filtered and read in a project", as
 }) => {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await register(page);
+  await login(page);
   await createProject(page, "UI knowledge project");
   await page.getByRole("tab", { name: "CTF 知识", exact: true }).click();
   await expect(page.getByText("56 条离线知识", { exact: false })).toBeVisible();
@@ -112,7 +114,7 @@ test("project graph, manual step conclusion, finding review and goal completion"
 }) => {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await register(page);
+  await login(page);
   const projectID = await createProject(page, "UI evidence project");
   await page.getByRole("button", { name: "步骤", exact: true }).click();
   let dialog = page.getByRole("dialog", { name: "添加步骤" });
@@ -211,7 +213,7 @@ test("project graph, manual step conclusion, finding review and goal completion"
 test("templates, Worker execution, secret preservation and real environment removal", async ({
   page,
 }) => {
-  await register(page);
+  await login(page);
   await page.goto("/#/templates");
   await page.getByRole("button", { name: "新建模板" }).click();
   let dialog = page.getByRole("dialog", { name: "新建模板" });
@@ -266,7 +268,7 @@ test("templates, Worker execution, secret preservation and real environment remo
 test("Dispatcher LLM configuration preserves separate secrets and can return to shared settings", async ({
   page,
 }) => {
-  await register(page);
+  await login(page);
   const current = await (await page.request.get("/api/workers/config")).json();
   await page.request.put("/api/workers/config", {
     data: { ...current, dispatcher: null },
@@ -351,7 +353,7 @@ test("step list shows full LLM responses and retains them after refresh", async 
 }) => {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await register(page);
+  await login(page);
   const projectID = await createProject(page, "UI LLM response project");
   const configuration = await (
     await page.request.get("/api/workers/config")
@@ -452,7 +454,7 @@ test("step list shows full LLM responses and retains them after refresh", async 
 test("LLM response column keeps the original reply separate from recovery results", async ({
   page,
 }) => {
-  await register(page);
+  await login(page);
   const projectID = await createProject(page, "UI original reply project");
   const created = await page.request.post(`/projects/${projectID}/steps`, {
     data: {
@@ -509,7 +511,7 @@ test("LLM response column keeps the original reply separate from recovery result
 test("settings persist, notifications can be marked read, and expired sessions return to login", async ({
   page,
 }) => {
-  await register(page);
+  await login(page);
   await page.goto("/#/settings");
   const input = page.getByLabel("项目闲置提醒（小时）");
   await input.fill("48");
@@ -532,7 +534,7 @@ test("settings persist, notifications can be marked read, and expired sessions r
 test("configured project budget is inherited at creation and retained after default changes", async ({
   page,
 }) => {
-  await register(page);
+  await login(page);
   const initial = await (await page.request.get("/api/settings")).json();
   try {
     await page.goto("/#/settings");
@@ -623,7 +625,7 @@ test("route loss records, history recall, shared experience and flag reconciliat
 }) => {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await register(page);
+  await login(page);
   const projectID = await createProject(page, "UI strategy project");
   await page.getByRole("tab", { name: "路线与止损" }).click();
   await page.getByRole("button", { name: "添加路线", exact: true }).click();

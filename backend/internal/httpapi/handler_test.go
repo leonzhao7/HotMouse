@@ -485,7 +485,6 @@ func TestSessionCookieMatchesRequestScheme(t *testing.T) {
 
 func TestAuthSessionPersistsOverRemoteHTTP(t *testing.T) {
 	t.Setenv("HOTMOUSE_AUTH_REQUIRED", "1")
-	t.Setenv("CAIRN_ALLOW_REGISTRATION", "1")
 	db, err := core.Open(filepath.Join(t.TempDir(), "http-session.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -515,7 +514,7 @@ func TestAuthSessionPersistsOverRemoteHTTP(t *testing.T) {
 		jar.SetCookies(req.URL, recorder.Result().Cookies())
 		return recorder
 	}
-	for _, mode := range []string{"register", "login"} {
+	for attempt := 0; attempt < 2; attempt++ {
 		response := request("GET", "/api/auth/captcha", "")
 		var captcha struct {
 			ID       string `json:"captcha_id"`
@@ -528,19 +527,15 @@ func TestAuthSessionPersistsOverRemoteHTTP(t *testing.T) {
 		if _, err := fmt.Sscanf(captcha.Question, "%d + %d = ?", &left, &right); err != nil {
 			t.Fatal(err)
 		}
-		response = request("POST", "/api/auth/"+mode, fmt.Sprintf(`{"username":"http-user","password":"Testing123!","captcha_id":%q,"captcha_answer":%q}`, captcha.ID, fmt.Sprint(left+right)))
-		want := http.StatusOK
-		if mode == "register" {
-			want = http.StatusCreated
-		}
-		if response.Code != want {
-			t.Fatalf("%s status=%d body=%s", mode, response.Code, response.Body.String())
+		response = request("POST", "/api/auth/login", fmt.Sprintf(`{"username":"admin","password":"admin123","captcha_id":%q,"captcha_answer":%q}`, captcha.ID, fmt.Sprint(left+right)))
+		if response.Code != http.StatusOK {
+			t.Fatalf("login status=%d body=%s", response.Code, response.Body.String())
 		}
 		// A browser only sends cookies accepted for the origin and protocol.
 		// Exercise both /api and core routes, including sliding cookie refresh.
 		for _, path := range []string{"/api/auth/me", "/api/competitions/status", "/projects", "/api/auth/me"} {
 			if response := request("GET", path, ""); response.Code != http.StatusOK {
-				t.Fatalf("%s session failed at %s: status=%d body=%s", mode, path, response.Code, response.Body.String())
+				t.Fatalf("session failed at %s: status=%d body=%s", path, response.Code, response.Body.String())
 			}
 		}
 		if response := request("POST", "/api/auth/logout", ""); response.Code != http.StatusNoContent {
@@ -586,21 +581,21 @@ func TestAuthAPIUsesUUIDUserIDAndAuditReferences(t *testing.T) {
 	if _, err := fmt.Sscanf(captcha.Question, "%d + %d = ?", &left, &right); err != nil {
 		t.Fatalf("invalid captcha question %q: %v", captcha.Question, err)
 	}
-	registered := request("POST", "/api/auth/register", fmt.Sprintf(`{"username":"protocol-user","password":"secret123","captcha_id":%q,"captcha_answer":%q}`, captcha.ID, fmt.Sprint(left+right)))
+	loggedIn := request("POST", "/api/auth/login", fmt.Sprintf(`{"username":"admin","password":"admin123","captcha_id":%q,"captcha_answer":%q}`, captcha.ID, fmt.Sprint(left+right)))
 	var user struct {
 		ID string `json:"id"`
 	}
-	if registered.Code != 201 || json.Unmarshal(registered.Body.Bytes(), &user) != nil || !strings.HasPrefix(user.ID, "user_") || len(user.ID) != len("user_")+32 {
-		t.Fatalf("registration user ID mismatch: status=%d body=%s", registered.Code, registered.Body.String())
+	if loggedIn.Code != 200 || json.Unmarshal(loggedIn.Body.Bytes(), &user) != nil || !strings.HasPrefix(user.ID, "user_") || len(user.ID) != len("user_")+32 {
+		t.Fatalf("login user ID mismatch: status=%d body=%s", loggedIn.Code, loggedIn.Body.String())
 	}
 	var sessionToken string
-	for _, cookie := range registered.Result().Cookies() {
+	for _, cookie := range loggedIn.Result().Cookies() {
 		if cookie.Name == "session_token" {
 			sessionToken = cookie.Value
 		}
 	}
 	if sessionToken == "" {
-		t.Fatalf("registration omitted session cookie: %+v", registered.Result().Cookies())
+		t.Fatalf("login omitted session cookie: %+v", loggedIn.Result().Cookies())
 	}
 	meRequest := httptest.NewRequest("GET", "/api/auth/me", nil)
 	meRequest.AddCookie(&http.Cookie{Name: "session_token", Value: sessionToken})
@@ -623,6 +618,45 @@ func TestAuthAPIUsesUUIDUserIDAndAuditReferences(t *testing.T) {
 	var auditUser sql.NullString
 	if err := db.SQL.QueryRow(`SELECT user_id FROM audit_log WHERE action='POST' ORDER BY id DESC LIMIT 1`).Scan(&auditUser); err != nil || !auditUser.Valid || auditUser.String != user.ID {
 		t.Fatalf("audit user ID=%+v want %q err=%v", auditUser, user.ID, err)
+	}
+}
+
+func TestRegistrationRoutesRemoved(t *testing.T) {
+	t.Setenv("CAIRN_ALLOW_REGISTRATION", "1")
+	db, err := core.Open(filepath.Join(t.TempDir(), "no-registration.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.SQL.Close()
+	token, _, err := db.Login(t.Context(), "admin", "admin123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := iris.New()
+	Register(app, New(db))
+	if err := app.Build(); err != nil {
+		t.Fatal(err)
+	}
+	for _, authRequired := range []string{"0", "1"} {
+		t.Run("auth="+authRequired, func(t *testing.T) {
+			t.Setenv("HOTMOUSE_AUTH_REQUIRED", authRequired)
+			for _, path := range []string{"/register", "/auth/register", "/api/auth/register"} {
+				req := httptest.NewRequest("POST", path, strings.NewReader(`{"username":"new-user","password":"Testing123!"}`))
+				req.Header.Set("Content-Type", "application/json")
+				if authRequired == "1" {
+					req.AddCookie(&http.Cookie{Name: "session_token", Value: token})
+				}
+				response := httptest.NewRecorder()
+				app.ServeHTTP(response, req)
+				if response.Code != http.StatusNotFound {
+					t.Fatalf("registration route %s still exists: status=%d body=%s", path, response.Code, response.Body.String())
+				}
+			}
+		})
+	}
+	var count int
+	if err := db.SQL.QueryRow(`SELECT count(*) FROM users`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("registration requests created users: count=%d err=%v", count, err)
 	}
 }
 
@@ -651,11 +685,11 @@ func TestAuthValidationAndBrowserRejectProtocol(t *testing.T) {
 		app.ServeHTTP(recorder, req)
 		return recorder
 	}
-	if response := request("POST", "/api/auth/register", `{}`, ""); response.Code != 422 {
-		t.Fatalf("missing registration fields status=%d body=%s", response.Code, response.Body.String())
+	if response := request("POST", "/api/auth/login", `{}`, ""); response.Code != 422 {
+		t.Fatalf("missing login fields status=%d body=%s", response.Code, response.Body.String())
 	}
-	if response := request("POST", "/api/auth/register", `{"username":"ab","password":"short"}`, ""); response.Code != 422 {
-		t.Fatalf("invalid registration fields were checked after captcha status=%d body=%s", response.Code, response.Body.String())
+	if response := request("POST", "/api/auth/login", `{"username":"admin"}`, ""); response.Code != 422 {
+		t.Fatalf("invalid login fields were checked after captcha status=%d body=%s", response.Code, response.Body.String())
 	}
 	response := request("GET", "/projects", "", "text/html")
 	if response.Code != 302 || response.Header().Get("Location") != "/" {
@@ -709,19 +743,15 @@ func TestTemplatesUseUUIDIDsAndPerUserOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.SQL.Close()
-	first, err := db.Register(t.Context(), "template-one", "secret123")
+	firstToken, first, err := db.Login(t.Context(), "admin", "admin123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstToken, _, err := db.Login(t.Context(), first.Username, "secret123")
-	if err != nil {
+	// Preserve coverage for accounts created before registration was removed.
+	if _, err := db.SQL.Exec(`INSERT INTO users(id,username,username_lower,password_hash,created_at) SELECT 'user_00000000000040008000000000000002','template-two','template-two',password_hash,created_at FROM users WHERE id=?`, first.ID); err != nil {
 		t.Fatal(err)
 	}
-	second, err := db.Register(t.Context(), "template-two", "secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondToken, _, err := db.Login(t.Context(), second.Username, "secret123")
+	secondToken, _, err := db.Login(t.Context(), "template-two", "admin123")
 	if err != nil {
 		t.Fatal(err)
 	}

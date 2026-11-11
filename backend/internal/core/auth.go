@@ -5,8 +5,8 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -20,7 +20,6 @@ type User struct {
 	CreatedAt string `json:"created_at"`
 }
 
-var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var dummyHash string
 var dummyHashOnce sync.Once
 
@@ -34,44 +33,27 @@ func timingHash() []byte {
 	return []byte(dummyHash)
 }
 
-func (d *DB) Register(ctx context.Context, username, password string) (User, error) {
-	if err := requireText("username", username); err != nil {
-		return User{}, err
-	}
-	if err := requireText("password", password); err != nil {
-		return User{}, err
-	}
-	if len(password) < 8 {
-		return User{}, fmt.Errorf("password must be at least 8 characters")
-	}
-	if len(password) > 72 {
-		return User{}, fmt.Errorf("password is too long")
-	}
-	if len(username) < 3 || len(username) > 32 || !usernamePattern.MatchString(username) {
-		return User{}, fmt.Errorf("invalid username")
-	}
-	if len(username) > 32 {
-		return User{}, fmt.Errorf("username is too long")
-	}
-	h, e := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
-	if e != nil {
-		return User{}, e
-	}
-	var u User
-	id, e := newUserID()
-	if e != nil {
-		return User{}, e
-	}
-	e = tx(ctx, d, func(t *sql.Tx) error {
-		v := now()
-		_, e := t.Exec(`INSERT INTO users(id,username,username_lower,password_hash,created_at) VALUES(?,?,?,?,?)`, id, username, strings.ToLower(username), string(h), v)
-		if e != nil {
-			return fmt.Errorf("username already exists")
-		}
-		u = User{ID: id, Username: username, CreatedAt: v}
+func ensureDefaultAdmin(db *sql.DB) error {
+	var exists int
+	err := db.QueryRow(`SELECT 1 FROM users WHERE username_lower='admin'`).Scan(&exists)
+	if err == nil {
 		return nil
-	})
-	return u, e
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte("admin123"), bcryptCost)
+	if err != nil {
+		return err
+	}
+	id, err := newUserID()
+	if err != nil {
+		return err
+	}
+	// Only create a missing account; reopening a database preserves its password
+	// and state, including an existing administrator from an older installation.
+	_, err = db.Exec(`INSERT INTO users(id,username,username_lower,password_hash,created_at) VALUES(?,'admin','admin',?,?) ON CONFLICT(username_lower) DO NOTHING`, id, string(hash), now())
+	return err
 }
 func token() (string, error) {
 	b := make([]byte, 32)

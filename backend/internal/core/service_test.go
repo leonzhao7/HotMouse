@@ -161,7 +161,7 @@ func TestProjectWorkerLimitDefaultsAndEnforcesClaims(t *testing.T) {
 func TestFailedLoginCounterCommitsBeforeError(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
-	u, err := db.Register(ctx, "user", "secret123")
+	_, u, err := db.Login(ctx, "admin", "admin123")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,9 +181,9 @@ func TestFailedLoginCounterCommitsBeforeError(t *testing.T) {
 	}
 }
 
-func TestRegisteredUserUsesUUIDStringID(t *testing.T) {
+func TestDefaultAdminUsesUUIDStringID(t *testing.T) {
 	db := testDB(t)
-	user, err := db.Register(context.Background(), "protocol-user", "secret123")
+	_, user, err := db.Login(context.Background(), "admin", "admin123")
 	if err != nil {
 		t.Fatal(err)
 	}

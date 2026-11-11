@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -108,8 +109,9 @@ func TestServeCompetitionRulesFileEntry(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	result := make(chan int, 1)
+	var errOut bytes.Buffer
 	go func() {
-		result <- Run(ctx, []string{"serve", "--db", path, "--addr", "127.0.0.1:0", "--auth", "disabled", "--competition-rules-file", rulesFile, "--shutdown-timeout", "5s"}, strings.NewReader(""), io.Discard, io.Discard)
+		result <- Run(ctx, []string{"serve", "--db", path, "--addr", "127.0.0.1:0", "--auth", "disabled", "--competition-rules-file", rulesFile, "--shutdown-timeout", "5s"}, strings.NewReader(""), io.Discard, &errOut)
 	}()
 	db, err := sql.Open("sqlite3", path+"?_busy_timeout=100")
 	if err != nil {
@@ -134,7 +136,7 @@ func TestServeCompetitionRulesFileEntry(t *testing.T) {
 	select {
 	case code := <-result:
 		if code != 130 {
-			t.Fatalf("competition service exit code %d", code)
+			t.Fatalf("competition service exit code %d: %s", code, &errOut)
 		}
 	case <-time.After(6 * time.Second):
 		t.Fatal("competition service did not shut down")

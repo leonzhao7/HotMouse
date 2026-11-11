@@ -59,59 +59,57 @@ func (a *app) prompt(c *cobra.Command, label string, secret bool) (string, error
 func (a *app) authCommand() *cobra.Command {
 	root := group("auth", "管理算术验证码、会话和认证状态")
 	root.AddCommand(a.leaf("captcha", "获取一次性算术验证码，5 分钟有效", 0, 0, "none", func(c *cobra.Command, _ []string) (any, error) { return a.get(c, "/api/auth/captcha") }))
-	for _, action := range []string{"register", "login"} {
-		c := a.leaf(action, "读取密码和验证码，保存服务会话", 0, 0, "none", func(c *cobra.Command, _ []string) (any, error) {
-			username, _ := c.Flags().GetString("username")
-			if strings.TrimSpace(username) == "" {
-				return nil, invalid("--username is required")
+	c := a.leaf("login", "读取密码和验证码，保存服务会话", 0, 0, "none", func(c *cobra.Command, _ []string) (any, error) {
+		username, _ := c.Flags().GetString("username")
+		if strings.TrimSpace(username) == "" {
+			return nil, invalid("--username is required")
+		}
+		captchaID, _ := c.Flags().GetString("captcha-id")
+		answer, _ := c.Flags().GetString("captcha-answer")
+		stdin, _ := c.Flags().GetBool("password-stdin")
+		if (captchaID == "") != (answer == "") {
+			return nil, invalid("provide both captcha-id and captcha-answer")
+		}
+		if captchaID == "" {
+			if stdin || a.nonInteractive || !isTerminal(a.in) {
+				return nil, invalid("non-interactive authentication requires captcha-id and captcha-answer")
 			}
-			captchaID, _ := c.Flags().GetString("captcha-id")
-			answer, _ := c.Flags().GetString("captcha-answer")
-			stdin, _ := c.Flags().GetBool("password-stdin")
-			if (captchaID == "") != (answer == "") {
-				return nil, invalid("provide both captcha-id and captcha-answer")
+			challenge, e := a.get(c, "/api/auth/captcha")
+			if e != nil {
+				return nil, e
 			}
-			if captchaID == "" {
-				if stdin || a.nonInteractive || !isTerminal(a.in) {
-					return nil, invalid("non-interactive authentication requires captcha-id and captcha-answer")
-				}
-				challenge, e := a.get(c, "/api/auth/captcha")
-				if e != nil {
-					return nil, e
-				}
-				m := object(challenge)
-				captchaID = textValue(m["captcha_id"])
-				answer, e = a.prompt(c, textValue(m["question"]), false)
-				if e != nil {
-					return nil, e
-				}
+			m := object(challenge)
+			captchaID = textValue(m["captcha_id"])
+			answer, e = a.prompt(c, textValue(m["question"]), false)
+			if e != nil {
+				return nil, e
 			}
-			var password string
-			if stdin {
-				b, e := a.readFile("-")
-				if e != nil {
-					return nil, e
-				}
-				password = strings.TrimRight(string(b), "\r\n")
-			} else {
-				var e error
-				password, e = a.prompt(c, "密码", true)
-				if e != nil {
-					return nil, e
-				}
+		}
+		var password string
+		if stdin {
+			b, e := a.readFile("-")
+			if e != nil {
+				return nil, e
 			}
-			if password == "" {
-				return nil, invalid("password must not be empty")
+			password = strings.TrimRight(string(b), "\r\n")
+		} else {
+			var e error
+			password, e = a.prompt(c, "密码", true)
+			if e != nil {
+				return nil, e
 			}
-			return a.request(c, "POST", "/api/auth/"+c.Name(), map[string]any{"username": username, "password": password, "captcha_id": captchaID, "captcha_answer": answer})
-		})
-		c.Flags().String("username", "", "用户名")
-		c.Flags().String("captcha-id", "", "auth captcha 返回的挑战 ID")
-		c.Flags().String("captcha-answer", "", "算术挑战答案")
-		c.Flags().Bool("password-stdin", false, "从 stdin 读取密码，不能与其他 stdin 输入组合")
-		c.Example = "  hotmouse auth " + action + " --username operator"
-		root.AddCommand(c)
-	}
+		}
+		if password == "" {
+			return nil, invalid("password must not be empty")
+		}
+		return a.request(c, "POST", "/api/auth/login", map[string]any{"username": username, "password": password, "captcha_id": captchaID, "captcha_answer": answer})
+	})
+	c.Flags().String("username", "", "用户名")
+	c.Flags().String("captcha-id", "", "auth captcha 返回的挑战 ID")
+	c.Flags().String("captcha-answer", "", "算术挑战答案")
+	c.Flags().Bool("password-stdin", false, "从 stdin 读取密码，不能与其他 stdin 输入组合")
+	c.Example = "  hotmouse auth login --username admin"
+	root.AddCommand(c)
 	root.AddCommand(a.leaf("whoami", "查询当前会话用户；内部令牌没有普通用户身份", 0, 0, "none", func(c *cobra.Command, _ []string) (any, error) {
 		client, e := a.api(c)
 		if e != nil {

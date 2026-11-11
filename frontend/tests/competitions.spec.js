@@ -1,18 +1,19 @@
 import { expect, test } from "@playwright/test";
 
-async function register(page) {
+async function login(page) {
   await page.goto("/");
-  await page.getByRole("button", { name: "注册", exact: true }).click();
-  await page.getByLabel("用户名", { exact: true }).fill(`ctf_${Date.now()}`);
-  await page.getByLabel("密码", { exact: true }).fill("Testing123!");
+  await page.getByLabel("用户名", { exact: true }).fill("admin");
+  await page.getByLabel("密码", { exact: true }).fill("admin123");
   const captcha = page.getByRole("button", { name: "刷新验证码" });
   await expect(captcha).toHaveText(/\d+ \+ \d+/);
   const numbers = (await captcha.innerText()).match(/\d+/g).map(Number);
   await page
     .getByLabel("验证码", { exact: true })
     .fill(String(numbers[0] + numbers[1]));
-  await page.getByRole("button", { name: "注册并登录" }).click();
-  await expect(page.getByRole("heading", { name: "工作台总览" })).toBeVisible();
+  await page.getByRole("button", { name: "进入工作台" }).click();
+  await expect(page.getByRole("heading", { name: "工作台总览" })).toBeVisible({
+    timeout: 15000,
+  });
 }
 
 test("TSec configuration, rules upload, competition progress and controls", async ({
@@ -20,7 +21,7 @@ test("TSec configuration, rules upload, competition progress and controls", asyn
 }) => {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await register(page);
+  await login(page);
   const response = await page.request.post("/projects", {
     data: {
       title: "TSec Web challenge",
@@ -218,7 +219,10 @@ test("TSec configuration, rules upload, competition progress and controls", asyn
       .getByRole("navigation", { name: "主导航" })
       .getByRole("link", { name: "比赛", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "关闭导航" }).click();
+  // Click the exposed backdrop beside the sidebar on the 390 px viewport.
+  await page.getByRole("button", { name: "关闭导航" }).click({
+    position: { x: 380, y: 420 },
+  });
   await expect(page.locator(".sidebar")).not.toHaveClass(/open/);
   expect(
     await page.evaluate(

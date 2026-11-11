@@ -10,7 +10,6 @@ import (
 	"math/big"
 	"os"
 	"os/exec"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -39,8 +38,6 @@ type captchaChallenge struct {
 	answer  string
 	expires time.Time
 }
-
-var registrationUsernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func New(db *core.DB) *Handler {
 	runner := worker.New(db)
@@ -106,22 +103,6 @@ func badAuth(ctx iris.Context, err error) {
 	ctx.StopWithJSON(iris.StatusUnprocessableEntity, iris.Map{"detail": err.Error()})
 }
 
-func registrationValidationError(username, password string) string {
-	if strings.TrimSpace(username) == "" {
-		return "username must not be empty"
-	}
-	if len(username) < 3 || len(username) > 32 || !registrationUsernamePattern.MatchString(username) {
-		return "invalid username"
-	}
-	if password == "" {
-		return "password must not be empty"
-	}
-	if len(password) < 8 || len(password) > 72 {
-		return "password must be between 8 and 72 characters"
-	}
-	return ""
-}
-
 func rejectAuth(ctx iris.Context) bool {
 	// Navigation requests go back to the login shell, while API clients receive
 	// a JSON 401.
@@ -134,7 +115,7 @@ func rejectAuth(ctx iris.Context) bool {
 	return false
 }
 func (h *Handler) auth(ctx iris.Context) bool {
-	if ctx.Path() == "/" || ctx.Path() == "/healthz" || ctx.Path() == "/captcha" || strings.HasPrefix(ctx.Path(), "/auth/") || strings.HasPrefix(ctx.Path(), "/api/auth/") || ctx.Path() == "/register" || ctx.Path() == "/login" || ctx.Path() == "/logout" || ctx.Path() == "/me" {
+	if ctx.Path() == "/" || ctx.Path() == "/healthz" || ctx.Path() == "/captcha" || strings.HasPrefix(ctx.Path(), "/auth/") || strings.HasPrefix(ctx.Path(), "/api/auth/") || ctx.Path() == "/login" || ctx.Path() == "/logout" || ctx.Path() == "/me" {
 		return true
 	}
 	if os.Getenv("HOTMOUSE_AUTH_REQUIRED") == "0" {
@@ -175,39 +156,6 @@ func internalToken() string {
 	return ""
 }
 
-func (h *Handler) Register(ctx iris.Context) {
-	var r struct {
-		Username      string `json:"username"`
-		Password      string `json:"password"`
-		CaptchaID     string `json:"captcha_id"`
-		CaptchaAnswer string `json:"captcha_answer"`
-	}
-	if !readAuth(ctx, &r) {
-		return
-	}
-	if detail := registrationValidationError(r.Username, r.Password); detail != "" {
-		ctx.StopWithJSON(iris.StatusUnprocessableEntity, iris.Map{"detail": detail})
-		return
-	}
-	if value := strings.ToLower(strings.TrimSpace(os.Getenv("CAIRN_ALLOW_REGISTRATION"))); value != "" && value != "1" && value != "true" && value != "yes" && value != "on" {
-		ctx.StopWithJSON(iris.StatusForbidden, iris.Map{"detail": "registration is disabled"})
-		return
-	}
-	if !h.verifyCaptcha(r.CaptchaID, r.CaptchaAnswer) {
-		bad(ctx, fmt.Errorf("invalid captcha"))
-		return
-	}
-	u, e := h.DB.Register(ctx.Request().Context(), r.Username, r.Password)
-	if e != nil {
-		badAuth(ctx, e)
-		return
-	}
-	ctx.StatusCode(iris.StatusCreated)
-	if tok, _, err := h.DB.Login(ctx.Request().Context(), r.Username, r.Password); err == nil {
-		h.setSessionCookie(ctx, tok)
-	}
-	ctx.JSON(u)
-}
 func (h *Handler) Login(ctx iris.Context) {
 	var r struct {
 		Username      string `json:"username"`
@@ -2166,16 +2114,13 @@ func Register(app *iris.Application, h *Handler) {
 	})
 	app.Get("/", h.Health)
 	app.Get("/healthz", h.Health)
-	app.Post("/auth/register", h.Register)
 	app.Post("/auth/login", h.Login)
 	app.Post("/auth/logout", h.Logout)
 	app.Get("/auth/me", h.Me)
 	app.Get("/auth/captcha", h.Captcha)
-	app.Post("/register", h.Register)
 	app.Post("/login", h.Login)
 	app.Post("/logout", h.Logout)
 	app.Get("/me", h.Me)
-	app.Post("/api/auth/register", h.Register)
 	app.Post("/api/auth/login", h.Login)
 	app.Post("/api/auth/logout", h.Logout)
 	app.Get("/api/auth/me", h.Me)

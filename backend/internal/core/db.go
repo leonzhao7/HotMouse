@@ -147,6 +147,10 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("initialize target probe state: %w", err)
 	}
+	if err := ensureDefaultAdmin(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("initialize default admin: %w", err)
+	}
 	absPath, _ := filepath.Abs(path)
 	return &DB{SQL: d, Path: absPath}, nil
 }

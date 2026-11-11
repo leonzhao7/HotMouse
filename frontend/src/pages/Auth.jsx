@@ -16,7 +16,6 @@ import {
 } from "../components/ui.jsx";
 
 export default function Auth({ onLogin, expired }) {
-  const [mode, setMode] = useState("login");
   const [captcha, setCaptcha] = useState(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -36,14 +35,14 @@ export default function Auth({ onLogin, expired }) {
   };
   useEffect(() => {
     refresh();
-  }, [mode]);
+  }, []);
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true);
     setError(null);
     try {
       const user = await post(
-        `/api/auth/${mode}`,
+        "/api/auth/login",
         {
           username,
           password,
@@ -106,32 +105,8 @@ export default function Auth({ onLogin, expired }) {
       <section className="auth-entry">
         <div className="auth-card">
           <div className="eyebrow">WELCOME TO HOTMOUSE</div>
-          <h2>{mode === "login" ? "登录工作台" : "创建账户"}</h2>
-          <p>
-            {mode === "login"
-              ? "继续你的项目，查看最新执行结果。"
-              : "创建本地账户，开始管理你的安全项目。"}
-          </p>
-          <div className="auth-tabs">
-            <button
-              className={mode === "login" ? "active" : ""}
-              onClick={() => {
-                setMode("login");
-                setError(null);
-              }}
-            >
-              登录
-            </button>
-            <button
-              className={mode === "register" ? "active" : ""}
-              onClick={() => {
-                setMode("register");
-                setError(null);
-              }}
-            >
-              注册
-            </button>
-          </div>
+          <h2>登录工作台</h2>
+          <p>继续你的项目，查看最新执行结果。</p>
           {expired && (
             <div className="notice amber">登录会话已过期，请重新登录。</div>
           )}
@@ -142,31 +117,20 @@ export default function Auth({ onLogin, expired }) {
               autoComplete="username"
               autoFocus
               required
-              minLength={mode === "register" ? 3 : undefined}
               maxLength={32}
-              pattern={mode === "register" ? "[A-Za-z0-9_-]+" : undefined}
               value={username}
               onChange={(event) => setUsername(event.target.value)}
               placeholder="输入用户名"
-              hint={
-                mode === "register"
-                  ? "3–32 位字母、数字、下划线或短横线"
-                  : undefined
-              }
             />
             <TextField
               label="密码"
               type="password"
               required
-              minLength={mode === "register" ? 8 : undefined}
               maxLength={72}
-              autoComplete={
-                mode === "login" ? "current-password" : "new-password"
-              }
+              autoComplete="current-password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder="输入密码"
-              hint={mode === "register" ? "至少 8 位，最多 72 字节" : undefined}
             />
             <div className="captcha-row">
               <TextField
@@ -198,7 +162,7 @@ export default function Auth({ onLogin, expired }) {
               busy={busy}
               disabled={!captcha}
             >
-              {mode === "login" ? "进入工作台" : "注册并登录"}
+              进入工作台
             </Button>
           </form>
           <div className="auth-footnote">
