@@ -1,0 +1,12 @@
+
+sympy
+pwntools
+scapy
+pycryptodome
+gmpy2
+fpylll
+pyaes
+PyNaCl
+capstone
+pyelftools
+dpkt

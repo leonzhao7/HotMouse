@@ -27,36 +27,36 @@ type Descriptor struct {
 }
 
 type Attachment struct {
-	Name string `json:"name"`
-	URL  string `json:"url,omitempty"`
-	Path string `json:"path,omitempty"`
+	Name string `json:"name" yaml:"name"`
+	URL  string `json:"url,omitempty" yaml:"url,omitempty"`
+	Path string `json:"path,omitempty" yaml:"path,omitempty"`
 }
 
 type Challenge struct {
-	ID               string         `json:"id"`
-	Title            string         `json:"title"`
-	Description      *string        `json:"description"`
-	Difficulty       string         `json:"difficulty"`
-	Level            int            `json:"level"`
-	TotalScore       int            `json:"total_score"`
-	FlagCount        int            `json:"flag_count"`
-	CorrectFlagCount int            `json:"correct_flag_count"`
-	Completed        bool           `json:"completed"`
-	InstanceStatus   string         `json:"instance_status"`
-	Addresses        []string       `json:"addresses"`
-	Attachments      []Attachment   `json:"attachments"`
-	Metadata         map[string]any `json:"metadata,omitempty"`
+	ID               string         `json:"id" yaml:"id"`
+	Title            string         `json:"title" yaml:"title"`
+	Description      *string        `json:"description" yaml:"description"`
+	Difficulty       string         `json:"difficulty" yaml:"difficulty"`
+	Level            int            `json:"level" yaml:"level"`
+	TotalScore       int            `json:"total_score" yaml:"total_score"`
+	FlagCount        int            `json:"flag_count" yaml:"flag_count"`
+	CorrectFlagCount int            `json:"correct_flag_count" yaml:"correct_flag_count"`
+	Completed        bool           `json:"completed" yaml:"completed"`
+	InstanceStatus   string         `json:"instance_status" yaml:"instance_status"`
+	Addresses        []string       `json:"addresses" yaml:"addresses"`
+	Attachments      []Attachment   `json:"attachments" yaml:"attachments"`
+	Metadata         map[string]any `json:"metadata,omitempty" yaml:"metadata,omitempty"`
 }
 
 // Delivery represents both remotely started instances and file/inline tasks.
 // Addresses retain their platform-supplied protocols; a host:port is not
 // implicitly converted to an HTTP URL (it may be an SSH or raw TCP service).
 type Delivery struct {
-	ChallengeID string         `json:"challenge_id"`
-	Mode        string         `json:"mode"`
-	Addresses   []string       `json:"addresses"`
-	Attachments []Attachment   `json:"attachments"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
+	ChallengeID string         `json:"challenge_id" yaml:"challenge_id"`
+	Mode        string         `json:"mode" yaml:"mode"`
+	Addresses   []string       `json:"addresses" yaml:"addresses"`
+	Attachments []Attachment   `json:"attachments" yaml:"attachments"`
+	Metadata    map[string]any `json:"metadata,omitempty" yaml:"metadata,omitempty"`
 }
 
 type Submission struct {

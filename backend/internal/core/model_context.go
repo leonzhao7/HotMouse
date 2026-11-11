@@ -2,11 +2,13 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"hotmouse/backend/internal/ctfplatform"
 	"hotmouse/backend/internal/knowledge"
 )
 
@@ -30,10 +32,27 @@ type modelStep struct {
 	Worker         *string  `yaml:"worker,omitempty"`
 }
 type modelFlag struct {
-	ID          int64  `yaml:"id"`
-	ChallengeID string `yaml:"challenge_id"`
-	Status      string `yaml:"status"`
-	FactID      string `yaml:"fact_id"`
+	ID           int64  `yaml:"id"`
+	ChallengeID  string `yaml:"challenge_id"`
+	Status       string `yaml:"status"`
+	FactID       string `yaml:"fact_id"`
+	LastResponse string `yaml:"last_platform_response,omitempty"`
+}
+
+type modelPlatform struct {
+	Name         string                `yaml:"name"`
+	ChallengeID  string                `yaml:"challenge_id"`
+	SnapshotNote string                `yaml:"snapshot_note"`
+	Challenge    ctfplatform.Challenge `yaml:"challenge"`
+	Delivery     ctfplatform.Delivery  `yaml:"delivery"`
+}
+
+type modelWorkingState struct {
+	FactID     string         `yaml:"fact_id"`
+	StepID     string         `yaml:"step_id"`
+	ResultType string         `yaml:"result_type"`
+	Summary    string         `yaml:"summary"`
+	Evidence   map[string]any `yaml:"evidence,omitempty"`
 }
 
 // Keep every action available to the planner, without its verbose evidence.
@@ -48,7 +67,10 @@ type modelHistoricalStep struct {
 }
 
 type modelContext struct {
+	Platform       *modelPlatform        `yaml:"platform,omitempty"`
+	WorkingState   []modelWorkingState   `yaml:"working_state,omitempty"`
 	TargetAnalysis *TargetProbeAnalysis  `yaml:"target_analysis,omitempty"`
+	TargetHealth   map[string]any        `yaml:"target_health"`
 	Preprocessing  PreprocessingState    `yaml:"preprocessing"`
 	Flags          []modelFlag           `yaml:"flags,omitempty"`
 	SchemaVersion  int                   `yaml:"schema_version"`
@@ -109,6 +131,43 @@ func (d *DB) ModelContext(ctx context.Context, project, phase, stepID string) (s
 			"knowledge":  "GET /api/knowledge/entries/{id}; hotmouse kb show {id} --output json; references only, not project evidence",
 			"kb_search":  "GET /api/knowledge/entries?q={query}; hotmouse kb search {query} --output json",
 		}, Omitted: map[string]int{"closed_steps": 0, "facts": 0, "findings": len(detail.Findings)}}
+	out.TargetHealth = map[string]any{"status": detail.TargetProbe.Status, "last_checked_at": detail.TargetProbe.LastCheckedAt, "last_error": detail.TargetProbe.LastError, "consecutive_failures": detail.TargetProbe.ConsecutiveFailures}
+	if detail.Platform != nil {
+		binding := detail.Platform
+		out.Platform = &modelPlatform{Name: binding.Platform, ChallengeID: binding.ChallengeID, SnapshotNote: "Challenge/delivery metadata saved at import; use flags.last_platform_response for subsequent submission progress"}
+		if err := json.Unmarshal(binding.Challenge, &out.Platform.Challenge); err != nil {
+			return "", err
+		}
+		if err := json.Unmarshal(binding.Delivery, &out.Platform.Delivery); err != nil {
+			return "", err
+		}
+	}
+	// Structured evidence supplies saved entry points, artifacts, protocol,
+	// verified observations and the remaining hypothesis without a status reread.
+	for i := len(detail.Steps) - 1; i >= 0 && len(out.WorkingState) < 6; i-- {
+		s := detail.Steps[i]
+		if s.To == nil || s.Result == nil {
+			continue
+		}
+		state := modelWorkingState{FactID: *s.To, StepID: s.ID, ResultType: s.Result.Type, Evidence: map[string]any{}}
+		for _, f := range detail.Facts {
+			if f.ID == *s.To {
+				state.Summary = brief(f.Description, 320)
+				break
+			}
+		}
+		for _, key := range []string{"entry_points", "artifacts", "protocol", "verified", "remaining_hypothesis", "next_check", "knowledge_refs", "python", "capabilities_path"} {
+			if value, ok := s.Result.Evidence[key]; ok {
+				encoded, _ := json.Marshal(value)
+				if len(encoded) <= 1600 {
+					state.Evidence[key] = value
+				} else {
+					state.Evidence[key] = "Read step " + s.ID + " detail for " + key
+				}
+			}
+		}
+		out.WorkingState = append(out.WorkingState, state)
+	}
 	recoveries := map[string]string{}
 	rows, err := d.SQL.QueryContext(ctx, `SELECT step_id,status FROM worker_execute_recovery WHERE project_id=?`, project)
 	if err != nil {
@@ -216,7 +275,11 @@ func (d *DB) ModelContext(ctx context.Context, project, phase, stepID string) (s
 		return "", err
 	}
 	for _, flag := range flags {
-		out.Flags = append(out.Flags, modelFlag{ID: flag.ID, ChallengeID: flag.ChallengeID, Status: flag.Status, FactID: flag.FactID})
+		view := modelFlag{ID: flag.ID, ChallengeID: flag.ChallengeID, Status: flag.Status, FactID: flag.FactID}
+		if len(flag.Attempts) > 0 {
+			view.LastResponse = brief(flag.Attempts[len(flag.Attempts)-1].Response, 1000)
+		}
+		out.Flags = append(out.Flags, view)
 	}
 	// Include the execution goal's ancestry and all evidence referenced by goals.
 	for changed := true; changed; {

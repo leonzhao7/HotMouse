@@ -51,6 +51,11 @@ Competition rules:
 		return competition.Plan{}, err
 	}
 	config.identity, config.logger = "competition/"+run.ID+"/dispatcher", r.logger
+	// Populate the reusable interpreter/import inventory before challenge work.
+	prewarm := map[string]string{"HOTMOUSE_WORKSPACE_DIR": workspace}
+	if err := r.bindFastWorkflow(ctx, prewarm, config, "", "decide"); err != nil {
+		r.logger.Printf("competition capability preparation: %v", err)
+	}
 	vars := map[string]string{"HOTMOUSE_TASK_TYPE": "competition_plan", "HOTMOUSE_COMPETITION_ID": run.ID, "HOTMOUSE_COMPETITION_RULES": run.Rules, "HOTMOUSE_COMPETITION_CHALLENGES": string(data), "HOTMOUSE_WORKER_PROMPT": prompt, "HOTMOUSE_WORKSPACE_DIR": workspace, "TMPDIR": filepath.Join(workspace, "tmp")}
 	history := r.historyStart("", "", "competition_plan", time.Now().UTC().Format(time.RFC3339Nano), config.identity)
 	r.setTaskLogger(history, r.processLogger(config, "", "", "competition_plan").With("run", run.ID))

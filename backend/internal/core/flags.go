@@ -36,6 +36,14 @@ func captureFlagTx(t *sql.Tx, project string, req CaptureFlag) (Flag, error) {
 	req.Value = clean(req.Value)
 	req.ChallengeID = clean(req.ChallengeID)
 	req.FactID = clean(req.FactID)
+	if req.ChallengeID == "" {
+		// A final Finding may omit challenge_id after an early checkpoint used
+		// the platform binding. Use the same ledger identity for both paths.
+		err := t.QueryRow(`SELECT challenge_id FROM platform_projects WHERE project_id=?`, project).Scan(&req.ChallengeID)
+		if err != nil && err != sql.ErrNoRows {
+			return Flag{}, err
+		}
+	}
 	if err := requireText("flag value", req.Value); err != nil {
 		return Flag{}, err
 	}

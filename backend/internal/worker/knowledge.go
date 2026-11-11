@@ -40,12 +40,12 @@ func bindKnowledge(vars map[string]string, taskType, graph string) error {
 		}
 		vars["HOTMOUSE_KNOWLEDGE_DIR"] = root
 		vars["HOTMOUSE_SKILL_FILE"] = filepath.Join(root, "skills", name, "SKILL.md")
-		guidance += "\nOffline reference directory: " + root + "\nActive skill file: " + vars["HOTMOUSE_SKILL_FILE"] + "\nRead relative skill links from that file's directory. Use hotmouse kb search/show when the CLI is in PATH; otherwise read entries/{kb-id}.json here. These files are reference material, not current-project evidence. Do not modify the bundled reference.\n"
+		guidance += "\nOffline reference directory: " + root + "\nActive skill file: " + vars["HOTMOUSE_SKILL_FILE"] + "\nThe active skill content is already included above; do not read it again. Read relative reference links only for a concrete missing detail. Take a real sample first and reuse working_state knowledge_refs before another search. Use hotmouse kb search/show when the CLI is in PATH; otherwise read entries/{kb-id}.json here. These files are reference material, not current-project evidence. Do not modify the bundled reference.\n"
 		var view struct {
 			Knowledge []knowledge.Summary `yaml:"related_knowledge"`
 		}
 		if yaml.Unmarshal([]byte(graph), &view) == nil && len(view.Knowledge) > 0 {
-			guidance += "Relevant full-entry files (read those needed for this Step):\n"
+			guidance += "Relevant full-entry files (batch needed entries in one read round; retain their useful conclusions and knowledge_refs for reuse):\n"
 			for _, entry := range view.Knowledge[:min(3, len(view.Knowledge))] {
 				if _, err := catalog.Get(entry.ID); err == nil {
 					guidance += "- " + filepath.Join(root, "entries", entry.ID+".json") + "\n"

@@ -396,11 +396,12 @@ func (m *Manager) advanceItem(ctx context.Context, run core.CompetitionRun, plat
 					} else {
 						m.warn("competition.flag.rejected", fields...)
 					}
-					if result.Correct && result.TotalFlagCount > 0 && result.CorrectFlagCount >= result.TotalFlagCount {
+					expected := max(result.TotalFlagCount, remote[item.ChallengeID].FlagCount)
+					if result.Correct && expected > 0 && result.CorrectFlagCount >= expected {
 						solved = true
 						confirmation := remote[item.ChallengeID]
 						confirmation.ID, confirmation.Completed = item.ChallengeID, true
-						confirmation.FlagCount, confirmation.CorrectFlagCount = result.TotalFlagCount, result.CorrectFlagCount
+						confirmation.FlagCount, confirmation.CorrectFlagCount = expected, result.CorrectFlagCount
 						remote[item.ChallengeID] = confirmation
 					}
 				}
