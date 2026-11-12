@@ -287,9 +287,16 @@ func (r *Runner) runProvider(ctx context.Context, cfg workerConfig, phase, sessi
 			}
 		}
 	}
+	optchat, err := r.preparePiOptchat(ctx, cfg, vars)
+	if err != nil {
+		return nil, session, processResult{}, err
+	}
 	argv, err := providerArgv(cfg, phase, session, stateWorkspace, vars["HOTMOUSE_WORKER_PROMPT"])
 	if err != nil {
 		return nil, session, processResult{}, err
+	}
+	if optchat != nil {
+		argv = piOptchatPrintArgs(argv, optchat, vars["HOTMOUSE_WORKER_PROMPT"])
 	}
 	logger := r.processLogger(cfg, vars["HOTMOUSE_PROJECT_ID"], vars["HOTMOUSE_STEP_ID"], vars["HOTMOUSE_TASK_TYPE"]+"/"+phase)
 	if canonicalDriver(cfg.driver) == "pi" && cfg.env["PI_MODEL"] != "" && cfg.env["PI_BASE_URL"] != "" && cfg.env["PI_API_KEY"] != "" && cfg.env["PI_PROVIDER_API"] != "" {
@@ -327,7 +334,22 @@ func (r *Runner) runProvider(ctx context.Context, cfg workerConfig, phase, sessi
 		onOutput = observations.stream
 	}
 	result := runProcessObserved(runCtx, argv, cfg.env, workspace, vars, timeout, observe, onOutput, logger)
-	response, responseErr := providerResponse(cfg.driver, result.stdout)
+	var response []byte
+	var responseErr error
+	if optchat != nil {
+		response = []byte(strings.TrimSpace(string(result.stdout)))
+		if len(response) == 0 {
+			responseErr = fmt.Errorf("Pi OptChat returned no completed assistant response")
+		}
+		if seen == "" {
+			seen = "optchat:" + optchat.profile
+		}
+		if observations != nil {
+			observations.captureText(string(response), "connected Pi session result", true)
+		}
+	} else {
+		response, responseErr = providerResponse(cfg.driver, result.stdout)
+	}
 	if responseErr != nil && logger != nil {
 		logger.Warn("provider.response_failed", "error", responseErr, "response_bytes", len(response))
 	}

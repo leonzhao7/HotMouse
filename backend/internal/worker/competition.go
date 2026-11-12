@@ -120,10 +120,11 @@ func (r *Runner) projectContext(parent context.Context, project string) (context
 }
 func (r *Runner) CancelProject(project string) {
 	r.activeMu.Lock()
-	defer r.activeMu.Unlock()
 	for cancel := range r.activeProjects[project] {
 		(*cancel)()
 	}
+	r.activeMu.Unlock()
+	r.stopPiOptchatOwners(project)
 }
 func (r *Runner) ProjectBusy(project string) bool {
 	r.activeMu.Lock()

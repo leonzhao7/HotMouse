@@ -25,7 +25,7 @@ func fakePi(t *testing.T, script string, runtime core.WorkerRuntime) (*core.DB, 
 	}
 	t.Cleanup(func() { db.SQL.Close() })
 	marker := filepath.Join(dir, "calls")
-	env, _ := json.Marshal(map[string]string{"PI_CLI": binary, "TEST_CALLS": marker, "TEST_DIR": dir})
+	env, _ := json.Marshal(map[string]string{"PI_CLI": binary, "PI_OPTCHAT_EXTENSION": "", "TEST_CALLS": marker, "TEST_DIR": dir})
 	limits, _ := json.Marshal(runtime)
 	if _, err := db.SQL.Exec("UPDATE worker_config SET driver='pi',environment_json=?,runtime_json=? WHERE id=1", string(env), string(limits)); err != nil {
 		t.Fatal(err)

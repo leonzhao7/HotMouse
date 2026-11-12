@@ -35,6 +35,8 @@ type Runner struct {
 	probeMu        sync.Mutex
 	targetStartups map[string]*targetMonitor
 	targetMonitors map[string]*targetMonitor
+	optchatMu      sync.Mutex
+	optchatOwners  map[string]*piOptchatOwner
 	lifecycleCtx   context.Context
 	probeInterval  time.Duration
 	probeDial      func(context.Context, core.TargetEndpoint) error
@@ -73,7 +75,7 @@ type workerConfig struct {
 const defaultWorkerCount = 4
 
 func New(db *core.DB) *Runner {
-	return &Runner{DB: db, Interval: time.Second, logger: logging.New(io.Discard, "worker"), stepLock: map[string]*sync.Mutex{}, workspaceLock: map[string]*sync.Mutex{}, targetStartups: map[string]*targetMonitor{}, targetMonitors: map[string]*targetMonitor{}}
+	return &Runner{DB: db, Interval: time.Second, logger: logging.New(io.Discard, "worker"), stepLock: map[string]*sync.Mutex{}, workspaceLock: map[string]*sync.Mutex{}, targetStartups: map[string]*targetMonitor{}, targetMonitors: map[string]*targetMonitor{}, optchatOwners: map[string]*piOptchatOwner{}}
 }
 
 func (r *Runner) SetLogOutput(output io.Writer) {
@@ -150,6 +152,7 @@ func (r *Runner) startDispatchersAndWorkers(ctx context.Context) {
 		cancel()
 		wg.Wait()
 		r.stopTargetMonitors()
+		r.stopPiOptchatOwners("")
 		r.logger.Info("worker.pool.stop")
 	}()
 
@@ -1615,14 +1618,11 @@ func (r *Runner) processLogger(cfg workerConfig, project, step, task string) *lo
 
 func (r *Runner) cleanupCompletedWorkspaces(ctx context.Context) {
 	cfg := r.config(ctx)
-	if cfg.completedAction != "remove" {
-		return
-	}
 	root, err := r.workspaceRoot(cfg)
-	if err != nil {
+	if err != nil && cfg.completedAction == "remove" {
 		return
 	}
-	rows, err := r.DB.SQL.QueryContext(ctx, `SELECT id FROM projects WHERE status='completed'`)
+	rows, err := r.DB.SQL.QueryContext(ctx, `SELECT id FROM projects WHERE status!='active'`)
 	if err != nil {
 		return
 	}
@@ -1630,6 +1630,10 @@ func (r *Runner) cleanupCompletedWorkspaces(ctx context.Context) {
 	for rows.Next() {
 		var project string
 		if rows.Scan(&project) != nil || filepath.Base(project) != project || project == "." || project == ".." {
+			continue
+		}
+		r.stopPiOptchatOwners(project)
+		if cfg.completedAction != "remove" {
 			continue
 		}
 		dir := filepath.Join(root, project)

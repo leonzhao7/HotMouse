@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -69,6 +70,10 @@ func runProcess(parent context.Context, argv []string, env map[string]string, cw
 
 // Observe bytes before retention limits or response parsing discard them.
 func runProcessObserved(parent context.Context, argv []string, env map[string]string, cwd string, vars map[string]string, timeout time.Duration, onLine func([]byte), onOutput func(string, []byte), diagnostics ...*logging.Logger) processResult {
+	return runProcessWithInput(parent, argv, env, cwd, vars, timeout, nil, onLine, onOutput, diagnostics...)
+}
+
+func runProcessWithInput(parent context.Context, argv []string, env map[string]string, cwd string, vars map[string]string, timeout time.Duration, input io.Reader, onLine func([]byte), onOutput func(string, []byte), diagnostics ...*logging.Logger) processResult {
 	started := time.Now()
 	var ctx context.Context
 	var cancel context.CancelFunc
@@ -79,6 +84,7 @@ func runProcessObserved(parent context.Context, argv []string, env map[string]st
 	}
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Stdin = input
 	cmd.Dir = cwd
 	cmd.Env = logging.MergeEnvironment(os.Environ(), env, vars)
 	var logger *logging.Logger
