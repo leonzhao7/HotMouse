@@ -57,6 +57,8 @@ The Dispatcher commits saved successful results first, then processes summaries 
 
 Built-in `codex`, `claude`/`claudecode`, and `pi` drivers use local CLIs. Set `PI_CLI` in the worker environment when Pi is installed outside `PATH`; the worker test and health summary verify CLI availability only, not provider credentials or model API access.
 
+When `pi-optchat` is installed, Pi workers on the same project share one OptChat memory profile. A background Pi process owns the memory; each Worker and Dispatcher keeps its own native JSON event stream, model, environment, tool limits and resumable session. Interrupted execution summaries and JSON format repairs continue the original session. The profile location is recorded in the project's `.hotmouse/optchat-profile.json`; `OPTCHAT_HOME` selects its storage root. Set `PI_OPTCHAT_EXTENSION` to the installed `pi-optchat/src/index.ts` when it is outside Pi's usual package directory, or set it to an empty string to disable shared memory.
+
 LLM responses for competition planning, target analysis, project planning, execution and recovery summaries may include explanatory prose around one complete JSON object, including Markdown fences, inline code and flag-format placeholders. HotMouse extracts the object and applies the task's field validation. Invalid or truncated JSON, duplicate keys and additional standalone JSON objects or arrays are rejected. Explanatory text in a valid execution response is preserved in the original Step response and does not trigger a recovery summary.
 
 Reports and report templates/attachments are outside this migration. Docker image builds and deployment are documented in [docker/README.md](../docker/README.md).

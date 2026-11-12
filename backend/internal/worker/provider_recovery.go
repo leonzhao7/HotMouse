@@ -166,7 +166,10 @@ func (r *Runner) summarizeProvider(ctx context.Context, cfg workerConfig, projec
 		retries = cfg.runtime.FormatRetries
 	}
 	for attempt := 0; attempt <= retries; attempt++ {
-		output, _, _, runErr := r.runProvider(summaryCtx, cfg, "summary", x.session, workspace, vars, time.Duration(cfg.runtime.ConcludeTimeoutSeconds)*time.Second, nil)
+		output, _, _, runErr := r.runProvider(summaryCtx, cfg, "summary", x.session, workspace, vars, time.Duration(cfg.runtime.ConcludeTimeoutSeconds)*time.Second, func(id string) error {
+			x.session = id
+			return r.saveProviderCheckpoint(summaryCtx, project, step, x)
+		})
 		err = runErr
 		if err == nil {
 			err = validateProviderExecute(output)

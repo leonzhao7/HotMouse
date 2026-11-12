@@ -172,7 +172,9 @@ hotmouse --project proj_001 flag resolve 1 1 --status accepted --response '核�
 
 每次规划和执行直接提供 `working_state`：最近步骤的入口、附件、协议、已验证结果、剩余假设、下一项检查、知识库引用及解释器路径。知识库技能已注入 prompt，无需再次读取；只为具体证据缺口批量读取所需条目，保存有用结论和 `knowledge_refs` 供后续复用。平台元数据是导入快照，后续提交进度以 flag 台账中的原始响应为准。
 
-执行进程得到候选值后，先保存原始输出并使用内置检查点脚本，随后再生成完整报告：
+Worker 输出和工具输出中的候选 flag 由纯代码自动提取、保存原始来源并入账，不调用 LLM，也不等待模型总结或报告。Pi 工具执行中的部分输出、Codex 工具事件、Claude 流式工具结果，以及 command worker 的 stdout/stderr 均接入该路径。输出流随到随写入当前步骤的 `.hotmouse/results/<step>/outputs/`；候选来源另存为不可变快照。支持常见 flag 包装、初始题面声明的包装及平台 metadata.flag_pattern，过滤占位符；工具输入和模型思考不作为候选来源。
+
+原有检查点脚本继续支持显式交付特殊格式或只写文件的结果：
 
 ```bash
 "$HOTMOUSE_PYTHON" "$HOTMOUSE_CTF_HELPER" checkpoint \
@@ -185,9 +187,13 @@ hotmouse --project proj_001 flag resolve 1 1 --status accepted --response '核�
 
 比赛协调器沿用现有平台适配器提交新候选，无需等待完整报告或单独的模型提交步骤。候选捕获不代表成功；被拒绝需修正具体值，pending/unknown 需核对原提交，不盲目重提。多 flag 完成条件同时参考平台题目要求和提交响应，全部接受后才判题目成功。非比赛项目的提交继续遵守原有任务授权。
 
+比赛页面各题目的“初始描述”展示对应项目的原始 origin 事实，保留题面、靶机地址和附件信息，支持展开与搜索。旧比赛无需迁移；尚未取得项目初始事实的题目显示“尚未获得初始描述”。
+
 回归覆盖简单附件跨 worker 只下载一次、Crypto/Cryptodome 分列检查、专用 venv 实际解释器、报告返回前候选入账、损坏报告保留原始来源、候选篡改/格式不符拒绝、重复检查点去重、拒绝响应及多 flag 平台判定。真实比赛的请求数和墙钟收益仍需用固定题集复测。
 
-本次验证：`go test ./...` 及新流程相关的定向 `-race` 测试通过。全量 `go test -race ./...` 未通过，core/worker 在现有 bcrypt 认证与默认账号初始化计算中达到包级 10 分钟上限，CLI 的服务启动/关闭测试也触发固定时限；普通测试中的相应用例通过。本次未调整认证实现或测试时限。
+此前显式检查点流程验证：`go test ./...` 及该流程相关的定向 `-race` 测试通过。全量 `go test -race ./...` 未通过，core/worker 在现有 bcrypt 认证与默认账号初始化计算中达到包级 10 分钟上限，CLI 的服务启动/关闭测试也触发固定时限；普通测试中的相应用例通过。当时未调整认证实现或测试时限。
+
+2026-11-11 自动输出捕获改动验证：worker 全量测试通过；core、competition、httpapi 的 Competition/Automatic/Flag/Platform 回归通过；自动工具输出取消与自动多 flag 提交两个端到端用例的 `-race` 检查通过。前端 9 个单元测试、生产构建及比赛页面浏览器回归通过，浏览器覆盖初始描述展开、内容搜索、HTML 文本安全及手机页面溢出检查。后端测试显式使用 `/usr/bin/python3`，浏览器使用已有 `/tmp/hotmouse-browser-deps` 动态库。曾尝试四个包的全量串行测试，worker 通过后命令以 143 退出，其余包随后按改动范围完成回归；不宣称本次全量 core/httpapi 测试完成。
 
 ## 远程 CTF 目标探活
 

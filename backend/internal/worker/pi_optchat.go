@@ -19,6 +19,9 @@ import (
 //go:embed pi_optchat_owner.mjs
 var piOptchatOwnerExtension string
 
+//go:embed pi_optchat_client.mjs
+var piOptchatClientExtension string
+
 type piOptchatConfig struct {
 	profile, home, plugin, runtime, socket string
 }
@@ -120,8 +123,12 @@ func (r *Runner) preparePiOptchat(ctx context.Context, cfg workerConfig, vars ma
 	}
 	profileDirectory := filepath.Join(home, "profiles", profile)
 	config := &piOptchatConfig{profile: profile, home: home, plugin: plugin, runtime: runtime,
-		socket: filepath.Join(profileDirectory, "windows.sock")}
+		socket: filepath.Join(profileDirectory, "hotmouse.sock")}
 	vars["OPTCHAT_HOME"] = home
+	vars["HOTMOUSE_OPTCHAT_SOCKET"] = config.socket
+	if err := writeWorkflowFile(filepath.Join(runtime, "client.mjs"), []byte(piOptchatExtension(config, piOptchatClientExtension))); err != nil {
+		return nil, err
+	}
 	if err := r.ensurePiOptchatOwner(ctx, project, cfg, config); err != nil {
 		return nil, err
 	}
@@ -143,7 +150,7 @@ func (r *Runner) ensurePiOptchatOwner(ctx context.Context, project string, cfg w
 		return nil
 	}
 	r.optchatMu.Lock()
-	owner := r.optchatOwners[config.profile]
+	owner := r.optchatOwners[config.socket]
 	if owner == nil {
 		parent := context.Background()
 		r.probeMu.Lock()
@@ -156,7 +163,7 @@ func (r *Runner) ensurePiOptchatOwner(ctx context.Context, project string, cfg w
 		if r.optchatOwners == nil {
 			r.optchatOwners = map[string]*piOptchatOwner{}
 		}
-		r.optchatOwners[config.profile] = owner
+		r.optchatOwners[config.socket] = owner
 		go r.startPiOptchatOwner(ownerCtx, cfg, config, owner)
 	}
 	r.optchatMu.Unlock()
@@ -182,8 +189,8 @@ func (r *Runner) startPiOptchatOwner(ctx context.Context, cfg workerConfig, conf
 	defer func() {
 		close(owner.done)
 		r.optchatMu.Lock()
-		if r.optchatOwners[config.profile] == owner {
-			delete(r.optchatOwners, config.profile)
+		if r.optchatOwners[config.socket] == owner {
+			delete(r.optchatOwners, config.socket)
 		}
 		r.optchatMu.Unlock()
 	}()
@@ -203,12 +210,7 @@ func (r *Runner) startPiOptchatOwner(ctx context.Context, cfg workerConfig, conf
 		return
 	}
 	ownerPath := filepath.Join(config.runtime, "owner.mjs")
-	profilesPath := filepath.Join(filepath.Dir(config.plugin), "profiles.ts")
-	extension := strings.NewReplacer(
-		"__OPTCHAT_INDEX__", quotedJS(config.plugin),
-		"__OPTCHAT_PROFILES__", quotedJS(profilesPath),
-		"__OPTCHAT_PROFILE__", quotedJS(config.profile),
-	).Replace(piOptchatOwnerExtension)
+	extension := piOptchatExtension(config, piOptchatOwnerExtension)
 	if err := writeWorkflowFile(ownerPath, []byte(extension)); err != nil {
 		owner.err = err
 		return
@@ -225,7 +227,7 @@ func (r *Runner) startPiOptchatOwner(ctx context.Context, cfg workerConfig, conf
 			break
 		}
 	}
-	argv = append(argv, "-e", ownerPath, "--optchat-profile", config.profile)
+	argv = append(argv, "-e", ownerPath)
 	vars := map[string]string{"OPTCHAT_HOME": config.home}
 	if cfg.env["PI_MODEL"] != "" && cfg.env["PI_BASE_URL"] != "" && cfg.env["PI_API_KEY"] != "" && cfg.env["PI_PROVIDER_API"] != "" {
 		vars["PI_CODING_AGENT_DIR"] = filepath.Join(config.runtime, ".hotmouse", "pi-agent")
@@ -275,19 +277,28 @@ func (r *Runner) startPiOptchatOwner(ctx context.Context, cfg workerConfig, conf
 	}
 }
 
-func piOptchatPrintArgs(argv []string, config *piOptchatConfig, prompt string) []string {
-	args := append([]string(nil), argv[:1]...)
-	for i := 1; i < len(argv); i++ {
-		switch argv[i] {
-		case "--mode", "--session":
-			i++
-		case "-p":
-			i++
-		default:
-			args = append(args, argv[i])
-		}
-	}
-	return append(args, "-e", config.plugin, "--optchat-profile", config.profile, "--optchat-connect", "auto", "-p", prompt)
+func piOptchatArgs(argv []string, config *piOptchatConfig) []string {
+	// Keep native JSON events and the exact session being resumed. The extension
+	// only supplies shared memory; it never transfers execution to another Pi.
+	args := append([]string(nil), argv[:len(argv)-2]...)
+	args = append(args, "-e", filepath.Join(config.runtime, "client.mjs"))
+	return append(args, argv[len(argv)-2:]...)
+}
+
+func piOptchatExtension(config *piOptchatConfig, template string) string {
+	source := filepath.Dir(config.plugin)
+	return strings.NewReplacer(
+		"__OPTCHAT_MEMORY__", quotedJS(filepath.Join(source, "memory.ts")),
+		"__OPTCHAT_COMPACTOR__", quotedJS(filepath.Join(source, "compactor.ts")),
+		"__OPTCHAT_IMPORT__", quotedJS(filepath.Join(source, "import", "job.ts")),
+		"__OPTCHAT_MESSAGES__", quotedJS(filepath.Join(source, "core", "messages.ts")),
+		"__OPTCHAT_TOOLS__", quotedJS(filepath.Join(source, "core", "tools.ts")),
+		"__OPTCHAT_PROMPTS__", quotedJS(filepath.Join(source, "core", "prompts.ts")),
+		"__OPTCHAT_STORE__", quotedJS(filepath.Join(source, "store.ts")),
+		"__OPTCHAT_PROFILES__", quotedJS(filepath.Join(source, "profiles.ts")),
+		"__OPTCHAT_PROFILE__", quotedJS(config.profile),
+		"__OPTCHAT_SOCKET__", quotedJS(config.socket),
+	).Replace(template)
 }
 
 func quotedJS(value string) string {

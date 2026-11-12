@@ -1,0 +1,46 @@
+{
+  "run": {
+    "id": "competition_005",
+    "created_at": "2026-11-12T03:50:22Z",
+    "finished_at": "2026-11-12T09:50:23Z",
+    "status": "failed",
+    "concurrency": 2,
+    "max_workers": 1,
+    "challenge_timeout_seconds": 1200
+  },
+  "status_counts": {
+    "succeeded": 25,
+    "failed": 15
+  },
+  "nominal_score": 11000,
+  "all_nominal_score": 20800,
+  "success_wall_seconds": 7182.753000000001,
+  "failure_wall_seconds": 16700.229,
+  "task_busy_union_seconds": 20678.961369000008,
+  "observed_llm_union_seconds": 14373.531,
+  "observed_tool_wait_union_seconds": 2841.0820000000003,
+  "llm_responses": 839,
+  "llm_duration_seconds": 17913.673,
+  "llm_duration_median_seconds": 12.233,
+  "llm_duration_over_60_count": 61,
+  "llm_stages": {
+    "decide": 108,
+    "target_probe": 79,
+    "execute": 614,
+    "dispatch_commit": 38
+  },
+  "local_tool_counts": {
+    "bash": 643,
+    "read": 165,
+    "write": 50,
+    "ls": 1,
+    "edit": 1
+  },
+  "reference_files": 176,
+  "reference_complete_files": 176,
+  "reference_events": 4866,
+  "reference_report_flags": 49,
+  "reference_hint_calls": 2,
+  "reference_challenges_with_report_flag": 40,
+  "transcript_dir": "/tmp/hotmouse-competition005-analysis"
+}

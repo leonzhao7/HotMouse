@@ -1,0 +1,199 @@
+challenge_id,project_id,task_id,step_id,task_type,status,started_at,finished_at,duration_seconds,error_summary
+g-04,proj_087,770,,target_probe,completed,2026-11-11T13:14:25.091228647Z,2026-11-11T13:15:32.874474201Z,67.783,
+g-04,proj_087,771,,decide,completed,2026-11-11T13:15:32.890586186Z,2026-11-11T13:16:26.318602872Z,53.428,
+g-04,proj_087,772,s001,execute,summary_pending,2026-11-11T13:16:27.071528282Z,2026-11-11T13:21:27.250808741Z,300.179,execution interrupted; project dispatcher will summarize the saved session
+g-04,proj_087,773,s002,execute,summary_pending,2026-11-11T13:21:27.262111689Z,2026-11-11T13:26:27.467686066Z,300.206,execution interrupted; project dispatcher will summarize the saved session
+g-04,proj_087,774,s001,dispatch_commit,completed,2026-11-11T13:21:28.090796852Z,2026-11-11T13:21:53.387120205Z,25.296,
+g-04,proj_087,775,,decide,completed,2026-11-11T13:21:53.401126966Z,2026-11-11T13:24:18.699221583Z,145.298,
+g-04,proj_087,776,s003,execute,summary_pending,2026-11-11T13:26:27.48118932Z,2026-11-11T13:31:27.83998491Z,300.359,execution interrupted; project dispatcher will summarize the saved session
+g-04,proj_087,777,s002,dispatch_commit,completed,2026-11-11T13:26:28.083331904Z,2026-11-11T13:27:43.681222286Z,75.598,
+g-04,proj_087,778,,decide,completed,2026-11-11T13:27:43.694248585Z,2026-11-11T13:31:29.031818498Z,225.338,
+g-04,proj_087,779,s003,dispatch_commit,summary_pending,2026-11-11T13:31:29.038931483Z,2026-11-11T13:32:59.214239856Z,90.175,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-04,proj_087,780,s004,execute,summary_pending,2026-11-11T13:31:29.071287707Z,2026-11-11T13:34:11.8912354Z,162.82,context canceled
+g-05,proj_067,617,,target_probe,completed,2026-11-11T08:42:37.073175121Z,2026-11-11T08:43:20.154633292Z,43.081,
+g-05,proj_067,618,,decide,completed,2026-11-11T08:43:20.165367462Z,2026-11-11T08:43:50.131972989Z,29.967,
+g-05,proj_067,619,s001,execute,summary_pending,2026-11-11T08:43:51.078949408Z,2026-11-11T08:47:39.23886877Z,228.16,context canceled
+g-06,proj_073,654,,target_probe,completed,2026-11-11T09:43:17.073183912Z,2026-11-11T09:44:02.591878405Z,45.519,
+g-06,proj_073,655,,decide,completed,2026-11-11T09:44:02.608599015Z,2026-11-11T09:46:42.676270139Z,160.068,
+g-06,proj_073,656,s001,execute,summary_pending,2026-11-11T09:46:43.117389835Z,2026-11-11T09:51:43.541844753Z,300.424,execution interrupted; project dispatcher will summarize the saved session
+g-06,proj_073,657,s001,dispatch_commit,summary_pending,2026-11-11T09:51:44.076381946Z,2026-11-11T09:53:14.160915961Z,90.085,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-06,proj_073,658,s001,dispatch_commit,summary_pending,2026-11-11T09:53:20.074413885Z,2026-11-11T09:54:49.747574081Z,89.673,provider summary failed: invalid JSON response
+g-06,proj_073,659,s001,dispatch_commit,failed,2026-11-11T09:55:00.076612509Z,2026-11-11T09:56:30.202211276Z,90.126,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-06,proj_073,660,,decide,completed,2026-11-11T09:56:30.213726458Z,2026-11-11T09:59:07.579686214Z,157.366,
+g-06,proj_073,661,s002,execute,summary_pending,2026-11-11T09:59:08.070521721Z,2026-11-11T10:01:11.929201232Z,123.859,context canceled
+g-07,proj_068,620,,target_probe,failed,2026-11-11T08:47:42.070992751Z,2026-11-11T08:50:04.953281646Z,142.882,unexpected content after JSON response
+g-07,proj_068,621,,target_probe,failed,2026-11-11T08:50:10.071540004Z,2026-11-11T08:50:43.576091555Z,33.505,ambiguous JSON outside response fence
+g-07,proj_068,622,,target_probe,failed,2026-11-11T08:50:49.072203636Z,2026-11-11T08:51:16.08536962Z,27.013,unexpected content after JSON response
+g-08,proj_069,623,,target_probe,failed,2026-11-11T08:51:19.072310562Z,2026-11-11T08:52:04.888953162Z,45.817,ambiguous JSON outside response fence
+g-08,proj_069,624,,target_probe,completed,2026-11-11T08:52:10.073182973Z,2026-11-11T08:52:30.906109721Z,20.833,
+g-08,proj_069,625,,decide,completed,2026-11-11T08:52:30.920224865Z,2026-11-11T08:53:05.094320966Z,34.174,
+g-08,proj_069,626,s001,execute,summary_pending,2026-11-11T08:53:05.079184886Z,2026-11-11T08:58:05.593678172Z,300.514,execution interrupted; project dispatcher will summarize the saved session
+g-08,proj_069,627,s001,dispatch_commit,summary_pending,2026-11-11T08:58:06.094120346Z,2026-11-11T08:59:31.39260919Z,85.298,"provider summary failed: unexpected result field ""title"""
+g-08,proj_069,628,s001,dispatch_commit,summary_pending,2026-11-11T08:59:37.074646038Z,2026-11-11T09:01:07.191795869Z,90.117,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-08,proj_069,629,s001,dispatch_commit,failed,2026-11-11T09:01:18.082154166Z,2026-11-11T09:02:24.749096145Z,66.667,"provider summary failed: unexpected result field ""title"""
+g-08,proj_069,630,,decide,completed,2026-11-11T09:02:24.757320153Z,2026-11-11T09:06:04.099106045Z,219.342,
+g-08,proj_069,631,s002,execute,summary_pending,2026-11-11T09:06:05.079250448Z,2026-11-11T09:06:29.751371906Z,24.672,context canceled
+g-09,proj_064,608,,target_probe,completed,2026-11-11T08:28:01.073745097Z,2026-11-11T08:28:43.558284197Z,42.485,
+g-09,proj_064,609,,decide,completed,2026-11-11T08:28:43.573697372Z,2026-11-11T08:29:33.848681556Z,50.275,
+g-09,proj_064,610,s001,execute,summary_pending,2026-11-11T08:29:34.069515067Z,2026-11-11T08:32:42.827247772Z,188.758,context canceled
+g-10,proj_074,662,,target_probe,completed,2026-11-11T10:01:16.074722313Z,2026-11-11T10:01:33.407276957Z,17.333,
+g-10,proj_074,663,,decide,invalid_payload,2026-11-11T10:01:33.423439464Z,2026-11-11T10:02:32.639593304Z,59.216,invalid decide JSON: invalid JSON response
+g-10,proj_074,664,,decide,completed,2026-11-11T10:02:38.099670245Z,2026-11-11T10:03:05.286575508Z,27.187,
+g-10,proj_074,665,s001,execute,summary_pending,2026-11-11T10:03:06.071981566Z,2026-11-11T10:08:07.583669274Z,301.512,execution interrupted; project dispatcher will summarize the saved session
+g-10,proj_074,666,s001,dispatch_commit,summary_pending,2026-11-11T10:08:08.113564907Z,2026-11-11T10:09:38.937612498Z,90.824,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-10,proj_074,667,s001,dispatch_commit,summary_pending,2026-11-11T10:09:44.088161763Z,2026-11-11T10:11:14.251562497Z,90.163,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-10,proj_074,668,s001,dispatch_commit,failed,2026-11-11T10:11:25.078664071Z,2026-11-11T10:12:55.376318743Z,90.298,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-10,proj_074,669,,decide,failed,2026-11-11T10:12:55.424588859Z,2026-11-11T10:17:56.319920585Z,300.895,planning timed out after 300 seconds: worker provider decide timed out after 5m0s: context deadline exceeded
+g-10,proj_074,670,,decide,interrupted,2026-11-11T10:18:02.199544422Z,2026-11-11T10:21:12.648230306Z,190.449,worker provider process: exit status 143
+g-11,proj_075,671,,target_probe,completed,2026-11-11T10:21:17.10874523Z,2026-11-11T10:21:38.728187232Z,21.619,
+g-11,proj_075,672,,decide,invalid_payload,2026-11-11T10:21:38.761045133Z,2026-11-11T10:22:01.389652493Z,22.629,invalid decide JSON: invalid JSON response
+g-11,proj_075,673,,decide,completed,2026-11-11T10:22:07.113155902Z,2026-11-11T10:22:54.526899121Z,47.414,
+g-11,proj_075,674,s001,execute,interrupted,2026-11-11T10:22:55.07056024Z,2026-11-11T10:27:00.087440926Z,245.017,reconciled previous execution at its last recorded activity
+g-12,proj_065,611,,target_probe,completed,2026-11-11T08:32:46.074883439Z,2026-11-11T08:33:07.045849416Z,20.971,
+g-12,proj_065,612,,decide,completed,2026-11-11T08:33:07.060629588Z,2026-11-11T08:33:47.473679461Z,40.413,
+g-12,proj_065,613,s001,execute,summary_pending,2026-11-11T08:33:48.070409006Z,2026-11-11T08:36:40.756859727Z,172.686,context canceled
+g-13,proj_070,632,,target_probe,completed,2026-11-11T09:06:34.073734883Z,2026-11-11T09:07:13.419736098Z,39.346,
+g-13,proj_070,633,,decide,completed,2026-11-11T09:07:13.435705782Z,2026-11-11T09:08:09.053306059Z,55.618,
+g-13,proj_070,634,s001,execute,summary_pending,2026-11-11T09:08:09.07273767Z,2026-11-11T09:13:09.32974651Z,300.257,execution interrupted; project dispatcher will summarize the saved session
+g-13,proj_070,635,s001,dispatch_commit,completed,2026-11-11T09:13:10.090746755Z,2026-11-11T09:13:37.844283653Z,27.754,
+g-13,proj_070,636,,decide,interrupted,2026-11-11T09:13:37.858089042Z,2026-11-11T09:13:38.901091593Z,1.043,worker provider process: signal: terminated
+g-14,proj_076,675,,target_probe,completed,2026-11-11T10:27:06.083588489Z,2026-11-11T10:28:18.259137876Z,72.176,
+g-14,proj_076,676,,decide,completed,2026-11-11T10:28:18.2747604Z,2026-11-11T10:31:34.806014531Z,196.531,
+g-14,proj_076,677,s001,execute,summary_pending,2026-11-11T10:31:35.067668551Z,2026-11-11T10:36:35.370485268Z,300.303,execution interrupted; project dispatcher will summarize the saved session
+g-14,proj_076,678,s001,dispatch_commit,summary_pending,2026-11-11T10:36:36.090400583Z,2026-11-11T10:37:31.721853075Z,55.631,provider summary failed: invalid JSON response
+g-14,proj_076,679,s001,dispatch_commit,completed,2026-11-11T10:37:37.089868476Z,2026-11-11T10:37:57.60814598Z,20.518,
+g-14,proj_076,680,,decide,completed,2026-11-11T10:37:57.627705055Z,2026-11-11T10:38:24.853414497Z,27.226,
+g-14,proj_076,681,s002,execute,summary_pending,2026-11-11T10:38:25.069467099Z,2026-11-11T10:39:30.78580235Z,65.716,context canceled
+g-15,proj_080,713,,target_probe,completed,2026-11-11T11:28:49.073065502Z,2026-11-11T11:29:12.08996415Z,23.017,
+g-15,proj_080,714,,decide,completed,2026-11-11T11:29:12.104301962Z,2026-11-11T11:29:35.23723514Z,23.133,
+g-15,proj_080,715,s001,execute,summary_pending,2026-11-11T11:29:36.068035097Z,2026-11-11T11:31:39.952119846Z,123.884,context canceled
+g-16,proj_081,716,,target_probe,completed,2026-11-11T11:31:43.076972585Z,2026-11-11T11:32:27.186590345Z,44.11,
+g-16,proj_081,717,,decide,completed,2026-11-11T11:32:27.204840771Z,2026-11-11T11:32:58.371376415Z,31.167,
+g-16,proj_081,718,s001,execute,summary_pending,2026-11-11T11:32:59.073999935Z,2026-11-11T11:37:59.594673192Z,300.521,execution interrupted; project dispatcher will summarize the saved session
+g-16,proj_081,719,s001,dispatch_commit,completed,2026-11-11T11:38:00.0831122Z,2026-11-11T11:38:22.908280589Z,22.825,
+g-16,proj_081,720,,decide,completed,2026-11-11T11:38:22.917391772Z,2026-11-11T11:41:54.836861894Z,211.919,
+g-16,proj_081,721,s002,execute,summary_pending,2026-11-11T11:41:55.080555268Z,2026-11-11T11:46:55.565728643Z,300.485,execution interrupted; project dispatcher will summarize the saved session
+g-16,proj_081,722,s002,dispatch_commit,summary_pending,2026-11-11T11:46:56.079914383Z,2026-11-11T11:48:26.166867352Z,90.087,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-16,proj_081,723,s002,dispatch_commit,summary_pending,2026-11-11T11:48:32.078835503Z,2026-11-11T11:49:19.332089041Z,47.253,provider summary failed: invalid JSON response
+g-16,proj_081,724,s002,dispatch_commit,completed,2026-11-11T11:49:30.07705801Z,2026-11-11T11:49:54.489188306Z,24.412,
+g-16,proj_081,725,,decide,interrupted,2026-11-11T11:49:54.499727209Z,2026-11-11T11:51:41.630573252Z,107.131,worker provider process: exit status 143
+g-17,proj_088,781,,target_probe,completed,2026-11-11T13:34:26.07605582Z,2026-11-11T13:35:52.105641461Z,86.03,
+g-17,proj_088,782,,decide,completed,2026-11-11T13:35:52.119953995Z,2026-11-11T13:36:48.322584042Z,56.203,
+g-17,proj_088,783,s001,execute,summary_pending,2026-11-11T13:36:49.07551946Z,2026-11-11T13:41:49.409493909Z,300.334,execution interrupted; project dispatcher will summarize the saved session
+g-17,proj_088,784,s001,dispatch_commit,summary_pending,2026-11-11T13:41:50.078887239Z,2026-11-11T13:43:20.202537349Z,90.124,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-17,proj_088,785,s001,dispatch_commit,summary_pending,2026-11-11T13:43:26.080092715Z,2026-11-11T13:44:56.195596027Z,90.116,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-17,proj_088,786,s001,dispatch_commit,failed,2026-11-11T13:45:07.080566862Z,2026-11-11T13:46:37.165372854Z,90.085,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-17,proj_088,787,,decide,completed,2026-11-11T13:46:37.178829649Z,2026-11-11T13:50:56.307897728Z,259.129,
+g-17,proj_088,788,s002,execute,summary_pending,2026-11-11T13:50:57.069245377Z,2026-11-11T13:54:12.789629951Z,195.72,context canceled
+g-18,proj_089,789,,target_probe,completed,2026-11-11T13:54:26.077357548Z,2026-11-11T13:55:19.367307956Z,53.29,
+g-18,proj_089,790,,decide,completed,2026-11-11T13:55:19.379881714Z,2026-11-11T13:56:23.785665026Z,64.406,
+g-18,proj_089,791,s001,execute,summary_pending,2026-11-11T13:56:24.074533643Z,2026-11-11T14:01:24.249933749Z,300.175,execution interrupted; project dispatcher will summarize the saved session
+g-18,proj_089,792,s001,dispatch_commit,summary_pending,2026-11-11T14:01:25.079192674Z,2026-11-11T14:02:55.203626069Z,90.124,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-18,proj_089,793,s001,dispatch_commit,summary_pending,2026-11-11T14:03:01.079919471Z,2026-11-11T14:04:31.200911177Z,90.121,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-18,proj_089,794,s001,dispatch_commit,completed,2026-11-11T14:04:42.083412385Z,2026-11-11T14:05:30.435714229Z,48.352,
+g-18,proj_089,795,,decide,completed,2026-11-11T14:05:30.445790222Z,2026-11-11T14:06:21.170718877Z,50.725,
+g-18,proj_089,796,s002,execute,summary_pending,2026-11-11T14:06:22.076703706Z,2026-11-11T14:11:22.37530394Z,300.299,execution interrupted; project dispatcher will summarize the saved session
+g-18,proj_089,797,s002,dispatch_commit,completed,2026-11-11T14:11:23.081564789Z,2026-11-11T14:12:32.537582663Z,69.456,
+g-18,proj_089,798,,decide,interrupted,2026-11-11T14:12:32.550641152Z,2026-11-11T14:14:13.533941315Z,100.983,worker provider process: exit status 143
+g-19,proj_082,726,,target_probe,completed,2026-11-11T11:51:45.078290383Z,2026-11-11T11:52:10.974089119Z,25.896,
+g-19,proj_082,727,,decide,completed,2026-11-11T11:52:10.995441731Z,2026-11-11T11:52:56.822845695Z,45.827,
+g-19,proj_082,728,s001,execute,summary_pending,2026-11-11T11:52:57.071351813Z,2026-11-11T11:54:08.80331733Z,71.732,context canceled
+g-20,proj_083,729,,target_probe,completed,2026-11-11T11:54:22.083763436Z,2026-11-11T11:54:29.65634942Z,7.573,
+g-20,proj_083,730,,decide,completed,2026-11-11T11:54:29.684297451Z,2026-11-11T11:55:13.620352186Z,43.936,
+g-20,proj_083,731,s001,execute,summary_pending,2026-11-11T11:55:14.073828863Z,2026-11-11T12:00:15.184620692Z,301.111,execution interrupted; project dispatcher will summarize the saved session
+g-20,proj_083,732,s001,dispatch_commit,completed,2026-11-11T12:00:16.114588729Z,2026-11-11T12:00:56.022973732Z,39.908,
+g-20,proj_083,733,,decide,completed,2026-11-11T12:00:56.084748125Z,2026-11-11T12:03:15.506241143Z,139.421,
+g-20,proj_083,734,s002,execute,summary_pending,2026-11-11T12:03:16.071379132Z,2026-11-11T12:08:16.468116136Z,300.397,execution interrupted; project dispatcher will summarize the saved session
+g-20,proj_083,735,s002,dispatch_commit,summary_pending,2026-11-11T12:08:17.085726606Z,2026-11-11T12:08:57.461869637Z,40.376,provider summary failed: unexpected content after JSON response
+g-20,proj_083,736,s002,dispatch_commit,completed,2026-11-11T12:09:03.087149907Z,2026-11-11T12:09:29.280048335Z,26.193,
+g-20,proj_083,737,,decide,completed,2026-11-11T12:09:29.296472589Z,2026-11-11T12:13:59.643694447Z,270.347,
+g-20,proj_083,738,s003,execute,summary_pending,2026-11-11T12:14:00.070536377Z,2026-11-11T12:14:09.431742253Z,9.361,context canceled
+g-21,proj_084,739,,target_probe,completed,2026-11-11T12:14:13.080982843Z,2026-11-11T12:14:24.872537625Z,11.792,
+g-21,proj_084,740,,decide,completed,2026-11-11T12:14:24.885897745Z,2026-11-11T12:14:41.514789163Z,16.629,
+g-21,proj_084,741,s001,execute,summary_pending,2026-11-11T12:14:42.068719775Z,2026-11-11T12:19:42.41166042Z,300.343,execution interrupted; project dispatcher will summarize the saved session
+g-21,proj_084,742,s001,dispatch_commit,completed,2026-11-11T12:19:43.079934436Z,2026-11-11T12:20:37.734383007Z,54.654,
+g-21,proj_084,743,,decide,invalid_payload,2026-11-11T12:20:37.748594953Z,2026-11-11T12:21:17.561633295Z,39.813,invalid decide JSON: invalid JSON response
+g-21,proj_084,744,,decide,completed,2026-11-11T12:21:23.084900158Z,2026-11-11T12:22:55.926011013Z,92.841,
+g-21,proj_084,745,s002,execute,summary_pending,2026-11-11T12:22:56.085823481Z,2026-11-11T12:27:56.520332444Z,300.435,execution interrupted; project dispatcher will summarize the saved session
+g-21,proj_084,746,s003,execute,summary_pending,2026-11-11T12:27:56.534022533Z,2026-11-11T12:32:56.770828755Z,300.237,execution interrupted; project dispatcher will summarize the saved session
+g-21,proj_084,747,s002,dispatch_commit,completed,2026-11-11T12:27:57.083077118Z,2026-11-11T12:28:34.427950592Z,37.345,
+g-21,proj_084,748,,decide,completed,2026-11-11T12:28:34.439679553Z,2026-11-11T12:31:07.441280902Z,153.002,
+g-21,proj_084,749,s004,execute,summary_pending,2026-11-11T12:32:56.77838523Z,2026-11-11T12:34:09.981842021Z,73.203,context canceled
+g-21,proj_084,750,s003,dispatch_commit,summary_pending,2026-11-11T12:32:57.080223306Z,2026-11-11T12:34:09.903983723Z,72.824,provider summary failed: worker provider process: exit status 143
+g-22,proj_085,751,,target_probe,completed,2026-11-11T12:34:13.075386301Z,2026-11-11T12:35:04.53702529Z,51.462,
+g-22,proj_085,752,,decide,completed,2026-11-11T12:35:04.557715887Z,2026-11-11T12:35:26.589190458Z,22.031,
+g-22,proj_085,753,s001,execute,summary_pending,2026-11-11T12:35:27.072757138Z,2026-11-11T12:40:28.979832958Z,301.907,execution interrupted; project dispatcher will summarize the saved session
+g-22,proj_085,754,s001,dispatch_commit,summary_pending,2026-11-11T12:40:29.153270344Z,2026-11-11T12:41:59.406955746Z,90.254,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-22,proj_085,755,s001,dispatch_commit,summary_pending,2026-11-11T12:42:05.101796426Z,2026-11-11T12:43:00.303829529Z,55.202,provider summary failed: invalid JSON response
+g-22,proj_085,756,s001,dispatch_commit,failed,2026-11-11T12:43:11.094203938Z,2026-11-11T12:44:00.162104531Z,49.068,provider summary failed: invalid JSON response
+g-22,proj_085,757,,decide,completed,2026-11-11T12:44:00.171281297Z,2026-11-11T12:46:43.745329773Z,163.574,
+g-22,proj_085,758,s002,execute,summary_pending,2026-11-11T12:46:44.079048721Z,2026-11-11T12:51:44.382143744Z,300.303,execution interrupted; project dispatcher will summarize the saved session
+g-22,proj_085,759,s002,dispatch_commit,summary_pending,2026-11-11T12:51:45.081702621Z,2026-11-11T12:53:15.25800208Z,90.176,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-22,proj_085,760,s002,dispatch_commit,summary_pending,2026-11-11T12:53:21.079065459Z,2026-11-11T12:54:10.370135812Z,49.291,provider summary failed: worker provider process: exit status 143
+g-23,proj_086,761,,target_probe,completed,2026-11-11T12:54:13.087780602Z,2026-11-11T12:55:13.700859803Z,60.613,
+g-23,proj_086,762,,decide,completed,2026-11-11T12:55:13.726277946Z,2026-11-11T12:56:23.18961606Z,69.463,
+g-23,proj_086,763,s001,execute,summary_pending,2026-11-11T12:56:24.068437147Z,2026-11-11T13:01:24.243722552Z,300.175,execution interrupted; project dispatcher will summarize the saved session
+g-23,proj_086,764,s001,dispatch_commit,completed,2026-11-11T13:01:25.091613083Z,2026-11-11T13:02:35.686366725Z,70.595,
+g-23,proj_086,765,,decide,completed,2026-11-11T13:02:35.698591952Z,2026-11-11T13:06:32.190208951Z,236.492,
+g-23,proj_086,766,s002,execute,summary_pending,2026-11-11T13:06:33.079890671Z,2026-11-11T13:11:33.438934615Z,300.359,execution interrupted; project dispatcher will summarize the saved session
+g-23,proj_086,767,s002,dispatch_commit,completed,2026-11-11T13:11:34.118073858Z,2026-11-11T13:12:27.662875542Z,53.545,
+g-23,proj_086,768,,decide,completed,2026-11-11T13:12:27.68278432Z,2026-11-11T13:13:38.652115006Z,70.969,
+g-23,proj_086,769,s003,execute,summary_pending,2026-11-11T13:13:39.077295318Z,2026-11-11T13:14:10.499913645Z,31.423,context canceled
+g-26,proj_090,799,,target_probe,completed,2026-11-11T14:14:17.073574753Z,2026-11-11T14:15:13.984181694Z,56.911,
+g-26,proj_090,800,,decide,completed,2026-11-11T14:15:13.998329529Z,2026-11-11T14:16:17.876903181Z,63.879,
+g-26,proj_090,801,s001,execute,summary_pending,2026-11-11T14:16:18.067752684Z,2026-11-11T14:21:18.302419913Z,300.235,execution interrupted; project dispatcher will summarize the saved session
+g-26,proj_090,802,s001,dispatch_commit,summary_pending,2026-11-11T14:21:19.081666291Z,2026-11-11T14:22:49.176115481Z,90.094,provider summary failed: worker provider summary timed out after 1m30s: context deadline exceeded
+g-29,proj_077,682,,target_probe,completed,2026-11-11T10:39:34.078208301Z,2026-11-11T10:39:54.214171361Z,20.136,
+g-29,proj_077,683,,decide,completed,2026-11-11T10:39:54.224355588Z,2026-11-11T10:40:11.261249257Z,17.037,
+g-29,proj_077,684,s001,execute,submitted,2026-11-11T10:40:12.076261083Z,2026-11-11T10:41:24.339185765Z,72.263,"Acquired capture.pcap from challenge g-29 delivery container and verified it as a valid pcapng capture (124 frames, Ethernet) saved in the worker workspace."
+g-29,proj_077,685,s001,dispatch_commit,completed,2026-11-11T10:41:25.07796282Z,2026-11-11T10:41:25.107458778Z,0.029,
+g-29,proj_077,686,,decide,completed,2026-11-11T10:41:26.081148852Z,2026-11-11T10:41:45.006125971Z,18.925,
+g-29,proj_077,687,s002,execute,summary_pending,2026-11-11T10:41:45.07006394Z,2026-11-11T10:46:45.38977068Z,300.32,execution interrupted; project dispatcher will summarize the saved session
+g-29,proj_077,688,s002,dispatch_commit,completed,2026-11-11T10:46:46.075446438Z,2026-11-11T10:48:00.849745103Z,74.774,
+g-29,proj_077,689,,decide,completed,2026-11-11T10:48:00.856962687Z,2026-11-11T10:48:36.432138053Z,35.575,
+g-29,proj_077,690,s003,execute,summary_pending,2026-11-11T10:48:37.068473231Z,2026-11-11T10:53:37.462033768Z,300.394,execution interrupted; project dispatcher will summarize the saved session
+g-29,proj_077,691,s003,dispatch_commit,completed,2026-11-11T10:53:38.090961399Z,2026-11-11T10:54:14.58552944Z,36.495,
+g-29,proj_077,692,,decide,completed,2026-11-11T10:54:14.592753319Z,2026-11-11T10:56:10.830501464Z,116.238,
+g-29,proj_077,693,s004,execute,summary_pending,2026-11-11T10:56:11.068223564Z,2026-11-11T10:59:31.621135688Z,200.553,context canceled
+g-31,proj_071,637,,target_probe,completed,2026-11-11T09:13:42.071566337Z,2026-11-11T09:13:50.332227028Z,8.261,
+g-31,proj_071,638,,decide,completed,2026-11-11T09:13:50.36761584Z,2026-11-11T09:14:01.215238865Z,10.848,
+g-31,proj_071,639,s001,execute,summary_pending,2026-11-11T09:14:02.07321758Z,2026-11-11T09:19:02.405209827Z,300.332,execution interrupted; project dispatcher will summarize the saved session
+g-31,proj_071,640,s001,dispatch_commit,completed,2026-11-11T09:19:03.090710653Z,2026-11-11T09:19:59.110804369Z,56.02,
+g-31,proj_071,641,,decide,completed,2026-11-11T09:19:59.131882692Z,2026-11-11T09:21:01.18683545Z,62.055,
+g-31,proj_071,642,s002,execute,summary_pending,2026-11-11T09:21:02.07800176Z,2026-11-11T09:23:12.90680059Z,130.829,context canceled
+g-32,proj_063,605,,target_probe,completed,2026-11-11T08:23:40.125876902Z,2026-11-11T08:24:00.930521133Z,20.805,
+g-32,proj_063,606,,decide,completed,2026-11-11T08:24:00.949605273Z,2026-11-11T08:24:48.575245993Z,47.626,
+g-32,proj_063,607,s001,execute,summary_pending,2026-11-11T08:24:49.075280636Z,2026-11-11T08:27:57.771084721Z,188.696,context canceled
+g-33,proj_072,643,,target_probe,failed,2026-11-11T09:23:26.07584274Z,2026-11-11T09:24:18.726605365Z,52.651,ambiguous JSON outside response fence
+g-33,proj_072,644,,target_probe,completed,2026-11-11T09:24:24.075046241Z,2026-11-11T09:25:09.902815574Z,45.828,
+g-33,proj_072,645,,decide,invalid_payload,2026-11-11T09:25:09.923720314Z,2026-11-11T09:25:59.167273453Z,49.244,invalid decide JSON: invalid JSON response
+g-33,proj_072,646,,decide,completed,2026-11-11T09:26:05.083336035Z,2026-11-11T09:26:54.595701064Z,49.512,
+g-33,proj_072,647,s001,execute,summary_pending,2026-11-11T09:26:55.06922183Z,2026-11-11T09:31:55.22902986Z,300.16,execution interrupted; project dispatcher will summarize the saved session
+g-33,proj_072,648,s001,dispatch_commit,completed,2026-11-11T09:31:56.077238575Z,2026-11-11T09:33:00.264761247Z,64.188,
+g-33,proj_072,649,,decide,completed,2026-11-11T09:33:00.270446352Z,2026-11-11T09:35:53.284282639Z,173.014,
+g-33,proj_072,650,s002,execute,summary_pending,2026-11-11T09:35:54.068117747Z,2026-11-11T09:40:54.292398146Z,300.224,execution interrupted; project dispatcher will summarize the saved session
+g-33,proj_072,651,s002,dispatch_commit,completed,2026-11-11T09:40:55.074752713Z,2026-11-11T09:41:55.275653392Z,60.201,
+g-33,proj_072,652,,decide,invalid_payload,2026-11-11T09:41:55.284317127Z,2026-11-11T09:42:35.530886151Z,40.247,invalid decide JSON: invalid JSON response
+g-33,proj_072,653,,decide,interrupted,2026-11-11T09:42:41.085909419Z,2026-11-11T09:43:13.527173267Z,32.441,worker provider process: exit status 143
+g-35,proj_066,614,,target_probe,completed,2026-11-11T08:36:44.078902796Z,2026-11-11T08:37:00.59772003Z,16.519,
+g-35,proj_066,615,,decide,completed,2026-11-11T08:37:00.613800315Z,2026-11-11T08:37:42.719025818Z,42.105,
+g-35,proj_066,616,s001,execute,summary_pending,2026-11-11T08:37:43.07580263Z,2026-11-11T08:42:32.796008756Z,289.72,context canceled
+g-36,proj_078,694,,target_probe,completed,2026-11-11T10:59:35.072578116Z,2026-11-11T10:59:46.382997395Z,11.31,
+g-36,proj_078,695,,decide,completed,2026-11-11T10:59:46.398040662Z,2026-11-11T11:00:15.580045458Z,29.182,
+g-36,proj_078,696,s001,execute,summary_pending,2026-11-11T11:00:16.069029313Z,2026-11-11T11:05:16.300566743Z,300.232,execution interrupted; project dispatcher will summarize the saved session
+g-36,proj_078,697,s001,dispatch_commit,completed,2026-11-11T11:05:17.078361265Z,2026-11-11T11:05:52.194380876Z,35.116,
+g-36,proj_078,698,,decide,completed,2026-11-11T11:05:52.209766146Z,2026-11-11T11:07:18.492574112Z,86.283,
+g-36,proj_078,699,s002,execute,summary_pending,2026-11-11T11:07:19.06836661Z,2026-11-11T11:08:34.765348937Z,75.697,context canceled
+g-37,proj_079,700,,target_probe,completed,2026-11-11T11:08:39.082271659Z,2026-11-11T11:08:49.369477802Z,10.287,
+g-37,proj_079,701,,decide,completed,2026-11-11T11:08:49.388999546Z,2026-11-11T11:09:11.575719823Z,22.187,
+g-37,proj_079,702,s001,execute,summary_pending,2026-11-11T11:09:12.068037814Z,2026-11-11T11:14:12.450386964Z,300.382,execution interrupted; project dispatcher will summarize the saved session
+g-37,proj_079,703,s002,execute,summary_pending,2026-11-11T11:14:12.51835567Z,2026-11-11T11:19:13.023524626Z,300.505,execution interrupted; project dispatcher will summarize the saved session
+g-37,proj_079,704,s001,dispatch_commit,completed,2026-11-11T11:14:13.156135488Z,2026-11-11T11:15:15.126204582Z,61.97,
+g-37,proj_079,705,,decide,completed,2026-11-11T11:15:15.143876554Z,2026-11-11T11:18:51.034173009Z,215.89,
+g-37,proj_079,706,s003,execute,summary_pending,2026-11-11T11:19:13.111677946Z,2026-11-11T11:24:13.664633165Z,300.553,execution interrupted; project dispatcher will summarize the saved session
+g-37,proj_079,707,s002,dispatch_commit,completed,2026-11-11T11:19:13.159103267Z,2026-11-11T11:19:48.322325092Z,35.163,
+g-37,proj_079,708,,decide,completed,2026-11-11T11:19:48.336847881Z,2026-11-11T11:22:11.168681842Z,142.832,
+g-37,proj_079,709,s005,execute,submitted,2026-11-11T11:24:13.725953005Z,2026-11-11T11:26:45.584634594Z,151.859,"Clean negative: nginx file server on 10.0.174.32:80 hosts only web_locktalk.zip (all 7 fallback candidates 404); the zip contains no extra route, no key/material file, and config.py FLAG is the decoy placeholder. Confirmed python_jwt==3.3.3 pin (CVE-2022-39227) as the intended remaining path."
+g-37,proj_079,710,s003,dispatch_commit,completed,2026-11-11T11:24:14.118858214Z,2026-11-11T11:24:44.083893186Z,29.965,
+g-37,proj_079,711,,decide,interrupted,2026-11-11T11:24:44.100442773Z,2026-11-11T11:28:35.804758859Z,231.704,worker provider process: exit status 143
+g-37,proj_079,712,s004,execute,summary_pending,2026-11-11T11:26:45.640819523Z,2026-11-11T11:28:35.746399557Z,110.106,context canceled

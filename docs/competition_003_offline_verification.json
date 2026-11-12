@@ -1,0 +1,51 @@
+[
+  {
+    "challenge_id": "g-33",
+    "elapsed_seconds": 1.483842,
+    "matches_competition_002_accepted": true,
+    "verification_source": "flag_ledger",
+    "plaintext_bytes": 37,
+    "details": {
+      "elements": 50000,
+      "cycles": 13,
+      "all_cycle_checks": true
+    }
+  },
+  {
+    "challenge_id": "g-16",
+    "elapsed_seconds": 0.002104,
+    "matches_competition_002_accepted": true,
+    "verification_source": "saved_platform_submission_response",
+    "plaintext_bytes": 52,
+    "details": {
+      "ciphertext_integers": 364,
+      "integers_per_character": 7
+    }
+  },
+  {
+    "challenge_id": "g-22",
+    "elapsed_seconds": 0.00062,
+    "matches_competition_002_accepted": true,
+    "verification_source": "flag_ledger",
+    "plaintext_bytes": 68,
+    "details": {
+      "key_bytes": 32,
+      "nonce_bytes": 8,
+      "counter": 0,
+      "ciphertext_bytes": 68
+    }
+  },
+  {
+    "challenge_id": "g-29",
+    "elapsed_seconds": 0.569044,
+    "matches_competition_002_accepted": true,
+    "verification_source": "flag_ledger",
+    "plaintext_bytes": 57,
+    "details": {
+      "decrypted_frames": 25,
+      "parts": 3,
+      "pbkdf2_iterations": 1000,
+      "derived_bytes": 48
+    }
+  }
+]

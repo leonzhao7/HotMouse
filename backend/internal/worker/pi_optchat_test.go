@@ -18,7 +18,7 @@ import (
 	"hotmouse/backend/internal/core"
 )
 
-func TestPiOptchatSharesProfileAcrossConcurrentHeadlessSessions(t *testing.T) {
+func TestPiOptchatSharesMemoryAcrossNativeSessions(t *testing.T) {
 	cli, err := exec.LookPath("pi")
 	if err != nil {
 		t.Skip("installed Pi CLI required")
@@ -45,13 +45,12 @@ func TestPiOptchatSharesProfileAcrossConcurrentHeadlessSessions(t *testing.T) {
 			close(release)
 		}
 	}
-	defer releaseAll()
 	seenMemory := atomic.Bool{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		defer request.Body.Close()
 		data, _ := io.ReadAll(request.Body)
 		text := string(data)
-		if strings.Contains(text, "unique_first_task_marker") {
+		if strings.Contains(text, "Read the shared task memory") && strings.Contains(text, "unique_first_task_marker") {
 			seenMemory.Store(true)
 		}
 		name := ""
@@ -81,6 +80,7 @@ func TestPiOptchatSharesProfileAcrossConcurrentHeadlessSessions(t *testing.T) {
 		fmt.Fprint(w, "data: {\"id\":\"local-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"fixture\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 	}))
 	defer server.Close()
+	defer releaseAll()
 	db, err := core.Open(filepath.Join(t.TempDir(), "optchat.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -99,6 +99,7 @@ func TestPiOptchatSharesProfileAcrossConcurrentHeadlessSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	projectID := project.Project.ID
+	var checkpointed atomic.Int32
 	invoke := func(ctx context.Context, identity, prompt string) error {
 		cfg := r.config(t.Context())
 		cfg.identity = identity
@@ -108,7 +109,16 @@ func TestPiOptchatSharesProfileAcrossConcurrentHeadlessSessions(t *testing.T) {
 		}
 		projectDir := filepath.Dir(filepath.Dir(workspace))
 		vars := map[string]string{"HOTMOUSE_PROJECT_ID": projectID, "HOTMOUSE_PROJECT_DIR": projectDir, "HOTMOUSE_WORKSPACE_DIR": workspace, "HOTMOUSE_TASK_TYPE": "execute", "HOTMOUSE_WORKER_PROMPT": prompt}
-		_, _, _, err = r.runProvider(ctx, cfg, "execute", "", workspace, vars, 90*time.Second, nil)
+		_, session, _, err := r.runProvider(ctx, cfg, "execute", "", workspace, vars, 90*time.Second, func(id string) error {
+			if id == "" || strings.HasPrefix(id, "optchat:") {
+				return fmt.Errorf("missing native Pi checkpoint: %s", id)
+			}
+			checkpointed.Add(1)
+			return nil
+		})
+		if session == "" || strings.HasPrefix(session, "optchat:") {
+			return fmt.Errorf("missing native Pi session: %s", session)
+		}
 		return err
 	}
 	firstCtx, cancelFirst := context.WithCancel(t.Context())
@@ -152,7 +162,7 @@ func TestPiOptchatSharesProfileAcrossConcurrentHeadlessSessions(t *testing.T) {
 		releaseAll()
 		t.Fatal("cancelled connected Pi session did not stop")
 	}
-	if !piOptchatAvailable(t.Context(), &piOptchatConfig{profile: r.piOptchatProfile(projectID), home: home, socket: filepath.Join(home, "profiles", r.piOptchatProfile(projectID), "windows.sock")}) {
+	if !piOptchatAvailable(t.Context(), &piOptchatConfig{profile: r.piOptchatProfile(projectID), home: home, socket: filepath.Join(home, "profiles", r.piOptchatProfile(projectID), "hotmouse.sock")}) {
 		releaseAll()
 		t.Fatal("cancelling one Pi session stopped the shared profile owner")
 	}
@@ -171,11 +181,18 @@ func TestPiOptchatSharesProfileAcrossConcurrentHeadlessSessions(t *testing.T) {
 	if !seenMemory.Load() {
 		t.Fatal("a later Pi session did not receive the earlier task's shared memory")
 	}
+	if checkpointed.Load() != 3 {
+		t.Fatalf("native Pi sessions were not checkpointed before their results: %d", checkpointed.Load())
+	}
 	profile := r.piOptchatProfile(projectID)
 	if _, err := os.Stat(filepath.Join(home, "profiles", profile, "config.json")); err != nil {
 		t.Fatalf("same challenge did not use its shared OptChat profile: %v", err)
 	}
-	if matches, _ := filepath.Glob(filepath.Join(home, "profiles", profile, "runs", "*.jsonl")); len(matches) < 2 {
-		t.Fatalf("concurrent Pi calls did not create shared profile sessions: %v", matches)
+	root, err := r.workspaceRoot(r.config(t.Context()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(root, projectID, "workers", "*", ".hotmouse", "pi-sessions", "*.jsonl")); len(matches) != 3 {
+		t.Fatalf("Pi workers did not retain independent native sessions: %v", matches)
 	}
 }
