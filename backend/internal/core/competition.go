@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -238,8 +239,9 @@ func (d *DB) RequestCompetitionStop(ctx context.Context, id string) error {
 }
 
 func (d *DB) ClaimCompetitionItem(ctx context.Context, run, challenge string, stamp time.Time) (bool, error) {
-	result, err := d.SQL.ExecContext(ctx, `UPDATE competition_items SET status='starting',started_at=? WHERE run_id=? AND challenge_id=? AND status='queued'
- AND EXISTS(SELECT 1 FROM competition_runs r WHERE r.id=run_id AND r.status='running' AND (SELECT COUNT(*) FROM competition_items i WHERE i.run_id=r.id AND i.status IN ('starting','running','closing'))<r.concurrency)`, stamp.UTC().Format(time.RFC3339Nano), run, challenge)
+	formatted := stamp.UTC().Format(time.RFC3339Nano)
+	result, err := d.SQL.ExecContext(ctx, `UPDATE competition_items SET status='starting',outcome='',started_at=?,finished_at=NULL,retry_after='' WHERE run_id=? AND challenge_id=? AND status='queued' AND (retry_after='' OR julianday(retry_after)<=julianday(?))
+	AND EXISTS(SELECT 1 FROM competition_runs r WHERE r.id=run_id AND r.status='running' AND (SELECT COUNT(*) FROM competition_items i WHERE i.run_id=r.id AND i.status IN ('starting','running','closing'))<r.concurrency)`, formatted, run, challenge, formatted)
 	if err != nil {
 		return false, err
 	}
@@ -250,6 +252,88 @@ func (d *DB) ClaimCompetitionItem(ctx context.Context, run, challenge string, st
 func (d *DB) SaveCompetitionItem(ctx context.Context, item CompetitionItem) error {
 	_, err := d.SQL.ExecContext(ctx, `UPDATE competition_items SET project_id=?,status=?,outcome=?,last_error=?,started_at=?,finished_at=?,retry_after=? WHERE run_id=? AND challenge_id=?`, item.ProjectID, item.Status, item.Outcome, item.LastError, item.StartedAt, item.FinishedAt, item.RetryAfter, item.RunID, item.ChallengeID)
 	return err
+}
+
+// Queue the next round atomically, after every previous attempt has released
+// its resources. A concurrent stop must never create more runnable work.
+func (d *DB) RequeueCompetitionItems(ctx context.Context, run string, challenges []string, retryAt time.Time) (bool, error) {
+	queued := false
+	err := tx(ctx, d, func(t *sql.Tx) error {
+		var ready bool
+		if err := t.QueryRow(`SELECT EXISTS(SELECT 1 FROM competition_runs WHERE id=? AND status='running') AND NOT EXISTS(SELECT 1 FROM competition_items WHERE run_id=? AND status NOT IN ('succeeded','failed','skipped'))`, run, run).Scan(&ready); err != nil {
+			return err
+		}
+		if !ready || len(challenges) == 0 {
+			return nil
+		}
+		for _, challenge := range challenges {
+			result, err := t.Exec(`UPDATE competition_items SET status='queued',outcome='',started_at=NULL,finished_at=NULL,retry_after=? WHERE run_id=? AND challenge_id=? AND status='failed'`, retryAt.UTC().Format(time.RFC3339Nano), run, challenge)
+			if err != nil {
+				return err
+			}
+			if n, _ := result.RowsAffected(); n != 1 {
+				return fmt.Errorf("competition challenge %q is no longer failed", challenge)
+			}
+		}
+		queued = true
+		return nil
+	})
+	return queued && err == nil, err
+}
+
+// RefreshCompetitionProject resumes an unfinished challenge project for another
+// competition attempt and binds it to the newly delivered target instance.
+func (d *DB) RefreshCompetitionProject(ctx context.Context, project, challengeJSON, deliveryJSON, origin string) error {
+	if !json.Valid([]byte(challengeJSON)) || !json.Valid([]byte(deliveryJSON)) {
+		return fmt.Errorf("invalid competition challenge or delivery snapshot")
+	}
+	return tx(ctx, d, func(t *sql.Tx) error {
+		var status string
+		if err := t.QueryRow(`SELECT status FROM projects WHERE id=?`, project).Scan(&status); err != nil {
+			return err
+		}
+		if status != "failed" && status != "stopped" && status != "completed" {
+			return fmt.Errorf("competition project cannot be retried from status %q", status)
+		}
+		result, err := t.Exec(`UPDATE platform_projects SET challenge_json=?,delivery_json=? WHERE project_id=?`, challengeJSON, deliveryJSON, project)
+		if err != nil {
+			return err
+		}
+		if n, _ := result.RowsAffected(); n != 1 {
+			return fmt.Errorf("competition project has no platform binding")
+		}
+		description := "Current competition attempt: the platform instance was delivered again. Use these target addresses and recheck observations that depended on the previous instance.\n" + clean(origin)
+		if _, err := t.Exec(`INSERT INTO facts(id,project_id,description,title,result_type) VALUES('competition_target',?,?,'Current competition target','progress') ON CONFLICT(project_id,id) DO UPDATE SET description=excluded.description`, project, description); err != nil {
+			return err
+		}
+		if err := resumeRoutesWithReasonTx(t, project, "competition_retry"); err != nil {
+			return err
+		}
+		if status == "completed" {
+			if _, err := t.Exec(`DELETE FROM goal_sources WHERE project_id=?`, project); err != nil {
+				return err
+			}
+			if _, err := t.Exec(`UPDATE goals SET status='active',completed_at=NULL,completion_description=NULL,completed_by=NULL WHERE project_id=?`, project); err != nil {
+				return err
+			}
+		}
+		if _, err := t.Exec(`UPDATE projects SET status='active',failure_reason='',decide_worker=NULL,decide_trigger=NULL,decide_started_at=NULL,decide_last_heartbeat_at=NULL WHERE id=?`, project); err != nil {
+			return err
+		}
+		if _, err := t.Exec(`UPDATE steps SET worker=NULL WHERE project_id=? AND to_fact_id IS NULL`, project); err != nil {
+			return err
+		}
+		if _, err := t.Exec(`DELETE FROM worker_decide_state WHERE project_id=?`, project); err != nil {
+			return err
+		}
+		if _, err := t.Exec(`DELETE FROM worker_retry_state WHERE project_id=? AND task_type='decide'`, project); err != nil {
+			return err
+		}
+		if _, err := t.Exec(`UPDATE project_target_health SET run_id=lower(hex(randomblob(16))),status='pending',analysis_json='',failure_counts_json='[]',last_checked_at='',last_error='',analysis_failures=0,retry_after='',preprocessing_json='{"status":"pending"}' WHERE project_id=?`, project); err != nil {
+			return err
+		}
+		return queueDecideTx(t, project, "competition_retry", "competition_target")
+	})
 }
 
 func (d *DB) FinishCompetitionRun(ctx context.Context, id, status, message string) error {

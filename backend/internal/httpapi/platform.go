@@ -122,17 +122,11 @@ func (h *Handler) importPlatformChallenge(ctx context.Context, id string, reques
 	if challenge.Completed {
 		return core.ProjectDetail{}, &ctfplatform.Error{HTTPStatus: 409, Code: "challenge_completed", Message: "challenge is already completed"}
 	}
-	var delivery ctfplatform.Delivery
-	started := false
-	if platform.Descriptor().DeliveryMode == "instance" && challenge.InstanceStatus == "available" && len(challenge.Addresses) > 0 {
-		delivery = ctfplatform.Delivery{ChallengeID: challenge.ID, Mode: "instance", Addresses: challenge.Addresses, Attachments: challenge.Attachments}
-	} else {
-		delivery, err = platform.Deliver(ctx, challenge.ID)
-		if err != nil {
-			return core.ProjectDetail{}, err
-		}
-		started = challenge.InstanceStatus == "stopped" && delivery.Mode == "instance"
+	delivery, err := deliverPlatformChallenge(ctx, platform, *challenge)
+	if err != nil {
+		return core.ProjectDetail{}, err
 	}
+	started := challenge.InstanceStatus == "stopped" && delivery.Mode == "instance"
 	defer func() {
 		if err == nil || !started {
 			return
@@ -158,19 +152,7 @@ func (h *Handler) importPlatformChallenge(ctx context.Context, id string, reques
 	if strings.TrimSpace(title) == "" {
 		title = platform.Descriptor().Name + ": " + challenge.Title
 	}
-	origin := fmt.Sprintf("CTF platform: %s\nChallenge ID: %s\nDifficulty: %s; level: %d; total score: %d\nFlags: %d total, %d already accepted\n", id, challenge.ID, challenge.Difficulty, challenge.Level, challenge.TotalScore, challenge.FlagCount, challenge.CorrectFlagCount)
-	if challenge.Description != nil {
-		origin += "Description: " + *challenge.Description + "\n"
-	}
-	for _, address := range delivery.Addresses {
-		origin += "Target address: " + address + "\n"
-	}
-	for _, attachment := range delivery.Attachments {
-		origin += fmt.Sprintf("Attachment: %s %s %s\n", attachment.Name, attachment.URL, attachment.Path)
-	}
-	if platform.Descriptor().RequiresVPN {
-		origin += "Target addresses require the platform VPN connection.\n"
-	}
+	origin := platformChallengeOrigin(id, platform.Descriptor().RequiresVPN, *challenge, delivery)
 	goal := fmt.Sprintf("Solve challenge %s and capture every remaining flag (%d total, %d already accepted). Record flag findings with challenge_id=%s and their exact value backed by target evidence.", challenge.ID, challenge.FlagCount, challenge.CorrectFlagCount, challenge.ID)
 	project, err = h.DB.CreateProject(ctx, core.CreateProject{
 		Title: title, Origin: origin, Goal: goal, MaxWorkers: request.MaxWorkers, BudgetSeconds: request.BudgetSeconds,
@@ -178,6 +160,13 @@ func (h *Handler) importPlatformChallenge(ctx context.Context, id string, reques
 		PlatformBinding: &core.PlatformBinding{Platform: id, ScopeID: scope, ChallengeID: challenge.ID, Challenge: challengeData, Delivery: deliveryData},
 	})
 	return project, err
+}
+
+func deliverPlatformChallenge(ctx context.Context, platform ctfplatform.Platform, challenge ctfplatform.Challenge) (ctfplatform.Delivery, error) {
+	if platform.Descriptor().DeliveryMode == "instance" && challenge.InstanceStatus == "available" && len(challenge.Addresses) > 0 {
+		return ctfplatform.Delivery{ChallengeID: challenge.ID, Mode: "instance", Addresses: challenge.Addresses, Attachments: challenge.Attachments}, nil
+	}
+	return platform.Deliver(ctx, challenge.ID)
 }
 
 type platformFlagOutcome struct {

@@ -87,3 +87,59 @@ func TestCompetitionQueuePersistsAndClaimsRespectConcurrency(t *testing.T) {
 		t.Fatal("claimed work after stop")
 	}
 }
+
+func TestCompetitionRequeueIsAtomicAndRespectsStop(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "retry.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.SQL.Close()
+	run, err := db.CreateCompetitionRun(t.Context(), "test", "scope", CompetitionConfig{Rules: "solve all"}, []string{"failed", "other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveCompetitionPlan(t.Context(), run.ID, "in order", []string{"failed", "other"}); err != nil {
+		t.Fatal(err)
+	}
+	item := run.Items[0]
+	item.Status, item.Outcome = "failed", "failed"
+	if err := db.SaveCompetitionItem(t.Context(), item); err != nil {
+		t.Fatal(err)
+	}
+	retryAt := time.Now().UTC().Truncate(time.Second).Add(5 * time.Second)
+	if queued, err := db.RequeueCompetitionItems(t.Context(), run.ID, []string{"failed"}, retryAt); err != nil || queued {
+		t.Fatalf("requeued before the current round finished: %v %v", queued, err)
+	}
+	item = run.Items[1]
+	item.Status, item.Outcome = "succeeded", "succeeded"
+	if err := db.SaveCompetitionItem(t.Context(), item); err != nil {
+		t.Fatal(err)
+	}
+	if queued, err := db.RequeueCompetitionItems(t.Context(), run.ID, []string{"failed", "other"}, retryAt); err == nil || queued {
+		t.Fatal("invalid retry batch was accepted")
+	}
+	loaded, err := db.GetCompetitionRun(t.Context(), run.ID)
+	if err != nil || loaded.Items[0].Status != "failed" {
+		t.Fatalf("partial retry batch was committed: %+v %v", loaded, err)
+	}
+	if queued, err := db.RequeueCompetitionItems(t.Context(), run.ID, []string{"failed"}, retryAt); err != nil || !queued {
+		t.Fatalf("retry batch was not queued: %v %v", queued, err)
+	}
+	if claimed, err := db.ClaimCompetitionItem(t.Context(), run.ID, "failed", retryAt.Add(-time.Second)); err != nil || claimed {
+		t.Fatal("retry delay was not enforced")
+	}
+	if claimed, err := db.ClaimCompetitionItem(t.Context(), run.ID, "failed", retryAt.Add(time.Second)); err != nil || !claimed {
+		t.Fatalf("due retry did not start: %v %v", claimed, err)
+	}
+	item = run.Items[0]
+	item.Status, item.Outcome = "failed", "failed"
+	if err := db.SaveCompetitionItem(t.Context(), item); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RequestCompetitionStop(t.Context(), run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if queued, err := db.RequeueCompetitionItems(t.Context(), run.ID, []string{"failed"}, retryAt); err != nil || queued {
+		t.Fatalf("stop allowed another round: %v %v", queued, err)
+	}
+}

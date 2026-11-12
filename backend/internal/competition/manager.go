@@ -24,6 +24,7 @@ type Plan struct {
 type Backend struct {
 	Connect func(string) (ctfplatform.Platform, string, error)
 	Import  func(context.Context, core.CompetitionRun, string) (string, error)
+	Retry   func(context.Context, core.CompetitionRun, ctfplatform.Platform, ctfplatform.Challenge, string) error
 	Lookup  func(context.Context, core.CompetitionRun, string) (string, error)
 	Submit  func(context.Context, string, int64) (*ctfplatform.SubmissionResult, error)
 	Plan    func(context.Context, core.CompetitionRun, []ctfplatform.Challenge) (Plan, error)
@@ -265,7 +266,7 @@ func (m *Manager) advance(ctx context.Context, id string) error {
 			}
 		}
 		for _, item := range run.Items {
-			if item.Status != "queued" || active >= run.Concurrency {
+			if item.Status != "queued" || active >= run.Concurrency || !due(item.RetryAfter, now) {
 				continue
 			}
 			// A failed list cannot safely establish which new containers can start.
@@ -306,6 +307,56 @@ func (m *Manager) advance(ctx context.Context, id string) error {
 			return nil
 		}
 	}
+	if run.Status == "running" {
+		retryIDs := []string{}
+		unavailable := false
+		for _, item := range run.Items {
+			if item.Status != "failed" {
+				continue
+			}
+			if !listed {
+				continue
+			}
+			challenge, known := remote[item.ChallengeID]
+			if !known {
+				unavailable = true
+				continue
+			}
+			if challenge.Completed {
+				item.Status, item.Outcome, item.LastError = "closing", "succeeded", ""
+				if err := m.DB.SaveCompetitionItem(ctx, item); err != nil {
+					return err
+				}
+				if err := m.advanceItem(ctx, run, platform, remote, &item); err != nil {
+					return err
+				}
+				if item.Status != "succeeded" {
+					return nil
+				}
+				continue
+			}
+			retryIDs = append(retryIDs, item.ChallengeID)
+		}
+		if !listed {
+			return nil
+		}
+		if unavailable && len(retryIDs) == 0 {
+			return nil
+		}
+		if len(retryIDs) > 0 {
+			retryAt := now.Add(5 * time.Second)
+			queued, err := m.DB.RequeueCompetitionItems(ctx, id, retryIDs, retryAt)
+			if err != nil {
+				return err
+			}
+			if queued {
+				for _, challenge := range retryIDs {
+					m.log("competition.challenge.requeued", "run", id, "challenge", challenge, "retry_after", retryAt.UTC().Format(time.RFC3339Nano))
+				}
+			}
+			return nil
+		}
+	}
 	status := "completed"
 	if run.Status == "stopping" {
 		status = "stopped"
@@ -339,7 +390,30 @@ func (m *Manager) advanceItem(ctx context.Context, run core.CompetitionRun, plat
 		} else if timedOut(*item, run, now) {
 			item.Status, item.Outcome, item.LastError = "closing", "failed", "challenge startup timeout"
 		} else if item.ProjectID != nil {
-			item.Status = "running"
+			project, err := m.DB.GetProject(ctx, *item.ProjectID)
+			if err == core.ErrNotFound {
+				item.Status, item.Outcome, item.LastError = "closing", "failed", "challenge project was deleted"
+			} else if err != nil {
+				return err
+			} else if project.Project.Status == "active" {
+				item.Status = "running"
+			} else if challenge, known := remote[item.ChallengeID]; known && challenge.InstanceStatus != "pending" && challenge.InstanceStatus != "stop_pending" && due(item.RetryAfter, now) {
+				if m.Backend.Retry == nil {
+					item.LastError = "competition project retry is unavailable"
+					item.RetryAfter = now.Add(5 * time.Second).UTC().Format(time.RFC3339Nano)
+				} else if err := m.Backend.Retry(ctx, run, platform, challenge, *item.ProjectID); err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					item.LastError = err.Error()
+					item.RetryAfter = now.Add(5 * time.Second).UTC().Format(time.RFC3339Nano)
+					m.warn("competition.challenge.retry_failed", "run", run.ID, "challenge", item.ChallengeID, "retry_after", item.RetryAfter, "error", err)
+				} else {
+					item.Status = "running"
+					item.LastError, item.RetryAfter = "", ""
+					m.log("competition.challenge_retried", "run", run.ID, "challenge", item.ChallengeID, "project", *item.ProjectID)
+				}
+			}
 		} else if challenge, known := remote[item.ChallengeID]; known && challenge.InstanceStatus != "pending" && challenge.InstanceStatus != "stop_pending" && due(item.RetryAfter, now) {
 			m.log("competition.challenge.import", "run", run.ID, "challenge", item.ChallengeID, "instance_status", challenge.InstanceStatus)
 			project, err := m.Backend.Import(ctx, run, item.ChallengeID)

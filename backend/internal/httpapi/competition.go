@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -19,6 +20,7 @@ func newCompetitionManager(h *Handler) *competition.Manager {
 			project, err := h.importPlatformChallenge(ctx, run.Platform, platformImportRequest{ChallengeID: challenge, MaxWorkers: run.MaxWorkers, BudgetSeconds: &budget, CompetitionID: run.ID, Rules: run.Rules, RulesSummary: run.RulesSummary})
 			return project.Project.ID, err
 		},
+		Retry: h.retryCompetitionProject,
 		Lookup: func(ctx context.Context, run core.CompetitionRun, challenge string) (string, error) {
 			project, err := h.DB.FindPlatformProject(ctx, run.Platform, run.ScopeID, challenge)
 			if err == nil && project != "" {
@@ -36,6 +38,42 @@ func newCompetitionManager(h *Handler) *competition.Manager {
 	})
 	h.Runner.SetFlagCaptureNotifier(manager.Wake)
 	return manager
+}
+
+func (h *Handler) retryCompetitionProject(ctx context.Context, run core.CompetitionRun, platform ctfplatform.Platform, challenge ctfplatform.Challenge, project string) error {
+	h.platformMu.Lock()
+	defer h.platformMu.Unlock()
+	delivery, err := deliverPlatformChallenge(ctx, platform, challenge)
+	if err != nil {
+		return err
+	}
+	challengeData, err := json.Marshal(challenge)
+	if err != nil {
+		return err
+	}
+	deliveryData, err := json.Marshal(delivery)
+	if err != nil {
+		return err
+	}
+	origin := platformChallengeOrigin(run.Platform, platform.Descriptor().RequiresVPN, challenge, delivery)
+	return h.DB.RefreshCompetitionProject(ctx, project, string(challengeData), string(deliveryData), origin)
+}
+
+func platformChallengeOrigin(platformID string, requiresVPN bool, challenge ctfplatform.Challenge, delivery ctfplatform.Delivery) string {
+	origin := fmt.Sprintf("CTF platform: %s\nChallenge ID: %s\nDifficulty: %s; level: %d; total score: %d\nFlags: %d total, %d already accepted\n", platformID, challenge.ID, challenge.Difficulty, challenge.Level, challenge.TotalScore, challenge.FlagCount, challenge.CorrectFlagCount)
+	if challenge.Description != nil {
+		origin += "Description: " + *challenge.Description + "\n"
+	}
+	for _, address := range delivery.Addresses {
+		origin += "Target address: " + address + "\n"
+	}
+	for _, attachment := range delivery.Attachments {
+		origin += fmt.Sprintf("Attachment: %s %s %s\n", attachment.Name, attachment.URL, attachment.Path)
+	}
+	if requiresVPN {
+		origin += "Target addresses require the platform VPN connection.\n"
+	}
+	return origin
 }
 
 func competitionHints(id, rules, summary string) []core.CreateHint {

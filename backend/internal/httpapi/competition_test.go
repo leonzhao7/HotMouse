@@ -40,12 +40,16 @@ func TestCompetitionTSecPendingRecoveryAndQueueProgress(t *testing.T) {
 				if completed[code] {
 					correct = 1
 				}
-				rows = append(rows, map[string]any{"unique_code": code, "flag_count": 1, "correct_flag_count": correct, "is_completed": completed[code], "container_status": states[code], "container_addr": []string{"10.0.0.1:80"}})
+				address := "10.0.0.1:80"
+				if code == "two" && starts[code] > 1 {
+					address = "10.0.0.2:8080"
+				}
+				rows = append(rows, map[string]any{"unique_code": code, "flag_count": 1, "correct_flag_count": correct, "is_completed": completed[code], "container_status": states[code], "container_addr": []string{address}})
 			}
 			_ = json.NewEncoder(w).Encode(rows)
 		case "/openapi/v1/challenges/start":
 			starts[id]++
-			if id == "one" {
+			if id == "one" || id == "two" && starts[id] == 2 {
 				states[id] = "pending"
 				w.WriteHeader(http.StatusServiceUnavailable)
 				fmt.Fprint(w, `{"code":"startup_timeout","message":"instance is still starting"}`)
@@ -158,7 +162,26 @@ func TestCompetitionTSecPendingRecoveryAndQueueProgress(t *testing.T) {
 	if err != nil || len(flags) != 1 || flags[0].Status != "accepted" || len(flags[0].Attempts) != 1 {
 		t.Fatalf("automatic submission not recorded: %+v %v", flags, err)
 	}
-	if err := db.FailCompetitionProject(t.Context(), *current.Items[1].ProjectID, "solver exhausted its attempts"); err != nil {
+	retryProject := *current.Items[1].ProjectID
+	initialDescription := current.Items[1].InitialDescription
+	probe, err := db.TargetProbe(t.Context(), retryProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveTargetProbeAnalysis(t.Context(), retryProject, probe.RunID, core.TargetProbeAnalysis{Required: true, Reason: "remote challenge", Targets: []core.TargetEndpoint{{Host: "10.0.0.1", Port: 80}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SavePreprocessing(t.Context(), retryProject, probe.RunID, core.PreprocessingState{Status: "skipped", Reason: "no HTTP URL"}, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	route, err := db.CreateRoute(t.Context(), retryProject, core.CreateRoute{Title: "first attempt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`UPDATE routes SET status='shelved',shelved_reason='no progress',invested_ms=60000,no_progress_count=3 WHERE project_id=? AND id=?`, retryProject, route.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FailCompetitionProject(t.Context(), retryProject, "solver exhausted its attempts"); err != nil {
 		t.Fatal(err)
 	}
 	current = advance()
@@ -167,17 +190,57 @@ func TestCompetitionTSecPendingRecoveryAndQueueProgress(t *testing.T) {
 	}
 	capture(current.Items[2])
 	current = advance()
-	if current.Status != "completed" || current.Items[2].Status != "succeeded" {
-		t.Fatalf("competition did not drain: %+v", current)
+	if current.Status != "running" || current.Items[1].Status != "queued" || current.Items[2].Status != "succeeded" {
+		t.Fatalf("competition did not queue its unsolved challenge for another round: %+v", current)
+	}
+	clock = clock.Add(5 * time.Second)
+	current = advance()
+	if current.Items[1].Status != "starting" || *current.Items[1].ProjectID != retryProject {
+		t.Fatalf("uncertain retry lost the original project: %+v", current)
+	}
+	clock = clock.Add(6 * time.Second)
+	advance()
+	mu.Lock()
+	if starts["two"] != 2 {
+		t.Errorf("pending retry was started more than once: %v", starts)
+	}
+	states["two"] = "available"
+	mu.Unlock()
+	current = advance()
+	if current.Items[1].Status != "running" || *current.Items[1].ProjectID != retryProject || current.Items[1].InitialDescription != initialDescription {
+		t.Fatalf("retry did not preserve its project and initial description: %+v", current)
+	}
+	detail, err = db.GetProject(t.Context(), retryProject)
+	if err != nil || detail.Project.Status != "active" || detail.Project.BudgetSpentMilliseconds != 0 || detail.Project.InvestedMilliseconds != 60000 {
+		t.Fatalf("retry did not grant a fresh budget while preserving investment: %+v %v", detail.Project, err)
+	}
+	if detail.TargetProbe.RunID == probe.RunID || detail.TargetProbe.Status != "pending" || detail.TargetProbe.Analysis != nil || detail.TargetProbe.Preprocessing.Status != "pending" {
+		t.Fatalf("retry reused stale target health: %+v", detail.TargetProbe)
+	}
+	if len(detail.Routes) != 1 || detail.Routes[0].Status != "active" || detail.Routes[0].NoProgressCount != 0 || !strings.Contains(string(detail.Platform.Delivery), "10.0.0.2:8080") {
+		t.Fatalf("retry did not reopen the route and refresh delivery: %+v", detail)
+	}
+	sources, err := db.InitialTargetSources(t.Context(), retryProject)
+	if err != nil || !strings.Contains(strings.Join(sources, "\n"), "10.0.0.2:8080") || strings.Contains(strings.Join(sources, "\n"), "10.0.0.1:80") {
+		t.Fatalf("startup still uses the previous instance: %v %v", sources, err)
+	}
+	capture(current.Items[1])
+	current = advance()
+	if current.Status != "completed" || current.Items[1].Status != "succeeded" {
+		t.Fatalf("successful retry did not complete the competition: %+v", current)
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	for _, id := range []string{"one", "two", "three"} {
-		if starts[id] != 1 || closes[id] != 1 {
+		want := 1
+		if id == "two" {
+			want = 2
+		}
+		if starts[id] != want || closes[id] != want {
 			t.Errorf("challenge %s lifecycle: starts=%d closes=%d", id, starts[id], closes[id])
 		}
 	}
-	if submits["one"] != 1 || submits["two"] != 0 || submits["three"] != 1 {
+	if submits["one"] != 1 || submits["two"] != 1 || submits["three"] != 1 {
 		t.Errorf("unexpected submissions: %v", submits)
 	}
 }

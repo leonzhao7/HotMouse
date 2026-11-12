@@ -2,6 +2,7 @@ package competition
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -19,12 +20,16 @@ type fakePlatform struct {
 	flags          int
 	starts, closes []string
 	closeFailures  int
+	listError      error
 }
 
 func (f *fakePlatform) Descriptor() ctfplatform.Descriptor {
 	return ctfplatform.Descriptor{ID: "test", DeliveryMode: "instance", SupportsClose: true, MaxActiveInstances: 3}
 }
 func (f *fakePlatform) ListChallenges(context.Context) ([]ctfplatform.Challenge, error) {
+	if f.listError != nil {
+		return nil, f.listError
+	}
 	rows := []ctfplatform.Challenge{}
 	for _, id := range f.ids {
 		status := "stopped"
@@ -79,14 +84,28 @@ func newFixture(t *testing.T, count, concurrency, flagCount int) *fixture {
 	f.manager = New(db, Backend{
 		Connect: func(string) (ctfplatform.Platform, string, error) { return f.platform, "task-one", nil },
 		Import: func(ctx context.Context, run core.CompetitionRun, id string) (string, error) {
-			if _, err := f.platform.Deliver(ctx, id); err != nil {
+			delivery, err := f.platform.Deliver(ctx, id)
+			if err != nil {
 				return "", err
 			}
-			project, err := db.CreateProject(ctx, core.CreateProject{Title: id, Origin: "test target", Goal: "capture flags", Hints: []core.CreateHint{{Content: run.Rules, Creator: "competition"}}, MaxWorkers: run.MaxWorkers})
+			challengeData, _ := json.Marshal(ctfplatform.Challenge{ID: id, FlagCount: f.platform.flags})
+			deliveryData, _ := json.Marshal(delivery)
+			budget := run.ChallengeTimeoutSeconds
+			project, err := db.CreateProject(ctx, core.CreateProject{Title: id, Origin: "test target", Goal: "capture flags", Hints: []core.CreateHint{{Content: run.Rules, Creator: "competition"}}, MaxWorkers: run.MaxWorkers, BudgetSeconds: &budget,
+				PlatformBinding: &core.PlatformBinding{Platform: run.Platform, ScopeID: run.ScopeID, ChallengeID: id, Challenge: challengeData, Delivery: deliveryData}})
 			if err == nil {
 				f.projects[id] = project.Project.ID
 			}
 			return project.Project.ID, err
+		},
+		Retry: func(ctx context.Context, _ core.CompetitionRun, platform ctfplatform.Platform, challenge ctfplatform.Challenge, project string) error {
+			delivery, err := platform.Deliver(ctx, challenge.ID)
+			if err != nil {
+				return err
+			}
+			challengeData, _ := json.Marshal(challenge)
+			deliveryData, _ := json.Marshal(delivery)
+			return db.RefreshCompetitionProject(ctx, project, string(challengeData), string(deliveryData), "test target")
 		},
 		Lookup: func(_ context.Context, _ core.CompetitionRun, id string) (string, error) { return f.projects[id], nil },
 		Submit: func(ctx context.Context, project string, id int64) (*ctfplatform.SubmissionResult, error) {
@@ -168,7 +187,7 @@ func TestPlanningRetryWaitsAfterSlowFailure(t *testing.T) {
 
 func TestDozensOfChallengesContinueAfterSuccessAndFailure(t *testing.T) {
 	f := newFixture(t, 24, 2, 1)
-	for cycle := 0; cycle < 30; cycle++ {
+	for cycle := 0; cycle < 90; cycle++ {
 		f.manager.RunOnce(t.Context())
 		run := f.run(t)
 		if len(f.platform.active) > 2 {
@@ -181,7 +200,13 @@ func TestDozensOfChallengesContinueAfterSuccessAndFailure(t *testing.T) {
 			if item.Status != "running" {
 				continue
 			}
-			if item.Ordinal%3 == 0 {
+			attempts := 0
+			for _, id := range f.platform.starts {
+				if id == item.ChallengeID {
+					attempts++
+				}
+			}
+			if item.Ordinal%3 == 0 && attempts < 3 {
 				if err := f.db.FailCompetitionProject(t.Context(), *item.ProjectID, "solver failed"); err != nil {
 					t.Fatal(err)
 				}
@@ -192,26 +217,26 @@ func TestDozensOfChallengesContinueAfterSuccessAndFailure(t *testing.T) {
 		f.clock = f.clock.Add(time.Second)
 	}
 	run := f.run(t)
-	if run.Status != "completed" || len(f.platform.starts) != 24 || len(f.platform.closes) != 24 || f.planCalls != 1 {
+	if run.Status != "completed" || len(f.platform.starts) != 40 || len(f.platform.closes) != 40 || f.planCalls != 1 {
 		t.Fatalf("queue did not drain: status=%s starts=%d closes=%d plans=%d", run.Status, len(f.platform.starts), len(f.platform.closes), f.planCalls)
 	}
-	succeeded, failed := 0, 0
+	for index, id := range f.platform.starts {
+		expected := f.platform.ids[index%24]
+		if index >= 24 {
+			expected = f.platform.ids[(index-24)%8*3]
+		}
+		if id != expected {
+			t.Fatalf("challenge %d started out of round order: %s, want %s", index, id, expected)
+		}
+	}
 	for _, item := range run.Items {
-		switch item.Status {
-		case "succeeded":
-			succeeded++
-		case "failed":
-			failed++
-		default:
+		if item.Status != "succeeded" {
 			t.Fatalf("unfinished item: %#v", item)
 		}
 		project, err := f.db.GetProject(t.Context(), *item.ProjectID)
 		if err != nil || len(project.Hints) != 1 || project.Hints[0].Content != f.rules {
 			t.Fatalf("rules not propagated: %#v %v", project.Hints, err)
 		}
-	}
-	if succeeded != 16 || failed != 8 {
-		t.Fatalf("unexpected outcomes: success=%d failed=%d", succeeded, failed)
 	}
 }
 
@@ -234,6 +259,146 @@ func TestMultiFlagAndCleanupKeepSlotOccupied(t *testing.T) {
 	f.manager.RunOnce(t.Context())
 	if len(f.platform.starts) != 2 || len(f.platform.closes) != 1 || f.run(t).Items[0].Status != "succeeded" {
 		t.Fatal("next challenge not started after confirmed cleanup")
+	}
+}
+
+func TestFailedChallengeWaitsForRoundAndRetriesWithSavedFlags(t *testing.T) {
+	f := newFixture(t, 2, 1, 2)
+	f.manager.RunOnce(t.Context())
+	id := f.platform.ids[0]
+	project := f.projects[id]
+	f.capture(t, id, "flag{first}")
+	f.manager.RunOnce(t.Context())
+	f.clock = f.clock.Add(61 * time.Second)
+	f.manager.RunOnce(t.Context())
+	if run := f.run(t); run.Items[0].Status != "failed" || run.Items[1].Status != "running" {
+		t.Fatalf("timeout did not yield to the rest of the round: %+v", run)
+	}
+	f.manager.RunOnce(t.Context())
+	if len(f.platform.starts) != 2 {
+		t.Fatal("failed challenge retried before the round ended")
+	}
+	f.capture(t, f.platform.ids[1], "flag{other-first}")
+	f.capture(t, f.platform.ids[1], "flag{other-second}")
+	f.manager.RunOnce(t.Context())
+	run := f.run(t)
+	if run.Status != "running" || run.Items[0].Status != "queued" || run.Items[1].Status != "succeeded" {
+		t.Fatalf("unsolved challenge was not requeued: %+v", run)
+	}
+	f.clock = f.clock.Add(4 * time.Second)
+	f.manager.RunOnce(t.Context())
+	if len(f.platform.starts) != 2 {
+		t.Fatal("retried before the round delay")
+	}
+	f.manager = New(f.db, f.manager.Backend)
+	f.manager.Now = func() time.Time { return f.clock }
+	f.clock = f.clock.Add(time.Second)
+	f.manager.RunOnce(t.Context())
+	run = f.run(t)
+	if run.Items[0].Status != "running" || *run.Items[0].ProjectID != project || len(f.platform.starts) != 3 || f.planCalls != 1 {
+		t.Fatalf("restart did not resume the saved challenge: %+v", run)
+	}
+	f.capture(t, id, "flag{second}")
+	f.manager.RunOnce(t.Context())
+	flags, err := f.db.ListFlags(t.Context(), project)
+	if err != nil || f.run(t).Status != "completed" || f.platform.correct[id] != 2 || len(flags) != 2 || len(flags[0].Attempts) != 1 || len(flags[1].Attempts) != 1 {
+		t.Fatalf("retry lost accepted flags or resubmitted them: %+v %v", flags, err)
+	}
+}
+
+func TestStopDuringRetryDelayDoesNotRestartChallenge(t *testing.T) {
+	f := newFixture(t, 1, 1, 1)
+	f.manager.RunOnce(t.Context())
+	if err := f.db.FailCompetitionProject(t.Context(), f.projects[f.platform.ids[0]], "no flag found"); err != nil {
+		t.Fatal(err)
+	}
+	f.manager.RunOnce(t.Context())
+	if run := f.run(t); run.Status != "running" || run.Items[0].Status != "queued" {
+		t.Fatalf("failed challenge did not enter the retry queue: %+v", run)
+	}
+	if err := f.manager.Stop(t.Context(), "competition_001"); err != nil {
+		t.Fatal(err)
+	}
+	f.clock = f.clock.Add(10 * time.Second)
+	f.manager.RunOnce(t.Context())
+	if run := f.run(t); run.Status != "stopped" || run.Items[0].Status != "skipped" || len(f.platform.starts) != 1 {
+		t.Fatalf("stop restarted a queued retry: %+v", run)
+	}
+}
+
+func TestRetryWaitsForPlatformListingAndSkipsRemoteCompletion(t *testing.T) {
+	f := newFixture(t, 1, 1, 1)
+	f.manager.RunOnce(t.Context())
+	id := f.platform.ids[0]
+	if err := f.db.FailCompetitionProject(t.Context(), f.projects[id], "solver failed"); err != nil {
+		t.Fatal(err)
+	}
+	f.platform.listError = fmt.Errorf("platform temporarily unavailable")
+	f.manager.RunOnce(t.Context())
+	if run := f.run(t); run.Status != "running" || run.Items[0].Status != "failed" {
+		t.Fatalf("listing failure finished the competition: %+v", run)
+	}
+	f.platform.listError = nil
+	f.platform.correct[id] = 1 // Another solver completed it between rounds.
+	f.manager.RunOnce(t.Context())
+	f.clock = f.clock.Add(5 * time.Second)
+	f.manager.RunOnce(t.Context())
+	if run := f.run(t); run.Status != "completed" || run.Items[0].Status != "succeeded" || len(f.platform.starts) != 1 {
+		t.Fatalf("remote completion restarted an already solved challenge: %+v", run)
+	}
+}
+
+func TestLocallyCompletedProjectRetriesUntilPlatformAcceptance(t *testing.T) {
+	f := newFixture(t, 1, 1, 1)
+	f.manager.RunOnce(t.Context())
+	id := f.platform.ids[0]
+	project := f.projects[id]
+	if err := f.db.CompleteCompetitionProject(t.Context(), project, "premature local completion"); err != nil {
+		t.Fatal(err)
+	}
+	f.manager.RunOnce(t.Context())
+	f.clock = f.clock.Add(5 * time.Second)
+	f.manager.RunOnce(t.Context())
+	detail, err := f.db.GetProject(t.Context(), project)
+	if err != nil || detail.Project.Status != "active" || len(detail.Goals) == 0 || detail.Goals[0].Status != "active" || f.run(t).Items[0].Status != "running" {
+		t.Fatalf("premature completion was not reopened: %+v %v", detail, err)
+	}
+	f.capture(t, id, "flag{platform-confirmed}")
+	f.manager.RunOnce(t.Context())
+	if f.run(t).Status != "completed" {
+		t.Fatal("platform acceptance did not finish the retried project")
+	}
+}
+
+func TestUnknownSubmissionIsPreservedAcrossChallengeRetries(t *testing.T) {
+	f := newFixture(t, 1, 1, 2)
+	f.manager.RunOnce(t.Context())
+	id := f.platform.ids[0]
+	project := f.projects[id]
+	f.capture(t, id, "flag{unknown}")
+	submit := f.manager.Backend.Submit
+	calls := 0
+	f.manager.Backend.Submit = func(ctx context.Context, project string, flagID int64) (*ctfplatform.SubmissionResult, error) {
+		calls++
+		if calls > 1 {
+			return submit(ctx, project, flagID)
+		}
+		attempt, err := f.db.BeginFlagAttempt(ctx, project, flagID)
+		if err != nil {
+			return nil, err
+		}
+		_, err = f.db.ResolveFlagAttempt(ctx, project, flagID, attempt.ID, core.ResolveFlagAttempt{Status: "submission_unknown", Response: "connection lost"})
+		return nil, err
+	}
+	f.manager.RunOnce(t.Context())
+	f.clock = f.clock.Add(61 * time.Second)
+	f.manager.RunOnce(t.Context())
+	f.clock = f.clock.Add(5 * time.Second)
+	f.manager.RunOnce(t.Context())
+	f.manager.RunOnce(t.Context())
+	flags, err := f.db.ListFlags(t.Context(), project)
+	if err != nil || calls != 1 || len(flags) != 1 || flags[0].Status != "submission_unknown" || len(flags[0].Attempts) != 1 || f.run(t).Items[0].Status != "running" {
+		t.Fatalf("retry resubmitted an unknown candidate: %+v calls=%d err=%v", flags, calls, err)
 	}
 }
 

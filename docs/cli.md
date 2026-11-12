@@ -6,7 +6,7 @@
 
 `platform` 提供独立 CTF 平台接入；目前支持 TSec。`platform list/challenges/start/import/hint/submit/close` 通过服务访问平台，`flag submit <FLAG>` 使用项目绑定并记录平台判定。配置、完整流程和路由见 [ctf_platforms.md](ctf_platforms.md)。
 
-`competition start tsec --rules-file rules.md --concurrency 2` 启动整场比赛总调度，题目成功/失败后自动提交、关闭容器并开始下一题。`competition list/status/concurrency/stop` 查询和管理运行；服务须开启 `--autorun`。也可直接使用 `serve --competition-rules-file rules.md --competition-concurrency 2` 启动服务和比赛。
+`competition start tsec --rules-file rules.md --concurrency 2` 启动整场比赛总调度，按轮处理题目；失败且平台尚未确认通关的题目会在 5 秒后重新入队，并复用项目证据与 flag、刷新靶场实例。所有题目经平台确认通关后比赛完成；持续未解出的题目会循环重试，直至通关或操作员停止。`competition list/status/concurrency/stop` 查询和管理运行；服务须开启 `--autorun`。也可直接使用 `serve --competition-rules-file rules.md --competition-concurrency 2` 启动服务和比赛。
 
 本设计以现有 Go、Iris、SQLite 后端为基础，覆盖项目图协议、认证、本地 Worker、漏洞审核、模板、系统设置、审计和通知。接口范围依据 [routes.md](routes.md)；实现入口见 [handler.go](../backend/internal/httpapi/handler.go)。
 

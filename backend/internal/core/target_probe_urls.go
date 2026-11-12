@@ -109,7 +109,7 @@ func resolveTargetProbeURLPorts(analysis TargetProbeAnalysis, texts ...string) (
 }
 
 func targetProbeSources(t *sql.Tx, project string) ([]string, error) {
-	rows, err := t.Query(`SELECT description FROM facts WHERE project_id=? AND id='origin' UNION ALL SELECT description FROM goals WHERE project_id=? UNION ALL SELECT content FROM hints WHERE project_id=?`, project, project, project)
+	rows, err := t.Query(`SELECT description FROM facts WHERE project_id=? AND id=CASE WHEN EXISTS(SELECT 1 FROM facts WHERE project_id=? AND id='competition_target') THEN 'competition_target' ELSE 'origin' END UNION ALL SELECT description FROM goals WHERE project_id=? UNION ALL SELECT content FROM hints WHERE project_id=?`, project, project, project, project)
 	if err != nil {
 		return nil, err
 	}

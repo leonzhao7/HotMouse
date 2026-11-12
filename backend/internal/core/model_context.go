@@ -134,7 +134,7 @@ func (d *DB) ModelContext(ctx context.Context, project, phase, stepID string) (s
 	out.TargetHealth = map[string]any{"status": detail.TargetProbe.Status, "last_checked_at": detail.TargetProbe.LastCheckedAt, "last_error": detail.TargetProbe.LastError, "consecutive_failures": detail.TargetProbe.ConsecutiveFailures}
 	if detail.Platform != nil {
 		binding := detail.Platform
-		out.Platform = &modelPlatform{Name: binding.Platform, ChallengeID: binding.ChallengeID, SnapshotNote: "Challenge/delivery metadata saved at import; use flags.last_platform_response for subsequent submission progress"}
+		out.Platform = &modelPlatform{Name: binding.Platform, ChallengeID: binding.ChallengeID, SnapshotNote: "Delivery is the current platform target snapshot and overrides historical addresses; use flags.last_platform_response for subsequent submission progress"}
 		if err := json.Unmarshal(binding.Challenge, &out.Platform.Challenge); err != nil {
 			return "", err
 		}
@@ -206,7 +206,7 @@ func (d *DB) ModelContext(ctx context.Context, project, phase, stepID string) (s
 		view.HasDetail = view.HasDetail || len(view.FindingIDs) > 0
 		return view
 	}
-	required := map[string]bool{"origin": true}
+	required := map[string]bool{"origin": true, "competition_target": true}
 	if id := detail.TargetProbe.Preprocessing.FactID; id != "" {
 		required[id] = true
 	}

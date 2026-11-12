@@ -49,7 +49,12 @@ func TestCompetitionLifecycleLogsIncludeStrategyAndCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.manager.RunOnce(t.Context())
-	for _, expected := range []string{"competition.flag.submit", "competition.flag.accepted", "accepted_flags=1", "accepted_flags=2", "total_flags=2", "competition.challenge.closing", "competition.cleanup.retry", "level=WARN", "resource still stopping", "retry_after=", "competition.cleanup.completed", "solver exhausted available routes", "competition.finished", "status=completed"} {
+	f.clock = f.clock.Add(5 * time.Second)
+	f.manager.RunOnce(t.Context())
+	f.capture(t, f.platform.ids[1], "flag{retry-first}")
+	f.capture(t, f.platform.ids[1], "flag{retry-second}")
+	f.manager.RunOnce(t.Context())
+	for _, expected := range []string{"competition.flag.submit", "competition.flag.accepted", "accepted_flags=1", "accepted_flags=2", "total_flags=2", "competition.challenge.closing", "competition.cleanup.retry", "level=WARN", "resource still stopping", "retry_after=", "competition.cleanup.completed", "solver exhausted available routes", "competition.challenge.requeued", "competition.challenge_retried", "competition.finished", "status=completed"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("lifecycle missing %q: %s", expected, output.String())
 		}

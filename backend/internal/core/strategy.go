@@ -454,13 +454,17 @@ func reconcileInterruptedInvestmentsTx(t *sql.Tx, project string) error {
 // attempts before granting a fresh shared allowance so late completion cannot consume
 // the new window. Lifetime investment and execution evidence remain intact.
 func resumeRoutesTx(t *sql.Tx, project string) error {
+	return resumeRoutesWithReasonTx(t, project, "operator_resume")
+}
+
+func resumeRoutesWithReasonTx(t *sql.Tx, project, reason string) error {
 	if err := reconcileInterruptedInvestmentsTx(t, project); err != nil {
 		return err
 	}
 	if _, err := t.Exec(`UPDATE projects SET budget_baseline_ms=COALESCE((SELECT SUM(invested_ms) FROM routes WHERE project_id=?),0) WHERE id=?`, project, project); err != nil {
 		return err
 	}
-	if _, err := t.Exec(`INSERT INTO route_records(project_id,route_id,action,reason,created_at) SELECT project_id,id,CASE WHEN status='shelved' THEN 'reopened' ELSE 'resumed' END,'operator_resume',? FROM routes WHERE project_id=?`, now(), project); err != nil {
+	if _, err := t.Exec(`INSERT INTO route_records(project_id,route_id,action,reason,created_at) SELECT project_id,id,CASE WHEN status='shelved' THEN 'reopened' ELSE 'resumed' END,?,? FROM routes WHERE project_id=?`, reason, now(), project); err != nil {
 		return err
 	}
 	_, err := t.Exec(`UPDATE routes SET status='active',shelved_reason='',reopen_condition='',next_direction='',budget_baseline_ms=invested_ms,no_progress_count=0 WHERE project_id=?`, project)
