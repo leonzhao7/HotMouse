@@ -2216,6 +2216,29 @@ td:first-child {
 .competition-result p {
   margin-top: 6px;
 }
+
+.competition-description {
+  margin-top: 8px;
+}
+.competition-description summary {
+  cursor: pointer;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.competition-description pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 240px;
+  max-width: min(520px, 65vw);
+  max-height: 320px;
+  overflow: auto;
+  font: inherit;
+  margin: 8px 0 0;
+}
+.competition-description-empty {
+  display: block;
+  margin-top: 8px;
+}
 @media (max-width: 650px) {
   .competition-detail .panel-header,
   .competition-progress-label {

@@ -84,6 +84,10 @@ func providerArgv(cfg workerConfig, phase, session, workspace, prompt string) ([
 		return args, nil
 	case "claudecode":
 		args := []string{"claude", "--dangerously-skip-permissions", "--output-format", "json"}
+		if phase == "execute" {
+			// Stream tool results before the final assistant report exists.
+			args = []string{"claude", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose"}
+		}
 		if model := cfg.env["ANTHROPIC_MODEL"]; model != "" {
 			args = append(args, "--model", model)
 		}
@@ -295,8 +299,19 @@ func (r *Runner) runProvider(ctx context.Context, cfg workerConfig, phase, sessi
 	defer cancel()
 	var checkpointErr error
 	seen := session
+	var observations *outputCapture
+	if phase == "execute" {
+		observations, err = r.newOutputCapture(ctx, vars["HOTMOUSE_PROJECT_ID"], vars["HOTMOUSE_STEP_ID"], cfg.identity, stateWorkspace, canonicalDriver(cfg.driver))
+		if err != nil {
+			return nil, session, processResult{}, err
+		}
+		defer observations.close()
+	}
 	observe := func(line []byte) {
 		logProviderEvent(logger, cfg.driver, line)
+		if observations != nil {
+			observations.providerEvent(line)
+		}
 		if id := eventSession(cfg.driver, line); id != "" && seen == "" {
 			seen = id
 			if onSession != nil {
@@ -307,7 +322,11 @@ func (r *Runner) runProvider(ctx context.Context, cfg workerConfig, phase, sessi
 			}
 		}
 	}
-	result := runProcess(runCtx, argv, cfg.env, workspace, vars, timeout, observe, logger)
+	var onOutput func(string, []byte)
+	if observations != nil {
+		onOutput = observations.stream
+	}
+	result := runProcessObserved(runCtx, argv, cfg.env, workspace, vars, timeout, observe, onOutput, logger)
 	response, responseErr := providerResponse(cfg.driver, result.stdout)
 	if responseErr != nil && logger != nil {
 		logger.Warn("provider.response_failed", "error", responseErr, "response_bytes", len(response))

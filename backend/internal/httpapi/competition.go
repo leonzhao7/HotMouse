@@ -12,7 +12,7 @@ import (
 )
 
 func newCompetitionManager(h *Handler) *competition.Manager {
-	return competition.New(h.DB, competition.Backend{
+	manager := competition.New(h.DB, competition.Backend{
 		Connect: h.platform,
 		Import: func(ctx context.Context, run core.CompetitionRun, challenge string) (string, error) {
 			budget := run.ChallengeTimeoutSeconds
@@ -34,6 +34,8 @@ func newCompetitionManager(h *Handler) *competition.Manager {
 		Cancel: h.Runner.CancelProject,
 		Busy:   h.Runner.ProjectBusy,
 	})
+	h.Runner.SetFlagCaptureNotifier(manager.Wake)
+	return manager
 }
 
 func competitionHints(id, rules, summary string) []core.CreateHint {

@@ -23,6 +23,7 @@ import (
 type Runner struct {
 	activeMu       sync.Mutex
 	activeProjects map[string]map[*context.CancelFunc]struct{}
+	flagNotifier   func()
 	DB             *core.DB
 	Interval       time.Duration
 	logger         *logging.Logger
@@ -37,6 +38,22 @@ type Runner struct {
 	lifecycleCtx   context.Context
 	probeInterval  time.Duration
 	probeDial      func(context.Context, core.TargetEndpoint) error
+}
+
+// Configure before starting the pool. Notification never performs a model call.
+func (r *Runner) SetFlagCaptureNotifier(notify func()) {
+	r.activeMu.Lock()
+	r.flagNotifier = notify
+	r.activeMu.Unlock()
+}
+
+func (r *Runner) notifyFlagCapture() {
+	r.activeMu.Lock()
+	notify := r.flagNotifier
+	r.activeMu.Unlock()
+	if notify != nil {
+		notify()
+	}
 }
 
 type workerConfig struct {
@@ -525,9 +542,15 @@ func (r *Runner) executeAsRole(parent context.Context, project, step, descriptio
 				if err == nil {
 					argv := []string{"sh", "-c", cfg.command}
 					logger := r.processLogger(cfg, project, step, "execute")
-					process := runProcess(leaseCtx, argv, cfg.env, workspace, vars, time.Duration(cfg.runtime.ExecuteTimeoutSeconds)*time.Second, nil, logger)
-					commandInvoked = true
-					output, err = process.stdout, process.err
+					observations, observeErr := r.newOutputCapture(leaseCtx, project, step, worker, workspace, "command")
+					if observeErr != nil {
+						err = observeErr
+					} else {
+						process := runProcessObserved(leaseCtx, argv, cfg.env, workspace, vars, time.Duration(cfg.runtime.ExecuteTimeoutSeconds)*time.Second, nil, observations.stream, logger)
+						observations.close()
+						commandInvoked = true
+						output, err = process.stdout, process.err
+					}
 				}
 			}
 			stopCheckpoints()

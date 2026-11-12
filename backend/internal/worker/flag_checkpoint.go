@@ -65,7 +65,11 @@ func (r *Runner) ingestFlagCheckpoint(ctx context.Context, project, step, worker
 			return core.Flag{}, fmt.Errorf("candidate does not match the supplied challenge format")
 		}
 	}
-	return r.DB.CheckpointFlag(ctx, project, step, worker, req)
+	flag, err := r.DB.CheckpointFlag(ctx, project, step, worker, req)
+	if err == nil {
+		r.notifyFlagCapture()
+	}
+	return flag, err
 }
 
 // Poll during the model/tool execution, then drain before parsing/committing its

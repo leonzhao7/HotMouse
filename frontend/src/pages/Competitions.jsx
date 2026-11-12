@@ -315,7 +315,7 @@ function RunDetail({ run, platform, onStop, onConcurrency }) {
   const rows = items.filter(
     (item) =>
       (!filter || item.status === filter) &&
-      `${item.challenge_id} ${item.project_id || ""}`
+      `${item.challenge_id} ${item.project_id || ""} ${item.initial_description || ""}`
         .toLowerCase()
         .includes(query.toLowerCase()),
   );
@@ -399,7 +399,7 @@ function RunDetail({ run, platform, onStop, onConcurrency }) {
           <SearchInput
             value={query}
             onChange={setQuery}
-            placeholder="搜索题目或项目编号"
+            placeholder="搜索题目、项目编号或初始描述"
           />
           <SelectField
             label="题目状态"
@@ -442,6 +442,16 @@ function RunDetail({ run, platform, onStop, onConcurrency }) {
               <td>{item.ordinal + 1}</td>
               <td>
                 <code>{item.challenge_id}</code>
+                {item.initial_description ? (
+                  <details className="competition-description">
+                    <summary>初始描述</summary>
+                    <pre>{item.initial_description}</pre>
+                  </details>
+                ) : (
+                  <small className="muted competition-description-empty">
+                    尚未获得初始描述
+                  </small>
+                )}
               </td>
               <td>
                 <Status value={item.status} />

@@ -49,6 +49,8 @@ test("TSec configuration, rules upload, competition progress and controls", asyn
         challenge_id: "e1-01",
         ordinal: 0,
         project_id: project,
+        initial_description:
+          "Original sandbox challenge\nTarget address: 10.0.0.1:1337\n<script>plain task text</script>",
         status: "succeeded",
         outcome: "succeeded",
       },
@@ -108,6 +110,7 @@ test("TSec configuration, rules upload, competition progress and controls", asyn
         challenge_id: item.challenge_id,
         ordinal: index,
         project_id: index === 0 ? project : null,
+        initial_description: item.initial_description || "",
         status: index === 0 ? "running" : "queued",
         outcome: "",
         last_error: "",
@@ -131,6 +134,28 @@ test("TSec configuration, rules upload, competition progress and controls", asyn
   await expect(
     page.getByRole("progressbar", { name: "题目处理进度" }),
   ).toHaveAttribute("value", "3");
+  const description = page
+    .getByRole("row")
+    .filter({ hasText: "e1-01" })
+    .locator("details.competition-description");
+  await description.locator("summary").click();
+  await expect(description.locator("pre")).toHaveText(
+    initial.items[0].initial_description,
+  );
+  await expect(description.locator("script")).toHaveCount(0);
+  await expect(
+    page
+      .getByRole("row")
+      .filter({ hasText: "e1-03" })
+      .getByText("尚未获得初始描述"),
+  ).toBeVisible();
+  const search = page.getByPlaceholder("搜索题目、项目编号或初始描述");
+  await search.fill("sandbox");
+  await expect(page.getByRole("row").filter({ hasText: "e1-02" })).toHaveCount(
+    0,
+  );
+  await expect(description).toBeVisible();
+  await search.fill("");
   await page.getByRole("button", { name: "配置平台", exact: true }).click();
   let dialog = page.getByRole("dialog", { name: "配置平台 · TSec Benchmark" });
   await dialog.getByLabel("平台地址").fill("http://127.0.0.1:31337");

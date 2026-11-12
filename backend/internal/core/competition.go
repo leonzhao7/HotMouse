@@ -73,16 +73,17 @@ type CompetitionRun struct {
 	Items            []CompetitionItem `json:"items"`
 }
 type CompetitionItem struct {
-	RunID       string  `json:"run_id"`
-	ChallengeID string  `json:"challenge_id"`
-	Ordinal     int     `json:"ordinal"`
-	ProjectID   *string `json:"project_id"`
-	Status      string  `json:"status"`
-	Outcome     string  `json:"outcome"`
-	LastError   string  `json:"last_error"`
-	StartedAt   *string `json:"started_at"`
-	FinishedAt  *string `json:"finished_at"`
-	RetryAfter  string  `json:"retry_after"`
+	InitialDescription string  `json:"initial_description"`
+	RunID              string  `json:"run_id"`
+	ChallengeID        string  `json:"challenge_id"`
+	Ordinal            int     `json:"ordinal"`
+	ProjectID          *string `json:"project_id"`
+	Status             string  `json:"status"`
+	Outcome            string  `json:"outcome"`
+	LastError          string  `json:"last_error"`
+	StartedAt          *string `json:"started_at"`
+	FinishedAt         *string `json:"finished_at"`
+	RetryAfter         string  `json:"retry_after"`
 }
 
 const competitionColumns = `id,platform,scope_id,rules,rules_summary,concurrency,max_workers,challenge_timeout_seconds,status,last_error,planning_attempts,retry_after,created_at,finished_at`
@@ -140,7 +141,7 @@ func (d *DB) GetCompetitionRun(ctx context.Context, id string) (CompetitionRun, 
 	}
 	out.FinishedAt = nullable(finished)
 	out.Items = []CompetitionItem{}
-	rows, err := d.SQL.QueryContext(ctx, `SELECT run_id,challenge_id,ordinal,project_id,status,outcome,last_error,started_at,finished_at,retry_after FROM competition_items WHERE run_id=? ORDER BY ordinal`, id)
+	rows, err := d.SQL.QueryContext(ctx, `SELECT i.run_id,i.challenge_id,i.ordinal,i.project_id,i.status,i.outcome,i.last_error,i.started_at,i.finished_at,i.retry_after,COALESCE(f.description,'') FROM competition_items i LEFT JOIN facts f ON f.project_id=i.project_id AND f.id='origin' WHERE i.run_id=? ORDER BY i.ordinal`, id)
 	if err != nil {
 		return out, err
 	}
@@ -148,7 +149,7 @@ func (d *DB) GetCompetitionRun(ctx context.Context, id string) (CompetitionRun, 
 	for rows.Next() {
 		var item CompetitionItem
 		var project, started, finished sql.NullString
-		if err := rows.Scan(&item.RunID, &item.ChallengeID, &item.Ordinal, &project, &item.Status, &item.Outcome, &item.LastError, &started, &finished, &item.RetryAfter); err != nil {
+		if err := rows.Scan(&item.RunID, &item.ChallengeID, &item.Ordinal, &project, &item.Status, &item.Outcome, &item.LastError, &started, &finished, &item.RetryAfter, &item.InitialDescription); err != nil {
 			return out, err
 		}
 		item.ProjectID, item.StartedAt, item.FinishedAt = nullable(project), nullable(started), nullable(finished)

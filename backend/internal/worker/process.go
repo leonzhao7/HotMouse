@@ -30,11 +30,15 @@ type capture struct {
 	limit   int
 	limited bool
 	line    func([]byte)
+	chunk   func([]byte)
 	total   atomic.Int64
 }
 
 func (w *capture) Write(p []byte) (int, error) {
 	n := len(p)
+	if w.chunk != nil {
+		w.chunk(p)
+	}
 	w.total.Add(int64(n))
 	remaining := w.limit - w.data.Len()
 	if len(p) > remaining {
@@ -60,6 +64,11 @@ func (w *capture) Write(p []byte) (int, error) {
 }
 
 func runProcess(parent context.Context, argv []string, env map[string]string, cwd string, vars map[string]string, timeout time.Duration, onLine func([]byte), diagnostics ...*logging.Logger) processResult {
+	return runProcessObserved(parent, argv, env, cwd, vars, timeout, onLine, nil, diagnostics...)
+}
+
+// Observe bytes before retention limits or response parsing discard them.
+func runProcessObserved(parent context.Context, argv []string, env map[string]string, cwd string, vars map[string]string, timeout time.Duration, onLine func([]byte), onOutput func(string, []byte), diagnostics ...*logging.Logger) processResult {
 	started := time.Now()
 	var ctx context.Context
 	var cancel context.CancelFunc
@@ -94,6 +103,10 @@ func runProcess(parent context.Context, argv []string, env map[string]string, cw
 	}
 	cmd.WaitDelay = 6 * time.Second
 	out, stderr := &capture{limit: 16 << 20}, &capture{limit: 1 << 20}
+	if onOutput != nil {
+		out.chunk = func(p []byte) { onOutput("stdout", p) }
+		stderr.chunk = func(p []byte) { onOutput("stderr", p) }
+	}
 	out.line = func(line []byte) {
 		if logger != nil {
 			logger.Debug("process.stdout", "text", string(line))
