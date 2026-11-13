@@ -2,6 +2,18 @@
 
 ARG GO_IMAGE=golang:1.25-bookworm
 ARG NODE_IMAGE=node:24-bookworm-slim
+ARG PYTHON_IMAGE=python:3.13-slim-bookworm
+
+# Use the Go image's existing C compiler for source-only packages such as mutf8.
+# The interpreter comes from the official Python image on the same Debian base.
+FROM ${PYTHON_IMAGE} AS python-base
+FROM ${GO_IMAGE} AS python-tools
+COPY --from=python-base /usr/local/ /usr/local/
+COPY docker/toolkit-requirements.txt /opt/hotmouse/toolkit-requirements.txt
+RUN --mount=type=cache,id=hotmouse-pip,target=/root/.cache/pip \
+    python -m venv /opt/hotmouse/venv \
+    && /opt/hotmouse/venv/bin/python -m pip install -r /opt/hotmouse/toolkit-requirements.txt \
+    && /opt/hotmouse/venv/bin/python -m pip check
 
 FROM ${GO_IMAGE} AS backend-build
 ARG GOPROXY=https://proxy.golang.org,direct
@@ -42,12 +54,20 @@ RUN --mount=type=cache,id=hotmouse-apt-lists,target=/var/lib/apt/lists,sharing=l
        nmap openssh-client openssl p7zip-full python3 python3-venv ripgrep \
        socat sqlmap sqlite3 squashfs-tools sshpass tini unzip util-linux xz-utils
 
+# Keep the large base tool layer cached when adding native Python libraries.
+RUN --mount=type=cache,id=hotmouse-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+    --mount=type=cache,id=hotmouse-apt-cache,target=/var/cache/apt,sharing=locked \
+    apt-get -o Acquire::Retries=3 update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+       libfplll8 libgmp10 libmpfr6 libxml2 libxslt1.1
+
 # Prepare Python tools before a task starts; agents reuse this interpreter.
+COPY --from=python-base /usr/local/ /usr/local/
+COPY --from=python-tools /opt/hotmouse/venv /opt/hotmouse/venv
 COPY docker/toolkit-requirements.txt /opt/hotmouse/toolkit-requirements.txt
-RUN --mount=type=cache,id=hotmouse-pip,target=/root/.cache/pip \
-    python3 -m venv /opt/hotmouse/venv \
-    && /opt/hotmouse/venv/bin/python -m pip install -r /opt/hotmouse/toolkit-requirements.txt \
-    && /opt/hotmouse/venv/bin/python -c 'import requests, jwt, flask, pwn, sympy, Crypto'
+COPY docker/verify-toolkit.py /opt/hotmouse/verify-toolkit.py
+RUN /opt/hotmouse/venv/bin/python -m pip check \
+    && /opt/hotmouse/venv/bin/python /opt/hotmouse/verify-toolkit.py
 
 ARG AGENT_PACKAGES="@openai/codex@0.167.0 @anthropic-ai/claude-code@2.1.318 @mariozechner/pi-coding-agent@0.73.1"
 ARG NPM_REGISTRY=https://registry.npmjs.org
@@ -76,11 +96,14 @@ COPY frontend/server.mjs ./frontend/server.mjs
 COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/hotmouse-entrypoint
 COPY LICENSE /usr/share/doc/hotmouse/LICENSE
 COPY backend/internal/knowledge/LICENSE.sapper-v2 backend/internal/knowledge/DISCLAIMER.sapper-v2.md backend/internal/knowledge/NOTICE.md /usr/share/doc/hotmouse/sapper-v2/
+COPY backend/skills /usr/local/share/hotmouse/skills
+COPY backend/internal/knowledge/skills /usr/local/share/hotmouse/skills
 COPY backend/pentest_toolkit /usr/local/share/hotmouse/pentest_toolkit
 
 ENV NODE_ENV=production \
     HOTMOUSE_LOG_LEVEL=debug \
     HOTMOUSE_LOG_ENV=1 \
+    HOTMOUSE_SKILLS_DIR=/usr/local/share/hotmouse/skills \
     HOTMOUSE_PENTEST_TOOLKIT_DIR=/usr/local/share/hotmouse/pentest_toolkit \
     HOTMOUSE_PYTHON=/opt/hotmouse/venv/bin/python \
     PATH=/opt/hotmouse/venv/bin:$PATH \

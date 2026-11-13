@@ -28,6 +28,7 @@ docker/**
 !docker/Dockerfile
 !docker/entrypoint.sh
 !docker/toolkit-requirements.txt
+!docker/verify-toolkit.py
 !LICENSE
 
 # Exclude local state even when it is nested inside an allowed source directory.

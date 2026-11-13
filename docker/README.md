@@ -1,6 +1,6 @@
 # Docker 镜像
 
-镜像包含 Go/SQLite 后端、构建后的 React 前端，以及 Codex、Claude Code、Pi CLI。运行时无需 Go 编译器或前端源码。需要 Docker Engine、BuildKit 和 Docker Compose v2；构建需下载基础镜像、Go/npm 依赖和 Debian 软件包。
+镜像包含 Go/SQLite 后端、构建后的 React 前端、Codex/Claude Code/Pi CLI、13 个技能、pentest_toolkit 和完整 Python 依赖。运行时无需 Go 编译器或前端源码。需要 Docker Engine、BuildKit 和 Docker Compose v2；构建需下载基础镜像、Go/npm/Python 依赖和 Debian 软件包。
 
 ## 构建和启动
 
@@ -73,6 +73,7 @@ TSec 整场比赛可挂载规则文件，并设置 `HOTMOUSE_COMPETITION_RULES_F
 | `GOPROXY` | `https://proxy.golang.org,direct` | Go 模块下载源，可指定内部镜像 |
 | `NPM_REGISTRY` | `https://registry.npmjs.org` | 前端依赖及 Agent CLI 的 npm 下载源 |
 | `NODE_IMAGE` | `node:24-bookworm-slim` | 前端构建和运行环境 |
+| `PYTHON_IMAGE` | `python:3.13-slim-bookworm` | Python 解释器及工具依赖构建环境 |
 | `AGENT_PACKAGES` | Codex `0.167.0`、Claude Code `2.1.318`、Pi `0.73.1` | 空格分隔的 npm 包，空值跳过安装 |
 
 覆盖基础镜像时，请使用 Debian Bookworm 系列，保证 CGO 后端与运行环境的系统库兼容。
@@ -81,15 +82,31 @@ TSec 整场比赛可挂载规则文件，并设置 `HOTMOUSE_COMPETITION_RULES_F
 
 从根目录直接构建的等价命令：`DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile -t hotmouse:latest .`。`Dockerfile.dockerignore` 允许必要的源码、`backend/skills`、`backend/pentest_toolkit`、依赖清单、入口脚本和许可证进入构建上下文，排除本机数据库、Worker 产物、登录信息及 `.env` 文件。
 
-工作台、TSec 与 CTFy 镜像都带有 13 个内置技能，以及 `/usr/local/share/hotmouse/pentest_toolkit`
-下的共享脚本、字典与离线资料。Agent 提示词会提供索引和绝对路径，专项技能按证据读取。
+工作台、TSec 与 CTFy 镜像都带有 `/usr/local/share/hotmouse/skills` 下的 13 个技能及参考文件，
+以及 `/usr/local/share/hotmouse/pentest_toolkit` 下的共享脚本、字典与离线资料。
+技能同时嵌入 Go 二进制，Worker 启动时导出到工作区，并将 `HOTMOUSE_SKILLS_DIR` 指向导出目录。
+Agent 提示词会提供索引和绝对路径，专项技能按证据读取。
 工具库只复制一次，Worker 在自己的工作区保存输出。需要换工具库时可只读挂载其它目录，
 并通过 `HOTMOUSE_PENTEST_TOOLKIT_DIR` 指定容器内路径。
 
 镜像预装 nmap、ffuf、sqlmap、gdb、binutils、7z、unsquashfs、jq、nc、socat、SSH 与
 sshpass。`docker/toolkit-requirements.txt` 的 Python 工具在构建时安装到
-`/opt/hotmouse/venv`，包含 requests、PyJWT、Flask、pwntools、sympy、pycryptodome、
-ROPgadget 和 git-dumper。`HOTMOUSE_PYTHON` 指向此解释器，venv 的 bin 目录加入 PATH。
+`/opt/hotmouse/venv`，按提供的 `pip list` 固定全部 75 个包的版本，包含 androguard、
+pwntools、scapy、gmpy2、fpylll、sympy、pycryptodome、capstone 和 unicorn。
+另保留 PyJWT、Flask、git-dumper，并补充 fpylll 必需但未声明的 cysignals。
+解释器为 Python 3.13（networkx 3.7 要求 Python ≥3.12），`HOTMOUSE_PYTHON` 指向此解释器，
+venv 的 bin 目录加入 PATH，`python` 和 `python3` 使用同一环境。
+原生扩展在单独构建阶段编译，运行镜像仅包含解释器、依赖和所需系统库。
+构建时执行 `pip check`、全部固定版本检查，以及格约简、AES、反汇编和数据包读写检查。
+
+```bash
+docker run --rm hotmouse:latest python -m pip list
+docker run --rm hotmouse:latest python -m pip check
+docker run --rm hotmouse:latest python /opt/hotmouse/verify-toolkit.py
+docker run --rm hotmouse:latest ls /usr/local/share/hotmouse/skills
+docker run --rm hotmouse:latest ls /usr/local/share/hotmouse/pentest_toolkit
+```
+
 nuclei 模板作为离线资料提供，radare2、binwalk、etcdctl 等可选工具以实际能力清单为准。
 
 ## 终端日志
