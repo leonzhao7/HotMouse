@@ -545,6 +545,7 @@ env set 对名称包含 key/token/secret/password 的变量禁止 `--value` 明�
 | `completed_action` | `keep` 或 `remove` |
 | `context_root` | 服务主机上已存在的目录；空字符串恢复环境/目录发现 |
 | `worker_count` | 1–32，全局执行 Worker 数量，重启服务生效 |
+| `project_concurrency` | 0–32，自动调度同时处理的项目数，0 表示不限；结束后补上排队项目 |
 | `dispatcher.driver` | 独立规划驱动：`mock`、`command`、`pi`、`codex`、`claude` |
 | `dispatcher.command` | 独立规划命令；空字符串使用驱动默认命令 |
 | `dispatcher.model` | 独立规划模型；空字符串使用驱动默认模型 |
@@ -596,6 +597,7 @@ settings show 返回完整 Settings，set 更新一个键，apply 按单个 JSON
 | KEY | 单位 / 范围 / 默认值 |
 | --- | --- |
 | `default_project_budget_seconds` | 新项目共享预算秒数，≥0，0 表示不限，默认 1200；创建时保存，所有路线共同消耗 |
+| `default_project_max_workers` | 新项目每题 Worker 上限，1–32，默认 1；显式项目配置可覆盖 |
 | `step_timeout` | Step 租约秒数，≥5，默认 15 |
 | `decide_timeout` | Decide 租约秒数，≥5，默认 15 |
 | `worker_unhealthy_retry_after_seconds` | 秒，1–3600，默认 5 |

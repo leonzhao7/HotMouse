@@ -16,9 +16,12 @@ import {
 
 const groups = [
   [
-    "项目预算",
-    "新建项目自动保存此预算，所有路线共同消耗项目额度；已有项目保留创建时的预算。",
-    [["default_project_budget_seconds", "默认项目预算（秒，0为不限）", 0]],
+    "项目默认配置",
+    "新建项目自动保存 Worker 上限和预算，所有路线共同消耗项目额度；已有项目保留自己的配置。",
+    [
+      ["default_project_max_workers", "每题 Worker 上限", 1, 32],
+      ["default_project_budget_seconds", "默认项目预算（秒，0为不限）", 0],
+    ],
   ],
   [
     "租约与重试",

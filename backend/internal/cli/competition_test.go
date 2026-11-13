@@ -35,6 +35,9 @@ func TestCompetitionCLIEntryRulesConcurrencyAndStop(t *testing.T) {
 	t.Setenv("BENCHMARK_BASE_URL", platform.URL)
 	t.Setenv("BENCHMARK_TOKEN", "task-token")
 	h := newHarness(t, false)
+	if _, err := h.db.SQL.Exec(`UPDATE worker_config SET project_concurrency=2 WHERE id=1; UPDATE settings SET default_project_max_workers=3 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
 	h.server.Close()
 	handler := httpapi.New(h.db)
 	app := iris.New()
@@ -47,9 +50,19 @@ func TestCompetitionCLIEntryRulesConcurrencyAndStop(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := handler.Competitions.Start(ctx)
 	t.Cleanup(func() { cancel(); <-done; h.server.Close() })
-	code, out, errOut := h.run("只攻击下发靶场，不使用提示。", "competition", "start", "tsec", "--rules-file", "-", "--concurrency", "2", "--challenge-timeout-seconds", "60")
-	if code != 0 || !strings.Contains(out, `"rules": "只攻击下发靶场，不使用提示。"`) {
+	code, out, errOut := h.run("只攻击下发靶场，不使用提示。", "competition", "start", "tsec", "--rules-file", "-", "--challenge-timeout-seconds", "60")
+	if code != 0 || !strings.Contains(out, `"rules": "只攻击下发靶场，不使用提示。"`) || !strings.Contains(out, `"concurrency": 2`) || !strings.Contains(out, `"max_workers": 3`) {
 		t.Fatalf("start: %d %s %s", code, out, errOut)
+	}
+	run, err := h.db.GetCompetitionRun(t.Context(), "competition_001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := run.CompetitionConfig
+	config.Concurrency, config.MaxWorkers, config.ChallengeTimeoutSeconds = 1, 2, 90
+	resumed, err := handler.ResumeOrStartCompetition(t.Context(), "tsec", config)
+	if err != nil || resumed.ID != run.ID || resumed.Concurrency != 1 || resumed.MaxWorkers != 2 || resumed.ChallengeTimeoutSeconds != 90 {
+		t.Fatalf("startup did not apply settings to the existing run: %+v %v", resumed, err)
 	}
 	h.ok("competition", "status", "tsec", "competition_001")
 	h.ok("competition", "list", "tsec")
@@ -81,6 +94,18 @@ func TestCompetitionRequiresAnEnabledCoordinator(t *testing.T) {
 }
 
 func TestServeCompetitionRulesFileEntry(t *testing.T) {
+	t.Setenv("HOTMOUSE_COMPETITION_CONCURRENCY", "2")
+	testServeCompetitionRulesFileEntry(t, 2)
+}
+
+func TestServeCompetitionWithUnlimitedGlobalConcurrency(t *testing.T) {
+	t.Setenv("HOTMOUSE_COMPETITION_CONCURRENCY", "")
+	t.Setenv("HOTMOUSE_PROJECT_CONCURRENCY", "0")
+	testServeCompetitionRulesFileEntry(t, 1)
+}
+
+func testServeCompetitionRulesFileEntry(t *testing.T, expectedConcurrency int) {
+	t.Helper()
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/openapi/v1/challenges":
@@ -98,7 +123,6 @@ func TestServeCompetitionRulesFileEntry(t *testing.T) {
 	t.Setenv("BENCHMARK_TOKEN", "task-token")
 	t.Setenv("HOTMOUSE_LOG_LEVEL", "error")
 	t.Setenv("HOTMOUSE_LOG_ENV", "0")
-	t.Setenv("HOTMOUSE_COMPETITION_CONCURRENCY", "2")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "serve.db")
 	rulesFile := filepath.Join(dir, "rules.md")
@@ -124,7 +148,7 @@ func TestServeCompetitionRulesFileEntry(t *testing.T) {
 		var saved string
 		var concurrency int
 		if err := db.QueryRow(`SELECT rules,concurrency FROM competition_runs ORDER BY created_at LIMIT 1`).Scan(&saved, &concurrency); err == nil {
-			if saved != rules || concurrency != 2 {
+			if saved != rules || concurrency != expectedConcurrency {
 				t.Fatalf("startup configuration: rules=%q concurrency=%d", saved, concurrency)
 			}
 			created = true

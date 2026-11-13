@@ -46,12 +46,16 @@ func TestPiOptchatSharesMemoryAcrossNativeSessions(t *testing.T) {
 		}
 	}
 	seenMemory := atomic.Bool{}
+	seenInstructions := atomic.Bool{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		defer request.Body.Close()
 		data, _ := io.ReadAll(request.Body)
 		text := string(data)
 		if strings.Contains(text, "Read the shared task memory") && strings.Contains(text, "unique_first_task_marker") {
 			seenMemory.Store(true)
+			if strings.Contains(text, "fixture_profile_instruction") {
+				seenInstructions.Store(true)
+			}
 		}
 		name := ""
 		if strings.Contains(text, "connected execution one") && oneRequested.CompareAndSwap(false, true) {
@@ -175,16 +179,22 @@ func TestPiOptchatSharesMemoryAcrossNativeSessions(t *testing.T) {
 	case <-time.After(60 * time.Second):
 		t.Fatal("uncancelled connected Pi session did not finish")
 	}
+	profile := r.piOptchatProfile(projectID)
+	if err := os.WriteFile(filepath.Join(home, "profiles", profile, "AGENTS.md"), []byte("fixture_profile_instruction"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := invoke(t.Context(), "worker/three", "Read the shared task memory and return the fixture result."); err != nil {
 		t.Fatal(err)
 	}
 	if !seenMemory.Load() {
 		t.Fatal("a later Pi session did not receive the earlier task's shared memory")
 	}
+	if !seenInstructions.Load() {
+		t.Fatal("the native session did not receive the current OptChat profile instructions")
+	}
 	if checkpointed.Load() != 3 {
 		t.Fatalf("native Pi sessions were not checkpointed before their results: %d", checkpointed.Load())
 	}
-	profile := r.piOptchatProfile(projectID)
 	if _, err := os.Stat(filepath.Join(home, "profiles", profile, "config.json")); err != nil {
 		t.Fatalf("same challenge did not use its shared OptChat profile: %v", err)
 	}

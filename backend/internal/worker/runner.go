@@ -181,7 +181,7 @@ func (r *Runner) startDispatchersAndWorkers(ctx context.Context) {
 			default:
 			}
 		}
-		rows, err := r.DB.SQL.QueryContext(childCtx, `SELECT id FROM projects WHERE status='active' ORDER BY created_at,id`)
+		rows, err := r.DB.SQL.QueryContext(childCtx, core.AutomaticProjectsSQL)
 		if err != nil {
 			if childCtx.Err() == nil {
 				r.logger.Error("dispatcher.projects_failed", "error", err)
@@ -287,7 +287,7 @@ func (r *Runner) RunOnce(ctx context.Context) {
 		return
 	}
 	// Start target analysis in the background while planning and execution proceed.
-	rows, err := r.DB.SQL.QueryContext(ctx, `SELECT id FROM projects WHERE status='active' ORDER BY created_at,id`)
+	rows, err := r.DB.SQL.QueryContext(ctx, core.AutomaticProjectsSQL)
 	if err != nil {
 		return
 	}
@@ -311,7 +311,7 @@ func (r *Runner) RunOnce(ctx context.Context) {
 			r.decideProject(ctx, eventProject)
 			return
 		}
-		err = r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM steps s WHERE s.to_fact_id IS NULL AND s.abandoned=0 AND s.worker IS NULL AND s.project_id IN (SELECT id FROM projects WHERE status='active') AND NOT EXISTS(SELECT 1 FROM routes rt WHERE rt.project_id=s.project_id AND rt.id=s.route_id AND rt.status='shelved') AND NOT EXISTS (SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id) AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)) ORDER BY s.priority DESC,s.created_at LIMIT 1`, now).Scan(&project, &step, &description)
+		err = r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM steps s WHERE s.to_fact_id IS NULL AND s.abandoned=0 AND s.worker IS NULL AND s.project_id IN (`+core.AutomaticProjectsSQL+`) AND NOT EXISTS(SELECT 1 FROM routes rt WHERE rt.project_id=s.project_id AND rt.id=s.route_id AND rt.status='shelved') AND NOT EXISTS (SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id) AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)) ORDER BY s.priority DESC,s.created_at LIMIT 1`, now).Scan(&project, &step, &description)
 	}
 	if err == nil {
 		if recovery {
@@ -381,7 +381,7 @@ func (r *Runner) executeNext(ctx context.Context, identity string) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for attempts := 0; attempts < 8; attempts++ {
 		var project, step, description string
-		err := r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM steps s JOIN projects p ON p.id=s.project_id WHERE s.to_fact_id IS NULL AND s.abandoned=0 AND s.worker IS NULL AND p.status='active' AND (SELECT count(*) FROM steps active WHERE active.project_id=p.id AND active.to_fact_id IS NULL AND active.abandoned=0 AND active.worker IS NOT NULL AND active.worker_role='agent')<p.max_workers AND NOT EXISTS(SELECT 1 FROM routes rt WHERE rt.project_id=s.project_id AND rt.id=s.route_id AND rt.status='shelved') AND NOT EXISTS (SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id) AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)) ORDER BY s.priority DESC,s.created_at LIMIT 1`, now).Scan(&project, &step, &description)
+		err := r.DB.SQL.QueryRowContext(ctx, `SELECT s.project_id,s.id,s.description FROM steps s JOIN projects p ON p.id=s.project_id WHERE s.to_fact_id IS NULL AND s.abandoned=0 AND s.worker IS NULL AND p.id IN (`+core.AutomaticProjectsSQL+`) AND (SELECT count(*) FROM steps active WHERE active.project_id=p.id AND active.to_fact_id IS NULL AND active.abandoned=0 AND active.worker IS NOT NULL AND active.worker_role='agent')<p.max_workers AND NOT EXISTS(SELECT 1 FROM routes rt WHERE rt.project_id=s.project_id AND rt.id=s.route_id AND rt.status='shelved') AND NOT EXISTS (SELECT 1 FROM worker_execute_recovery x WHERE x.project_id=s.project_id AND x.step_id=s.id) AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=s.project_id AND r.task_type='execute' AND julianday(r.retry_after)>julianday(?)) ORDER BY s.priority DESC,s.created_at LIMIT 1`, now).Scan(&project, &step, &description)
 		if err != nil {
 			return
 		}
@@ -739,7 +739,7 @@ func (r *Runner) decide(parent context.Context) {
 
 func (r *Runner) nextDecideProject(ctx context.Context) string {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	rows, err := r.DB.SQL.QueryContext(ctx, `SELECT p.id FROM projects p WHERE p.status='active' AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=p.id AND r.task_type='decide' AND julianday(r.retry_after)>julianday(?)) ORDER BY p.created_at,p.id`, now)
+	rows, err := r.DB.SQL.QueryContext(ctx, `SELECT p.id FROM projects p WHERE p.id IN (`+core.AutomaticProjectsSQL+`) AND NOT EXISTS (SELECT 1 FROM worker_retry_state r WHERE r.project_id=p.id AND r.task_type='decide' AND julianday(r.retry_after)>julianday(?)) ORDER BY p.created_at,p.id`, now)
 	if err != nil {
 		return ""
 	}
@@ -824,7 +824,7 @@ func (r *Runner) dispatchProject(parent context.Context, project string) {
 		return
 	}
 	var status string
-	if err := r.DB.SQL.QueryRowContext(ctx, `SELECT status FROM projects WHERE id=?`, project).Scan(&status); err != nil || status != "active" {
+	if err := r.DB.SQL.QueryRowContext(ctx, `SELECT status FROM projects WHERE id=? AND id IN (`+core.AutomaticProjectsSQL+`)`, project).Scan(&status); err != nil || status != "active" {
 		return
 	}
 	r.startTargetStartup(parent, project)

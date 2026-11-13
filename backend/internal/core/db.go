@@ -104,6 +104,18 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate dispatcher config: %w", err)
 	}
+	if err := addColumnIfMissing(d, "worker_config", "project_concurrency", `INTEGER NOT NULL DEFAULT 0 CHECK(project_concurrency BETWEEN 0 AND 32)`); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate project concurrency: %w", err)
+	}
+	if _, err := d.Exec(`CREATE INDEX IF NOT EXISTS idx_worker_history_project_active ON worker_task_history(project_id,finished_at)`); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("index active project tasks: %w", err)
+	}
+	if err := addColumnIfMissing(d, "settings", "default_project_max_workers", `INTEGER NOT NULL DEFAULT 1 CHECK(default_project_max_workers BETWEEN 1 AND 32)`); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate default project worker limit: %w", err)
+	}
 	if err := addColumnIfMissing(d, "project_target_health", "preprocessing_json", `TEXT NOT NULL DEFAULT '{"status":"pending"}'`); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("migrate preprocessing: %w", err)

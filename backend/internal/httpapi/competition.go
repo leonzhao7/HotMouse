@@ -16,8 +16,7 @@ func newCompetitionManager(h *Handler) *competition.Manager {
 	manager := competition.New(h.DB, competition.Backend{
 		Connect: h.platform,
 		Import: func(ctx context.Context, run core.CompetitionRun, challenge string) (string, error) {
-			budget := run.ChallengeTimeoutSeconds
-			project, err := h.importPlatformChallenge(ctx, run.Platform, platformImportRequest{ChallengeID: challenge, MaxWorkers: run.MaxWorkers, BudgetSeconds: &budget, CompetitionID: run.ID, Rules: run.Rules, RulesSummary: run.RulesSummary})
+			project, err := h.importPlatformChallenge(ctx, run.Platform, platformImportRequest{ChallengeID: challenge, MaxWorkers: run.MaxWorkers, CompetitionID: run.ID, Rules: run.Rules, RulesSummary: run.RulesSummary})
 			return project.Project.ID, err
 		},
 		Retry: h.retryCompetitionProject,
@@ -110,6 +109,17 @@ func (h *Handler) StartCompetition(ctx context.Context, id string, config core.C
 	if !h.Competitions.Running() {
 		return core.CompetitionRun{}, &ctfplatform.Error{HTTPStatus: 503, Code: "competition_scheduler_disabled", Message: "start the service with --autorun to run a competition"}
 	}
+	defaultConcurrency := config.Concurrency == 0
+	if defaultConcurrency {
+		if err := h.DB.SQL.QueryRowContext(ctx, `SELECT project_concurrency FROM worker_config WHERE id=1`).Scan(&config.Concurrency); err != nil {
+			return core.CompetitionRun{}, err
+		}
+	}
+	if config.MaxWorkers == 0 {
+		if err := h.DB.SQL.QueryRowContext(ctx, `SELECT default_project_max_workers FROM settings WHERE id=1`).Scan(&config.MaxWorkers); err != nil {
+			return core.CompetitionRun{}, err
+		}
+	}
 	if err := config.Normalize(); err != nil {
 		return core.CompetitionRun{}, &ctfplatform.Error{HTTPStatus: 422, Code: "invalid_input", Message: err.Error()}
 	}
@@ -120,7 +130,11 @@ func (h *Handler) StartCompetition(ctx context.Context, id string, config core.C
 		return core.CompetitionRun{}, err
 	}
 	if cap := platform.Descriptor().MaxActiveInstances; cap > 0 && config.Concurrency > cap {
-		return core.CompetitionRun{}, &ctfplatform.Error{HTTPStatus: 422, Code: "concurrency_limit", Message: fmt.Sprintf("%s allows at most %d concurrent challenges", id, cap)}
+		if defaultConcurrency {
+			config.Concurrency = cap
+		} else {
+			return core.CompetitionRun{}, &ctfplatform.Error{HTTPStatus: 422, Code: "concurrency_limit", Message: fmt.Sprintf("%s allows at most %d concurrent challenges", id, cap)}
+		}
 	}
 	challenges, err := platform.ListChallenges(ctx)
 	if err != nil {
@@ -242,7 +256,7 @@ func (h *Handler) registerCompetitions(app *iris.Application) {
 
 // A configured startup entry resumes the durable active run for this task.
 func (h *Handler) ResumeOrStartCompetition(ctx context.Context, platform string, config core.CompetitionConfig) (core.CompetitionRun, error) {
-	_, scope, err := h.platform(platform)
+	adapter, scope, err := h.platform(platform)
 	if err != nil {
 		return core.CompetitionRun{}, err
 	}
@@ -262,6 +276,16 @@ func (h *Handler) ResumeOrStartCompetition(ctx context.Context, platform string,
 					return run, fmt.Errorf("competition %s already active with different rules", id)
 				}
 				continue
+			}
+			if run.Status == "planning" || run.Status == "running" {
+				if cap := adapter.Descriptor().MaxActiveInstances; cap > 0 && config.Concurrency > cap {
+					return run, fmt.Errorf("%s allows at most %d concurrent challenges", platform, cap)
+				}
+				if err := h.DB.ConfigureCompetitionRun(ctx, id, config); err != nil {
+					return run, err
+				}
+				h.Competitions.Wake()
+				return h.DB.GetCompetitionRun(ctx, id)
 			}
 			return run, nil
 		}

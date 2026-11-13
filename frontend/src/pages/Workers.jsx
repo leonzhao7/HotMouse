@@ -34,7 +34,7 @@ export const runtimeFields = [
   ["recovery_attempts", "恢复尝试次数", 1, 10],
   ["format_retries", "格式重试次数", 0, 1],
 ];
-const drivers = ["mock", "command", "pi", "codex", "claude"];
+const defaultDrivers = ["mock", "command", "pi", "codex", "claude"];
 
 export default function Workers() {
   const observation = useResource("/api/workers/observability", {
@@ -329,6 +329,9 @@ export default function Workers() {
 
 function WorkerEditor({ initial, onClose, onSaved }) {
   const { run } = useApp();
+  const drivers = initial.fixed_driver
+    ? [initial.fixed_driver]
+    : defaultDrivers;
   const [draft, setDraft] = useState(() => ({
     ...initial,
     runtime: { ...initial.runtime },
@@ -419,6 +422,7 @@ function WorkerEditor({ initial, onClose, onSaved }) {
       </div>
       <TextField
         label="命令"
+        disabled={Boolean(initial.fixed_driver)}
         value={draft.command}
         onChange={(event) => set("command", event.target.value)}
         placeholder={
@@ -438,6 +442,19 @@ function WorkerEditor({ initial, onClose, onSaved }) {
         required
         value={draft.worker_count ?? 4}
         onChange={(event) => set("worker_count", Number(event.target.value))}
+      />
+      <TextField
+        label="同时解题数量"
+        hint="自动调度同时处理的项目数，0 表示不限；排队项目在前面的项目结束后开始。"
+        type="number"
+        min="0"
+        max="32"
+        step="1"
+        required
+        value={draft.project_concurrency ?? 0}
+        onChange={(event) =>
+          set("project_concurrency", Number(event.target.value))
+        }
       />
       <div className="form-grid">
         <TextField
@@ -532,6 +549,7 @@ function WorkerEditor({ initial, onClose, onSaved }) {
           </div>
           <TextField
             label="Dispatcher 命令"
+            disabled={Boolean(initial.fixed_driver)}
             value={draft.dispatcher.command || ""}
             required={draft.dispatcher.driver === "command"}
             placeholder="留空使用驱动默认命令"

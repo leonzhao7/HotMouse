@@ -296,7 +296,7 @@ func (h *Handler) Health(ctx iris.Context) {
 }
 func (h *Handler) GetSettings(ctx iris.Context) {
 	var s core.Settings
-	e := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT step_timeout,decide_timeout,worker_unhealthy_retry_after_seconds,worker_rejected_retry_after_seconds,max_failed_login_attempts,rate_limit_window_minutes,session_duration_hours,log_retention_days,export_retention_days,notification_retention_days,project_idle_alert_hours,default_project_budget_seconds FROM settings WHERE id=1`).Scan(&s.StepTimeout, &s.DecideTimeout, &s.WorkerUnhealthyRetryAfterSeconds, &s.WorkerRejectedRetryAfterSeconds, &s.MaxFailedLoginAttempts, &s.RateLimitWindowMinutes, &s.SessionDurationHours, &s.LogRetentionDays, &s.ExportRetentionDays, &s.NotificationRetentionDays, &s.ProjectIdleAlertHours, &s.DefaultProjectBudgetSeconds)
+	e := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT step_timeout,decide_timeout,worker_unhealthy_retry_after_seconds,worker_rejected_retry_after_seconds,max_failed_login_attempts,rate_limit_window_minutes,session_duration_hours,log_retention_days,export_retention_days,notification_retention_days,project_idle_alert_hours,default_project_budget_seconds,default_project_max_workers FROM settings WHERE id=1`).Scan(&s.StepTimeout, &s.DecideTimeout, &s.WorkerUnhealthyRetryAfterSeconds, &s.WorkerRejectedRetryAfterSeconds, &s.MaxFailedLoginAttempts, &s.RateLimitWindowMinutes, &s.SessionDurationHours, &s.LogRetentionDays, &s.ExportRetentionDays, &s.NotificationRetentionDays, &s.ProjectIdleAlertHours, &s.DefaultProjectBudgetSeconds, &s.DefaultProjectMaxWorkers)
 	if e != nil {
 		bad(ctx, e)
 		return
@@ -307,6 +307,7 @@ func (h *Handler) UpdateSettings(ctx iris.Context) {
 	var req struct {
 		core.Settings
 		DefaultProjectBudgetSeconds *int `json:"default_project_budget_seconds"`
+		DefaultProjectMaxWorkers    *int `json:"default_project_max_workers"`
 	}
 	if !read(ctx, &req) {
 		return
@@ -316,16 +317,20 @@ func (h *Handler) UpdateSettings(ctx iris.Context) {
 		bad(ctx, fmt.Errorf("default_project_budget_seconds must be nonnegative"))
 		return
 	}
+	if req.DefaultProjectMaxWorkers != nil && (*req.DefaultProjectMaxWorkers < 1 || *req.DefaultProjectMaxWorkers > 32) {
+		bad(ctx, fmt.Errorf("default_project_max_workers must be between 1 and 32"))
+		return
+	}
 	if s.StepTimeout < 5 || s.DecideTimeout < 5 || s.WorkerUnhealthyRetryAfterSeconds < 1 || s.WorkerUnhealthyRetryAfterSeconds > 3600 || s.WorkerRejectedRetryAfterSeconds < 1 || s.WorkerRejectedRetryAfterSeconds > 3600 || s.MaxFailedLoginAttempts < 1 || s.MaxFailedLoginAttempts > 50 || s.RateLimitWindowMinutes < 1 || s.RateLimitWindowMinutes > 1440 || s.SessionDurationHours < 1 || s.SessionDurationHours > 168 || s.LogRetentionDays < 1 || s.LogRetentionDays > 3650 || s.ExportRetentionDays < 1 || s.ExportRetentionDays > 3650 || s.NotificationRetentionDays < 1 || s.NotificationRetentionDays > 3650 || s.ProjectIdleAlertHours < 1 || s.ProjectIdleAlertHours > 720 {
 		bad(ctx, fmt.Errorf("invalid settings"))
 		return
 	}
-	_, e := h.DB.SQL.ExecContext(ctx.Request().Context(), `UPDATE settings SET step_timeout=?,decide_timeout=?,worker_unhealthy_retry_after_seconds=?,worker_rejected_retry_after_seconds=?,max_failed_login_attempts=?,rate_limit_window_minutes=?,session_duration_hours=?,log_retention_days=?,export_retention_days=?,notification_retention_days=?,project_idle_alert_hours=?,default_project_budget_seconds=COALESCE(?,default_project_budget_seconds) WHERE id=1`, s.StepTimeout, s.DecideTimeout, s.WorkerUnhealthyRetryAfterSeconds, s.WorkerRejectedRetryAfterSeconds, s.MaxFailedLoginAttempts, s.RateLimitWindowMinutes, s.SessionDurationHours, s.LogRetentionDays, s.ExportRetentionDays, s.NotificationRetentionDays, s.ProjectIdleAlertHours, req.DefaultProjectBudgetSeconds)
+	_, e := h.DB.SQL.ExecContext(ctx.Request().Context(), `UPDATE settings SET step_timeout=?,decide_timeout=?,worker_unhealthy_retry_after_seconds=?,worker_rejected_retry_after_seconds=?,max_failed_login_attempts=?,rate_limit_window_minutes=?,session_duration_hours=?,log_retention_days=?,export_retention_days=?,notification_retention_days=?,project_idle_alert_hours=?,default_project_budget_seconds=COALESCE(?,default_project_budget_seconds),default_project_max_workers=COALESCE(?,default_project_max_workers) WHERE id=1`, s.StepTimeout, s.DecideTimeout, s.WorkerUnhealthyRetryAfterSeconds, s.WorkerRejectedRetryAfterSeconds, s.MaxFailedLoginAttempts, s.RateLimitWindowMinutes, s.SessionDurationHours, s.LogRetentionDays, s.ExportRetentionDays, s.NotificationRetentionDays, s.ProjectIdleAlertHours, req.DefaultProjectBudgetSeconds, req.DefaultProjectMaxWorkers)
 	if e != nil {
 		bad(ctx, e)
 		return
 	}
-	if e := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT default_project_budget_seconds FROM settings WHERE id=1`).Scan(&s.DefaultProjectBudgetSeconds); e != nil {
+	if e := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT default_project_budget_seconds,default_project_max_workers FROM settings WHERE id=1`).Scan(&s.DefaultProjectBudgetSeconds, &s.DefaultProjectMaxWorkers); e != nil {
 		bad(ctx, e)
 		return
 	}
@@ -584,8 +589,8 @@ func (h *Handler) Campaign(ctx iris.Context) {
 func (h *Handler) WorkerConfig(ctx iris.Context) {
 	var name, driver, command, env, updated, workspaceRoot, completedAction, contextRoot, runtimeJSON, dispatcherJSON string
 	var enabled int
-	var workerCount int
-	e := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT name,driver,command,environment_json,enabled,updated_at,workspace_root,completed_action,context_root,runtime_json,worker_count,dispatcher_json FROM worker_config WHERE id=1`).Scan(&name, &driver, &command, &env, &enabled, &updated, &workspaceRoot, &completedAction, &contextRoot, &runtimeJSON, &workerCount, &dispatcherJSON)
+	var workerCount, projectConcurrency int
+	e := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT name,driver,command,environment_json,enabled,updated_at,workspace_root,completed_action,context_root,runtime_json,worker_count,dispatcher_json,project_concurrency FROM worker_config WHERE id=1`).Scan(&name, &driver, &command, &env, &enabled, &updated, &workspaceRoot, &completedAction, &contextRoot, &runtimeJSON, &workerCount, &dispatcherJSON, &projectConcurrency)
 	if e != nil {
 		bad(ctx, e)
 		return
@@ -608,30 +613,32 @@ func (h *Handler) WorkerConfig(ctx iris.Context) {
 			dispatcher["environment"] = maskEnvironment(env)
 		}
 	}
-	ctx.JSON(iris.Map{"dispatcher": dispatcher, "name": name, "driver": driver, "command": command, "environment": environment, "enabled": enabled != 0, "updated_at": updated, "worker_mode": "dispatcher_pool", "worker_count": workerCount, "workspace_root": workspaceRoot, "completed_action": completedAction, "context_root": contextRoot, "runtime": runtime})
+	ctx.JSON(iris.Map{"dispatcher": dispatcher, "name": name, "driver": driver, "fixed_driver": os.Getenv("HOTMOUSE_WORKER_DRIVER"), "command": command, "environment": environment, "enabled": enabled != 0, "updated_at": updated, "worker_mode": "dispatcher_pool", "worker_count": workerCount, "project_concurrency": projectConcurrency, "workspace_root": workspaceRoot, "completed_action": completedAction, "context_root": contextRoot, "runtime": runtime})
 }
 func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 	var r struct {
-		Name              string            `json:"name"`
-		Driver            string            `json:"driver"`
-		Command           *string           `json:"command"`
-		WorkspaceRoot     *string           `json:"workspace_root"`
-		CompletedAction   *string           `json:"completed_action"`
-		ContextRoot       *string           `json:"context_root"`
-		Runtime           json.RawMessage   `json:"runtime"`
-		Dispatcher        json.RawMessage   `json:"dispatcher"`
-		WorkerCount       *int              `json:"worker_count"`
-		Environment       map[string]string `json:"environment"`
-		EnvironmentRemove []string          `json:"environment_remove"`
-		Enabled           *bool             `json:"enabled"`
+		Name               string            `json:"name"`
+		Driver             string            `json:"driver"`
+		Command            *string           `json:"command"`
+		WorkspaceRoot      *string           `json:"workspace_root"`
+		CompletedAction    *string           `json:"completed_action"`
+		ContextRoot        *string           `json:"context_root"`
+		Runtime            json.RawMessage   `json:"runtime"`
+		Dispatcher         json.RawMessage   `json:"dispatcher"`
+		WorkerCount        *int              `json:"worker_count"`
+		ProjectConcurrency *int              `json:"project_concurrency"`
+		Environment        map[string]string `json:"environment"`
+		EnvironmentRemove  []string          `json:"environment_remove"`
+		Enabled            *bool             `json:"enabled"`
 	}
 	if !read(ctx, &r) {
 		return
 	}
 	workerCount := 4
+	projectConcurrency := 0
 	var name, driver, command string
 	var enabled int
-	if err := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT name,driver,command,enabled,worker_count FROM worker_config WHERE id=1`).Scan(&name, &driver, &command, &enabled, &workerCount); err != nil {
+	if err := h.DB.SQL.QueryRowContext(ctx.Request().Context(), `SELECT name,driver,command,enabled,worker_count,project_concurrency FROM worker_config WHERE id=1`).Scan(&name, &driver, &command, &enabled, &workerCount, &projectConcurrency); err != nil {
 		bad(ctx, err)
 		return
 	}
@@ -642,6 +649,13 @@ func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 		bad(ctx, fmt.Errorf("worker_count must be between 1 and 32"))
 		return
 	}
+	if r.ProjectConcurrency != nil {
+		projectConcurrency = *r.ProjectConcurrency
+	}
+	if projectConcurrency < 0 || projectConcurrency > 32 {
+		bad(ctx, fmt.Errorf("project_concurrency must be between 0 and 32"))
+		return
+	}
 	if r.Name != "" {
 		name = r.Name
 	}
@@ -650,6 +664,10 @@ func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 	}
 	if r.Command != nil {
 		command = *r.Command
+	}
+	if fixed := os.Getenv("HOTMOUSE_WORKER_DRIVER"); fixed != "" && (driver != fixed || command != "") {
+		bad(ctx, fmt.Errorf("this container uses the native %s worker driver", fixed))
+		return
 	}
 	if !supportedDriver(driver) {
 		bad(ctx, fmt.Errorf("unsupported local worker driver"))
@@ -723,8 +741,19 @@ func (h *Handler) UpdateWorkerConfig(ctx iris.Context) {
 		bad(ctx, err)
 		return
 	}
+	if fixed := os.Getenv("HOTMOUSE_WORKER_DRIVER"); fixed != "" {
+		var dispatcher *core.DispatcherConfig
+		if err := json.Unmarshal([]byte(dispatcherJSON), &dispatcher); err != nil {
+			bad(ctx, err)
+			return
+		}
+		if dispatcher != nil && (dispatcher.Driver != fixed || dispatcher.Command != "") {
+			bad(ctx, fmt.Errorf("this container uses the native %s dispatcher driver", fixed))
+			return
+		}
+	}
 	runtimeBytes, _ := json.Marshal(runtime)
-	_, e := h.DB.SQL.ExecContext(ctx.Request().Context(), `UPDATE worker_config SET name=?,driver=?,command=?,environment_json=?,enabled=?,updated_at=?,workspace_root=?,completed_action=?,context_root=?,runtime_json=?,worker_count=?,dispatcher_json=? WHERE id=1`, name, driver, command, coreJSON(env), en, nowString(), workspaceRoot, completedAction, contextRoot, string(runtimeBytes), workerCount, dispatcherJSON)
+	_, e := h.DB.SQL.ExecContext(ctx.Request().Context(), `UPDATE worker_config SET name=?,driver=?,command=?,environment_json=?,enabled=?,updated_at=?,workspace_root=?,completed_action=?,context_root=?,runtime_json=?,worker_count=?,dispatcher_json=?,project_concurrency=? WHERE id=1`, name, driver, command, coreJSON(env), en, nowString(), workspaceRoot, completedAction, contextRoot, string(runtimeBytes), workerCount, dispatcherJSON, projectConcurrency)
 	if e != nil {
 		bad(ctx, e)
 		return

@@ -189,13 +189,16 @@ test("TSec configuration, rules upload, competition progress and controls", asyn
     originalRules,
   );
   await expect(dialog.getByLabel("同时解答题目数")).toHaveAttribute("max", "3");
+  await expect(dialog.getByLabel("同时解答题目数")).toHaveValue("");
+  await expect(dialog.getByLabel("同时解答题目数")).toHaveAttribute(
+    "placeholder",
+    /^[1-3]$/,
+  );
   await dialog.getByLabel("每题超时（分钟）").fill("2.5");
   await dialog.getByRole("button", { name: "启动比赛", exact: true }).click();
   await expect(dialog).toHaveCount(0);
   expect(startBody).toEqual({
     rules: originalRules,
-    concurrency: 1,
-    max_workers: 1,
     challenge_timeout_seconds: 150,
   });
   await expect(

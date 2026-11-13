@@ -85,6 +85,9 @@ func TestCompetitionTSecPendingRecoveryAndQueueProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.SQL.Close()
+	if _, err := db.SQL.Exec(`UPDATE settings SET default_project_budget_seconds=45 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
 	h := New(db)
 	h.Competitions.Backend.Plan = nil
 	clock := time.Now().UTC()
@@ -141,7 +144,7 @@ func TestCompetitionTSecPendingRecoveryAndQueueProgress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail.Project.MaxWorkers != 2 || detail.Project.BudgetSeconds != 60 || len(detail.Hints) != 1 || !strings.Contains(detail.Hints[0].Content, rules) {
+	if detail.Project.MaxWorkers != 2 || detail.Project.BudgetSeconds != 45 || len(detail.Hints) != 1 || !strings.Contains(detail.Hints[0].Content, rules) {
 		t.Fatalf("competition configuration not passed to project: %+v", detail)
 	}
 	capture := func(item core.CompetitionItem) {

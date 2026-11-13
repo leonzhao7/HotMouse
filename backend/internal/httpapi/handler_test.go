@@ -192,6 +192,40 @@ func TestWorkerWorkspaceConfigAndLegacyUpdate(t *testing.T) {
 	}
 }
 
+func TestContainerWorkerDriverRemainsPi(t *testing.T) {
+	t.Setenv("HOTMOUSE_AUTH_REQUIRED", "0")
+	t.Setenv("HOTMOUSE_WORKER_DRIVER", "pi")
+	db, err := core.Open(filepath.Join(t.TempDir(), "pi-driver.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.SQL.Close()
+	if _, err := db.SQL.Exec(`UPDATE worker_config SET driver='pi' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	app := iris.New()
+	Register(app, New(db))
+	if err := app.Build(); err != nil {
+		t.Fatal(err)
+	}
+	request := func(body string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest("PUT", "/api/workers/config", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		app.ServeHTTP(recorder, req)
+		return recorder
+	}
+	for _, body := range []string{`{"driver":"codex"}`, `{"command":"custom command"}`, `{"dispatcher":{"driver":"codex"}}`} {
+		if response := request(body); response.Code != 400 {
+			t.Fatalf("fixed Pi driver was overridden: status=%d body=%s", response.Code, response.Body)
+		}
+	}
+	response := request(`{"worker_count":2,"project_concurrency":3,"runtime":{"execute_timeout_seconds":60}}`)
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"fixed_driver":"pi"`) {
+		t.Fatalf("fixed driver prevented a valid runtime update: status=%d body=%s", response.Code, response.Body)
+	}
+}
+
 func TestProjectWorkerLimitAPI(t *testing.T) {
 	t.Setenv("HOTMOUSE_AUTH_REQUIRED", "0")
 	db, err := core.Open(filepath.Join(t.TempDir(), "project-worker-limit.db"))

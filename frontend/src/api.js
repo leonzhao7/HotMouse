@@ -151,6 +151,7 @@ export function workerPayload(config, rows, dispatcherRows) {
     context_root: config.context_root,
     completed_action: config.completed_action,
     worker_count: config.worker_count,
+    project_concurrency: config.project_concurrency,
     runtime: config.runtime,
     environment,
     environment_remove: Object.keys(config.environment || {}).filter(

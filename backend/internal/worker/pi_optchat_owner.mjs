@@ -2,12 +2,18 @@ import { chmodSync, existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { Memory } from __OPTCHAT_MEMORY__;
 import { createCompressor } from __OPTCHAT_COMPACTOR__;
-import { memoryDirectory, pendingImport } from __OPTCHAT_IMPORT__;
+import * as importJobs from __OPTCHAT_IMPORT__;
 import { said } from __OPTCHAT_MESSAGES__;
 import { memoryTools, searchTool } from __OPTCHAT_TOOLS__;
 import { storeFor } from __OPTCHAT_STORE__;
-import { checkSocketPath, createProfile, holdProfile, instructions, loadConfig,
-  profilePath, removeStaleSocket, saveConfig } from __OPTCHAT_PROFILES__;
+import * as profiles from __OPTCHAT_PROFILES__;
+
+const { pendingImport } = importJobs;
+const { checkSocketPath, createProfile, holdProfile, loadConfig,
+  profilePath, removeStaleSocket, saveConfig } = profiles;
+// OptChat 0.11.12 moved this export from import/job.ts to profiles.ts.
+const memoryDirectory = profiles.memoryDirectory ?? importJobs.memoryDirectory;
+const instructions = profiles.readInstructions ?? profiles.instructions;
 
 // Only memory belongs to this process. Workers keep their own native Pi
 // sessions, model, environment, tools, event stream and cancellation lifetime.

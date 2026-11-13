@@ -2,6 +2,9 @@
 set -Eeuo pipefail
 umask 077
 
+# The workbench image always uses native Pi, including on existing data volumes.
+export HOTMOUSE_WORKER_DRIVER=pi
+
 log() {
   local level=$1 event=$2
   shift 2

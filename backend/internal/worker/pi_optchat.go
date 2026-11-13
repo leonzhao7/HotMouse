@@ -61,6 +61,9 @@ func installedPiOptchat(cfg workerConfig) (string, error) {
 		}
 		return path, nil
 	}
+	if path, configured := os.LookupEnv("PI_OPTCHAT_EXTENSION"); configured {
+		return installedPiOptchat(workerConfig{env: map[string]string{"PI_OPTCHAT_EXTENSION": path}})
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -242,13 +245,33 @@ func (r *Runner) startPiOptchatOwner(ctx context.Context, cfg workerConfig, conf
 	defer input.Close()
 	defer inputWriter.Close()
 	finished := make(chan processResult, 1)
+	startupErrors := make(chan error, 1)
+	logger := r.processLogger(cfg, owner.project, "", "pi_optchat_owner")
+	observe := func(line []byte) {
+		logProviderEvent(logger, cfg.driver, line)
+		var event struct {
+			Type  string `json:"type"`
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(line, &event) == nil && event.Type == "extension_error" {
+			select {
+			case startupErrors <- fmt.Errorf("Pi OptChat extension initialization: %s", event.Error):
+			default:
+			}
+		}
+	}
 	go func() {
-		finished <- runProcessWithInput(processCtx, argv, cfg.env, config.runtime, vars, 0, input, nil, nil, r.processLogger(cfg, owner.project, "", "pi_optchat_owner"))
+		finished <- runProcessWithInput(processCtx, argv, cfg.env, config.runtime, vars, 0, input, observe, nil, logger)
 	}()
 	poll := time.NewTicker(100 * time.Millisecond)
 	defer poll.Stop()
 	for {
 		select {
+		case err := <-startupErrors:
+			cancelProcess()
+			<-finished
+			owner.err = err
+			return
 		case result := <-finished:
 			if result.err != nil {
 				owner.err = fmt.Errorf("start Pi OptChat profile owner: %w", result.err)

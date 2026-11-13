@@ -1,0 +1,53 @@
+{
+  "common_commands": [
+    "bash", "sh", "base64", "cat", "cut", "echo", "grep", "gzip", "head",
+    "hotmouse", "id", "jq", "printf", "python", "sort", "timeout"
+  ],
+  "skills": {
+    "auth-attack": {
+      "commands": ["curl", "ssh", "nc", "python3"],
+      "python_modules": ["flask", "itsdangerous"]
+    },
+    "binary-pwn": {
+      "commands": [
+        "python3", "checksec", "gdb", "ROPgadget", "file", "strings",
+        "ltrace", "strace"
+      ],
+      "python_modules": ["pwn"]
+    },
+    "cloud-exploit": {
+      "commands": ["curl", "python3", "etcdctl"]
+    },
+    "code-exec": {
+      "commands": ["curl", "python3", "node"]
+    },
+    "detection-evaluation": {
+      "commands": ["curl", "python3"]
+    },
+    "filter-bypass": {
+      "commands": ["curl", "gzip", "python3"]
+    },
+    "flag-hunting": {
+      "commands": [
+        "curl", "nmap", "nc", "ffuf", "sqlmap", "git-dumper", "python3",
+        "gdb", "ROPgadget", "radare2", "binwalk", "7z", "unsquashfs", "etcdctl"
+      ],
+      "python_modules": ["pwn"]
+    },
+    "multi-stage": {
+      "commands": ["ssh", "socat", "curl"]
+    },
+    "recon-fingerprint": {
+      "commands": ["curl", "nmap", "nc", "rg"]
+    },
+    "reverse-engine": {
+      "commands": [
+        "file", "strings", "objdump", "gdb", "r2", "binwalk", "7z",
+        "unsquashfs", "checksec", "ltrace", "strace", "python3"
+      ]
+    },
+    "web-exploit": {
+      "commands": ["curl", "ffuf", "sqlmap", "git-dumper"]
+    }
+  }
+}

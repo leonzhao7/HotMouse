@@ -198,7 +198,7 @@ export function ProjectCreateModal({ template, onClose }) {
   const [hints, setHints] = useState(
     (template?.hints || []).map((item) => item.content).join("\n"),
   );
-  const [maxWorkers, setMaxWorkers] = useState(1);
+  const [maxWorkers, setMaxWorkers] = useState("");
   const [budget, setBudget] = useState("");
   const [selected, setSelected] = useState(template?.id || "");
   const select = (value) => {
@@ -223,7 +223,7 @@ export function ProjectCreateModal({ template, onClose }) {
           title: title.trim(),
           origin: origin.trim(),
           goal: goal.trim(),
-          max_workers: Number(maxWorkers),
+          ...(maxWorkers === "" ? {} : { max_workers: Number(maxWorkers) }),
           ...(budget === "" ? {} : { budget_seconds: Number(budget) }),
           hints: hints
             .split("\n")
@@ -280,10 +280,10 @@ export function ProjectCreateModal({ template, onClose }) {
         min="1"
         max="32"
         step="1"
-        required
         value={maxWorkers}
+        placeholder={String(settings.data?.default_project_max_workers ?? "")}
         onChange={(event) => setMaxWorkers(Number(event.target.value))}
-        hint="项目 Dispatcher 始终独立负责规划和提交结果。"
+        hint="留空使用系统配置的每题 Worker 上限；项目 Dispatcher 独立负责规划和提交结果。"
       />
       <TextField
         label="项目预算（秒，0为不限）"

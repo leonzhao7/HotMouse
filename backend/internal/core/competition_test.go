@@ -6,6 +6,40 @@ import (
 	"time"
 )
 
+func TestCompetitionStartupConfigurationUpdatesRunAndCurrentWorkerLimits(t *testing.T) {
+	db := testDB(t)
+	run, err := db.CreateCompetitionRun(t.Context(), "test", "scope", CompetitionConfig{Rules: "scope rules", Concurrency: 1, MaxWorkers: 1, ChallengeTimeoutSeconds: 60}, []string{"one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := 30
+	project, err := db.CreateProject(t.Context(), CreateProject{Title: "current challenge", Origin: "local fixture", Goal: "verify", BudgetSeconds: &budget})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := run.Items[0]
+	item.ProjectID, item.Status = &project.Project.ID, "running"
+	if err := db.SaveCompetitionItem(t.Context(), item); err != nil {
+		t.Fatal(err)
+	}
+	config := CompetitionConfig{Rules: "scope rules", Concurrency: 2, MaxWorkers: 3, ChallengeTimeoutSeconds: 90}
+	if err := db.ConfigureCompetitionRun(t.Context(), run.ID, config); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := db.GetCompetitionRun(t.Context(), run.ID)
+	if err != nil || loaded.Concurrency != 2 || loaded.MaxWorkers != 3 || loaded.ChallengeTimeoutSeconds != 90 {
+		t.Fatalf("startup retained stale competition settings: %+v %v", loaded, err)
+	}
+	detail, err := db.GetProject(t.Context(), project.Project.ID)
+	if err != nil || detail.Project.MaxWorkers != 3 || detail.Project.BudgetSeconds != 30 {
+		t.Fatalf("current worker limit or saved budget was lost: %+v %v", detail.Project, err)
+	}
+	config.MaxWorkers = 33
+	if err := db.ConfigureCompetitionRun(t.Context(), run.ID, config); err == nil {
+		t.Fatal("invalid startup limits were accepted")
+	}
+}
+
 func TestCompetitionInitialDescriptionSurvivesRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "description.db")
 	db, err := Open(path)

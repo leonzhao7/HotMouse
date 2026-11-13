@@ -233,6 +233,24 @@ func (d *DB) SetCompetitionConcurrency(ctx context.Context, id string, limit int
 	return nil
 }
 
+// Startup settings also apply when the rules-file entry resumes an existing run.
+func (d *DB) ConfigureCompetitionRun(ctx context.Context, id string, config CompetitionConfig) error {
+	if err := config.Normalize(); err != nil {
+		return err
+	}
+	return tx(ctx, d, func(t *sql.Tx) error {
+		result, err := t.Exec(`UPDATE competition_runs SET concurrency=?,max_workers=?,challenge_timeout_seconds=? WHERE id=? AND status IN ('planning','running')`, config.Concurrency, config.MaxWorkers, config.ChallengeTimeoutSeconds, id)
+		if err != nil {
+			return err
+		}
+		if n, _ := result.RowsAffected(); n != 1 {
+			return fmt.Errorf("competition is not active")
+		}
+		_, err = t.Exec(`UPDATE projects SET max_workers=? WHERE id IN (SELECT project_id FROM competition_items WHERE run_id=? AND status IN ('starting','running'))`, config.MaxWorkers, id)
+		return err
+	})
+}
+
 func (d *DB) RequestCompetitionStop(ctx context.Context, id string) error {
 	_, err := d.SQL.ExecContext(ctx, `UPDATE competition_runs SET status='stopping' WHERE id=? AND status IN ('planning','running')`, id)
 	return err

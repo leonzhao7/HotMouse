@@ -68,10 +68,7 @@ func (d *DB) CreateProject(ctx context.Context, req CreateProject) (ProjectDetai
 		return ProjectDetail{}, err
 	}
 	maxWorkers := req.MaxWorkers
-	if maxWorkers == 0 {
-		maxWorkers = 1
-	}
-	if maxWorkers < 1 || maxWorkers > 32 {
+	if maxWorkers < 0 || maxWorkers > 32 {
 		return ProjectDetail{}, fmt.Errorf("max_workers must be between 1 and 32")
 	}
 	if req.BudgetSeconds != nil && *req.BudgetSeconds < 0 {
@@ -85,6 +82,11 @@ func (d *DB) CreateProject(ctx context.Context, req CreateProject) (ProjectDetai
 	var out ProjectDetail
 	created := false
 	err := tx(ctx, d, func(t *sql.Tx) error {
+		if maxWorkers == 0 {
+			if err := t.QueryRow(`SELECT default_project_max_workers FROM settings WHERE id=1`).Scan(&maxWorkers); err != nil {
+				return err
+			}
+		}
 		if binding := req.PlatformBinding; binding != nil {
 			var existing string
 			err := t.QueryRow(`SELECT project_id FROM platform_projects WHERE platform=? AND scope_id=? AND challenge_id=?`, binding.Platform, binding.ScopeID, binding.ChallengeID).Scan(&existing)

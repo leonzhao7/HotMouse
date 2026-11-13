@@ -97,9 +97,20 @@ func (a *app) serveCommand() *cobra.Command {
 			competitionConfig.Rules = string(data)
 			competitionConfig.Concurrency, _ = c.Flags().GetInt("competition-concurrency")
 			competitionConfig.MaxWorkers, _ = c.Flags().GetInt("competition-max-workers")
-			for flag, name := range map[string]string{"competition-concurrency": "HOTMOUSE_COMPETITION_CONCURRENCY", "competition-max-workers": "HOTMOUSE_COMPETITION_MAX_WORKERS"} {
-				if value, present := os.LookupEnv(name); present && !c.Flags().Changed(flag) {
+			for flag, names := range map[string][]string{"competition-concurrency": {"HOTMOUSE_COMPETITION_CONCURRENCY", "HOTMOUSE_PROJECT_CONCURRENCY"}, "competition-max-workers": {"HOTMOUSE_COMPETITION_MAX_WORKERS", "HOTMOUSE_PROJECT_MAX_WORKERS"}} {
+				if c.Flags().Changed(flag) {
+					continue
+				}
+				for _, name := range names {
+					value := os.Getenv(name)
+					if value == "" {
+						continue
+					}
 					parsed, err := strconv.Atoi(value)
+					if err == nil && name == "HOTMOUSE_PROJECT_CONCURRENCY" && parsed == 0 {
+						// Unlimited global scheduling does not override a platform's limit.
+						continue
+					}
 					if err != nil || parsed < 1 {
 						return invalid("%s must be a positive integer", name)
 					}
@@ -108,10 +119,11 @@ func (a *app) serveCommand() *cobra.Command {
 					} else {
 						competitionConfig.MaxWorkers = parsed
 					}
+					break
 				}
 			}
 			timeout, _ := c.Flags().GetDuration("competition-challenge-timeout")
-			if value, present := os.LookupEnv("HOTMOUSE_COMPETITION_CHALLENGE_TIMEOUT"); present && !c.Flags().Changed("competition-challenge-timeout") {
+			if value := os.Getenv("HOTMOUSE_COMPETITION_CHALLENGE_TIMEOUT"); value != "" && !c.Flags().Changed("competition-challenge-timeout") {
 				var err error
 				timeout, err = time.ParseDuration(value)
 				if err != nil {
@@ -164,6 +176,13 @@ func (a *app) serveCommand() *cobra.Command {
 		}
 		defer db.SQL.Close()
 		logger.Info("database.open.completed", "path", path)
+		configured, e := db.ApplyServerEnvironment(c.Context())
+		if e != nil {
+			return invalid("server environment: %s", e)
+		}
+		if len(configured) > 0 {
+			logger.Info("server.environment.applied", "variables", configured)
+		}
 		previous, present := os.LookupEnv("HOTMOUSE_AUTH_REQUIRED")
 		value := "1"
 		if policy == "disabled" {

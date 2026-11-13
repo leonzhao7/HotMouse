@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -358,6 +359,9 @@ func TestServerLockAndGracefulShutdown(t *testing.T) {
 	t.Setenv("HOTMOUSE_LOG_LEVEL", "info")
 	t.Setenv("HOTMOUSE_LOG_ENV", "1")
 	t.Setenv("OPENAI_API_KEY", "serve-test-credential")
+	t.Setenv("HOTMOUSE_WORKER_COUNT", "3")
+	t.Setenv("HOTMOUSE_PROJECT_CONCURRENCY", "2")
+	t.Setenv("HOTMOUSE_PROJECT_BUDGET_SECONDS", "70")
 	dir := t.TempDir()
 	db := filepath.Join(dir, "serve.db")
 	ctx, cancel := context.WithCancel(t.Context())
@@ -383,6 +387,22 @@ func TestServerLockAndGracefulShutdown(t *testing.T) {
 	code := Run(t.Context(), []string{"serve", "--db", db, "--addr", "127.0.0.1:0"}, strings.NewReader(""), &out, &errOut)
 	if code != 5 {
 		t.Fatalf("second service code=%d err=%s", code, &errOut)
+	}
+	saved, err := sql.Open("sqlite3", db+"?_busy_timeout=100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer saved.Close()
+	for {
+		var workers, concurrency, budget int
+		err := saved.QueryRow(`SELECT worker_count,project_concurrency,default_project_budget_seconds FROM worker_config CROSS JOIN settings`).Scan(&workers, &concurrency, &budget)
+		if err == nil && workers == 3 && concurrency == 2 && budget == 70 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server did not apply environment settings before starting: workers=%d concurrency=%d budget=%d err=%v", workers, concurrency, budget, err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	cancel()
 	select {

@@ -27,7 +27,7 @@
 
 ## 镜像工具边界
 
-Docker 镜像带有 pentest_toolkit、curl、ffuf、sqlmap、git-dumper、Python pwntools、gdb、ROPgadget、7z、unsquashfs、rg、jq、ssh、nc、socat 等。Python 依赖在构建时安装到 `/opt/hotmouse/venv`，由 `HOTMOUSE_PYTHON` 指定。技能正文提及的 radare2、binwalk、etcdctl 等可选命令须根据实际环境确认；nuclei-templates 是本地资料，未安装 nuclei 命令。宿主机运行时复用固定能力清单，仅补查当前步骤必需的命令或 import。
+Docker 三种镜像预装这 11 个技能声明的全部工具，包括 curl、nmap、ffuf、sqlmap、git-dumper、Python pwntools、checksec、gdb、ROPgadget、ltrace、strace、radare2/r2、binwalk、7z、unsquashfs、etcdctl、rg、jq、ssh、nc、socat。逐技能清单见 [skill-tools.json](../../docker/skill-tools.json)，安装方式及验证命令见 [Docker 文档](../../docker/README.md)。构建时以默认 node 用户校验 41 个命令、Python 库及关键操作；缺失时构建失败。Python 工具安装到 `/opt/hotmouse/venv`，由 `HOTMOUSE_PYTHON` 指定；Debian binwalk 使用自己的系统 Python。nuclei-templates 保留为本地资料。宿主机运行时复用固定能力清单，仅补查当前步骤必需的命令或 import。
 
 本地运行会发现 `backend/pentest_toolkit`，Docker 中使用 `/usr/local/share/hotmouse/pentest_toolkit`，也可通过 `HOTMOUSE_PENTEST_TOOLKIT_DIR` 指定。引用与脚本使用此根目录下的绝对路径，输出和认证台账写在当前 Worker 工作区；共享工具库保持原样。
 

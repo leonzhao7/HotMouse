@@ -28,6 +28,7 @@ docker/**
 !docker/Dockerfile
 !docker/entrypoint.sh
 !docker/toolkit-requirements.txt
+!docker/skill-tools.json
 !docker/verify-toolkit.py
 !LICENSE
 

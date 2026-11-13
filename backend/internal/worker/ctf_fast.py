@@ -88,9 +88,9 @@ def capabilities():
     tools = {name: shutil.which(name, path=tool_path) for name in
              ("curl", "rg", "jq", "nmap", "nc", "socat", "ssh", "sshpass",
               "ffuf", "sqlmap", "git-dumper", "unzip", "7z", "unsquashfs",
-              "file", "strings", "readelf", "objdump", "strace", "binwalk",
+              "file", "strings", "readelf", "objdump", "ltrace", "strace", "binwalk",
               "etcdctl", "nuclei", "upx", "tshark", "tcpdump", "ROPgadget",
-              "gdb", "rizin", "radare2", "dotnet")}
+              "checksec", "gdb", "rizin", "radare2", "r2", "dotnet")}
     return {"python": sys.executable, "prefix": sys.prefix, "version": sys.version.split()[0],
             "tools": tools, "imports": imports,
             "namespace_note": "pycryptodome imports Crypto; pycryptodomex imports Cryptodome. "

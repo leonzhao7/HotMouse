@@ -503,12 +503,14 @@ function RunDetail({ run, platform, onStop, onConcurrency }) {
 }
 
 function StartCompetition({ platform, onClose, onStarted }) {
+  const workerConfig = useResource("/api/workers/config");
+  const settings = useResource("/api/settings");
   const [rules, setRules] = useState("");
   const [filename, setFilename] = useState("");
   const [fileError, setFileError] = useState(null);
   const [reading, setReading] = useState(false);
-  const [concurrency, setConcurrency] = useState(1);
-  const [maxWorkers, setMaxWorkers] = useState(1);
+  const [concurrency, setConcurrency] = useState("");
+  const [maxWorkers, setMaxWorkers] = useState("");
   const [minutes, setMinutes] = useState(20);
   const upload = async (event) => {
     const file = event.target.files?.[0];
@@ -549,8 +551,8 @@ function StartCompetition({ platform, onClose, onStarted }) {
         const run = await request(() =>
           post(`${platformPath(platform.id)}/runs`, {
             rules,
-            concurrency: Number(concurrency),
-            max_workers: Number(maxWorkers),
+            ...(concurrency === "" ? {} : { concurrency: Number(concurrency) }),
+            ...(maxWorkers === "" ? {} : { max_workers: Number(maxWorkers) }),
             challenge_timeout_seconds: Math.round(Number(minutes) * 60),
           }),
         );
@@ -582,23 +584,29 @@ function StartCompetition({ platform, onClose, onStarted }) {
         <TextField
           label="同时解答题目数"
           type="number"
-          required
           min={1}
           max={maxConcurrency(platform)}
           step={1}
           value={concurrency}
+          placeholder={String(
+            Math.min(
+              workerConfig.data?.project_concurrency || 1,
+              maxConcurrency(platform),
+            ),
+          )}
           onChange={(event) => setConcurrency(event.target.value)}
-          hint={`该平台最多 ${maxConcurrency(platform)} 道题并发。`}
+          hint={`留空使用系统默认值；该平台最多 ${maxConcurrency(platform)} 道题并发。`}
         />
         <TextField
           label="每题 Worker 上限"
           type="number"
-          required
           min={1}
           max={32}
           step={1}
           value={maxWorkers}
+          placeholder={String(settings.data?.default_project_max_workers ?? "")}
           onChange={(event) => setMaxWorkers(event.target.value)}
+          hint="留空使用系统配置的每题 Worker 上限。"
         />
         <TextField
           label="每题超时（分钟）"

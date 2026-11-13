@@ -294,6 +294,11 @@ func workerPatchValid(patch map[string]any) error {
 			if !ok || count < 1 || count > 32 {
 				return invalid("worker_count must be between 1 and 32")
 			}
+		case "project_concurrency":
+			count, ok := integer(v)
+			if !ok || count < 0 || count > 32 {
+				return invalid("project_concurrency must be between 0 and 32")
+			}
 		case "runtime":
 			m, ok := v.(map[string]any)
 			if !ok {
@@ -436,10 +441,10 @@ func (a *app) workers() *cobra.Command {
 			patch[key] = nil
 		case strings.HasPrefix(key, "dispatcher."):
 			patch["dispatcher"] = map[string]any{strings.TrimPrefix(key, "dispatcher."): value}
-		case key == "worker_count":
+		case key == "worker_count" || key == "project_concurrency":
 			count, err := strconv.Atoi(value)
 			if err != nil {
-				return nil, invalid("worker_count must be integer")
+				return nil, invalid("%s must be integer", key)
 			}
 			patch[key] = count
 		case strings.HasPrefix(key, "runtime."):
@@ -525,7 +530,7 @@ func (a *app) workers() *cobra.Command {
 	return g
 }
 
-var settingsLimits = map[string][2]int{"default_project_budget_seconds": {0, math.MaxInt}, "step_timeout": {5, math.MaxInt}, "decide_timeout": {5, math.MaxInt}, "worker_unhealthy_retry_after_seconds": {1, 3600}, "worker_rejected_retry_after_seconds": {1, 3600}, "max_failed_login_attempts": {1, 50}, "rate_limit_window_minutes": {1, 1440}, "session_duration_hours": {1, 168}, "log_retention_days": {1, 3650}, "export_retention_days": {1, 3650}, "notification_retention_days": {1, 3650}, "project_idle_alert_hours": {1, 720}}
+var settingsLimits = map[string][2]int{"default_project_max_workers": {1, 32}, "default_project_budget_seconds": {0, math.MaxInt}, "step_timeout": {5, math.MaxInt}, "decide_timeout": {5, math.MaxInt}, "worker_unhealthy_retry_after_seconds": {1, 3600}, "worker_rejected_retry_after_seconds": {1, 3600}, "max_failed_login_attempts": {1, 50}, "rate_limit_window_minutes": {1, 1440}, "session_duration_hours": {1, 168}, "log_retention_days": {1, 3650}, "export_retention_days": {1, 3650}, "notification_retention_days": {1, 3650}, "project_idle_alert_hours": {1, 720}}
 
 func (a *app) updateSettings(c *cobra.Command, patch map[string]any) (any, error) {
 	if len(patch) == 0 {

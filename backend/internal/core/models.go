@@ -194,6 +194,7 @@ type ReopenResult struct {
 }
 
 type Settings struct {
+	DefaultProjectMaxWorkers         int `json:"default_project_max_workers"`
 	DefaultProjectBudgetSeconds      int `json:"default_project_budget_seconds"`
 	StepTimeout                      int `json:"step_timeout"`
 	DecideTimeout                    int `json:"decide_timeout"`

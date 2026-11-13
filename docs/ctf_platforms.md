@@ -33,7 +33,7 @@ hotmouse competition concurrency tsec competition_001 --concurrency 3
 hotmouse competition stop tsec competition_001
 ```
 
-`--concurrency` 控制同时解答的**题目数**，TSec 最大为 3，默认 1。`--max-workers` 控制每道题内部的 Worker 上限，默认 1；执行进程还受服务全局 `worker_count` 限制。减少题目并发不会中断已有解题，等当前题目退出后再遵守新上限。`--challenge-timeout-seconds` 默认 1200 秒，从启动题目开始计时，包含准备与解题；新项目也以相同秒数作为项目投资预算。
+`--concurrency` 控制同时解答的**题目数**，TSec 最大为 3；省略时使用服务的 `project_concurrency`，不限时采用 1，并遵守平台上限。`--max-workers` 控制每道题内部的 Worker 上限，省略时使用系统的 `default_project_max_workers`（初始值 1）；执行进程还受服务全局 `worker_count` 和 `project_concurrency` 限制。减少题目并发不会中断已有解题，等当前题目退出后再遵守新上限。`--challenge-timeout-seconds` 默认 1200 秒，从启动题目开始计时，包含准备与解题；新项目的执行预算独立使用 `default_project_budget_seconds`，所有 Worker 和路线共同消耗这份额度。
 
 总调度启动时获取题目列表，由 Dispatcher 模型读取总规则并返回规则摘要与完整题目顺序。原始规则及摘要在新项目创建事务中作为提示保存，首次规划、靶场识别和后续执行均可读取，原文优先于摘要。模型不能增加、漏掉题目或修改配置的并发数；实际下发、提交、关闭和队列切换由一个总调度协程负责。自定义 Dispatcher 命令需要支持 `HOTMOUSE_TASK_TYPE=competition_plan`，返回 `{"summary":"规则摘要","challenge_ids":["题目ID", "..."]}`；请求环境包含 `HOTMOUSE_COMPETITION_RULES` 和 `HOTMOUSE_COMPETITION_CHALLENGES`。mock 模式按平台顺序排列，用于本地验证。
 
