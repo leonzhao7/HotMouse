@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"hotmouse/backend/internal/core"
 )
 
 //go:embed pi_tool_timeout.mjs
@@ -54,6 +56,9 @@ func providerIdentity(cfg workerConfig, worker, workspace string) string {
 			value = os.Getenv(key)
 		}
 		env[key] = value
+	}
+	if effort := configEnvironment(cfg, "HOTMOUSE_LLM_REASONING_EFFORT"); effort != "" {
+		env["HOTMOUSE_LLM_REASONING_EFFORT"] = effort
 	}
 	b, _ := json.Marshal([]any{canonicalDriver(cfg.driver), worker, workspace, env})
 	sum := sha256.Sum256(b)
@@ -106,6 +111,10 @@ func providerArgv(cfg workerConfig, phase, session, workspace, prompt string) ([
 		}
 		return append(args, "-p", "--", prompt), nil
 	case "pi":
+		effort := configEnvironment(cfg, "HOTMOUSE_LLM_REASONING_EFFORT")
+		if err := core.ValidateLLMReasoningEffort(effort); err != nil {
+			return nil, err
+		}
 		binary := cfg.env["PI_CLI"]
 		if binary == "" {
 			binary = os.Getenv("PI_CLI")
@@ -131,12 +140,18 @@ func providerArgv(cfg workerConfig, phase, session, workspace, prompt string) ([
 		if session != "" {
 			args = append(args, "--session", session)
 		}
+		if effort != "" {
+			args = append(args, "--thinking", effort)
+		}
 		if cfg.env["PI_MODEL"] != "" && cfg.env["PI_BASE_URL"] != "" && cfg.env["PI_API_KEY"] != "" && cfg.env["PI_PROVIDER_API"] != "" {
 			agentDir := filepath.Join(workspace, ".hotmouse", "pi-agent")
 			if err := os.MkdirAll(agentDir, 0o700); err != nil {
 				return nil, err
 			}
 			model := map[string]any{"id": cfg.env["PI_MODEL"], "name": cfg.env["PI_MODEL"]}
+			if effort != "" {
+				model["reasoning"] = true
+			}
 			if value := cfg.env["PI_MODEL_CONTEXT_WINDOW"]; value != "" {
 				window, err := strconv.Atoi(value)
 				if err != nil || window < 1 {

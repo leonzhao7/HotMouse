@@ -16,6 +16,11 @@ import (
 // Empty variables are ignored so Compose can pass optional settings through.
 // Only explicitly configured values replace saved settings, in one transaction.
 func (d *DB) ApplyServerEnvironment(ctx context.Context) ([]string, error) {
+	// Reasoning effort is read at invocation time, not persisted with credentials,
+	// so removing the variable restores requests without an explicit effort.
+	if err := ValidateLLMReasoningEffort(os.Getenv("HOTMOUSE_LLM_REASONING_EFFORT")); err != nil {
+		return nil, err
+	}
 	type integerSetting struct {
 		name, column string
 		min, max     int
@@ -237,4 +242,13 @@ func validateServerLLMEnvironment(environment map[string]string) error {
 		return fmt.Errorf("HOTMOUSE_LLM_API must be openai, openai-completions, openai-responses or anthropic-messages")
 	}
 	return nil
+}
+
+func ValidateLLMReasoningEffort(effort string) error {
+	switch effort {
+	case "", "low", "medium", "high":
+		return nil
+	default:
+		return fmt.Errorf("HOTMOUSE_LLM_REASONING_EFFORT must be low, medium, high or empty")
+	}
 }

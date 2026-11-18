@@ -54,6 +54,7 @@ docker compose --env-file docker/.env -f docker/compose.yaml up -d --build
 | `HOTMOUSE_LLM_API_KEY` | 无 | LLM API 密钥 |
 | `HOTMOUSE_LLM_MODEL` | 无 | 模型名称 |
 | `HOTMOUSE_LLM_API` | `openai` | `openai` 使用 Chat Completions；也支持 `openai-responses`、`anthropic-messages` |
+| `HOTMOUSE_LLM_REASONING_EFFORT` | 空；`low` / `medium` / `high` | Pi 推理强度；Chat Completions 发送 `reasoning_effort`，Responses 发送 `reasoning.effort`；未配置时保持原行为，不发送强度参数 |
 | `HOTMOUSE_WORKER_COUNT` | 4；1..32 | 全局执行 Worker 池大小，重启服务生效 |
 | `HOTMOUSE_PROJECT_CONCURRENCY` | Compose 为 1；0..32 | 自动调度同时处理的题目/项目数，0 为不限 |
 | `HOTMOUSE_PROJECT_MAX_WORKERS` | 1；1..32 | 新项目每题的执行 Worker 上限 |
@@ -72,6 +73,8 @@ docker compose --env-file docker/.env -f docker/compose.yaml up -d --build
 | `PI_MODEL_CONTEXT_WINDOW` | 模型默认；正整数 | 自定义模型的上下文窗口大小 |
 
 `HOTMOUSE_LLM_*` 会应用到执行 Worker 和已配置的独立 Dispatcher。也支持 `PI_BASE_URL`、`PI_API_KEY`、`PI_MODEL`、`PI_PROVIDER_API`，同一字段优先使用 `HOTMOUSE_LLM_*`。开始使用环境变量配置 LLM 时，地址、密钥和模型必须完整；已有配置允许只覆盖其中一个字段。未提供这些变量时，工作台仍可启动并通过 Worker 页面配置模型。
+
+`HOTMOUSE_LLM_REASONING_EFFORT` 在每次 Pi 调用时读取，不随凭据写入数据库；删除或清空后，新调用恢复为不发送推理强度参数。该设置也作用于规划、目标分析和恢复总结。可在 Worker 或独立 Dispatcher 的环境配置中单独覆盖。
 
 例如 `.env.example` 中的 6 个 Worker、2 道题并发、每题最多 3 个 Worker，允许最多 6 个执行 Worker 同时工作。Dispatcher、启动分析和 OptChat 内存进程独立运行。超出题目并发上限的项目保留 active 状态并排队；已有项目结束后补上空出的名额。手动调用 Step 执行接口仍属于显式执行。
 

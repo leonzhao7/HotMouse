@@ -11,6 +11,7 @@ func clearServerEnvironment(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
 		"HOTMOUSE_WORKER_DRIVER", "HOTMOUSE_LLM_BASE_URL", "HOTMOUSE_LLM_API_KEY", "HOTMOUSE_LLM_MODEL", "HOTMOUSE_LLM_API",
+		"HOTMOUSE_LLM_REASONING_EFFORT",
 		"PI_BASE_URL", "PI_API_KEY", "PI_MODEL", "PI_PROVIDER_API", "PI_MODEL_CONTEXT_WINDOW", "OPTCHAT_HOME",
 		"HOTMOUSE_WORKER_COUNT", "HOTMOUSE_PROJECT_CONCURRENCY", "HOTMOUSE_PROJECT_MAX_WORKERS", "HOTMOUSE_PROJECT_BUDGET_SECONDS",
 		"HOTMOUSE_STEP_TIMEOUT_SECONDS", "HOTMOUSE_DECIDE_LEASE_TIMEOUT_SECONDS",
@@ -35,7 +36,8 @@ func TestServerEnvironmentUpdatesSavedProvidersAndProjectDefaults(t *testing.T) 
 	for name, value := range map[string]string{
 		"HOTMOUSE_WORKER_DRIVER": "pi", "HOTMOUSE_LLM_BASE_URL": "https://gateway.example/v1",
 		"HOTMOUSE_LLM_API_KEY": "fixture-secret-$literal", "HOTMOUSE_LLM_MODEL": "fixture-model",
-		"HOTMOUSE_WORKER_COUNT": "6", "HOTMOUSE_PROJECT_CONCURRENCY": "2", "HOTMOUSE_PROJECT_MAX_WORKERS": "3",
+		"HOTMOUSE_LLM_REASONING_EFFORT": "high",
+		"HOTMOUSE_WORKER_COUNT":         "6", "HOTMOUSE_PROJECT_CONCURRENCY": "2", "HOTMOUSE_PROJECT_MAX_WORKERS": "3",
 		"HOTMOUSE_PROJECT_BUDGET_SECONDS": "600", "HOTMOUSE_EXECUTE_TIMEOUT_SECONDS": "120",
 		"HOTMOUSE_CONCLUDE_RESERVE_SECONDS": "10", "HOTMOUSE_RECOVERY_ATTEMPTS": "2", "HOTMOUSE_FORMAT_RETRIES": "0",
 		"PI_OPTCHAT_EXTENSION": "/opt/hotmouse/pi/node_modules/pi-optchat/src/index.ts",
@@ -67,6 +69,12 @@ func TestServerEnvironmentUpdatesSavedProvidersAndProjectDefaults(t *testing.T) 
 	}
 	if dispatcher.Driver != "pi" || dispatcher.Command != "" || dispatcher.Model != "fixture-model" || dispatcher.Environment["PI_API_KEY"] != env["PI_API_KEY"] || dispatcher.Environment["DISPATCHER_EXTRA"] != "keep" || dispatcher.Environment["PI_OPTCHAT_EXTENSION"] != env["PI_OPTCHAT_EXTENSION"] {
 		t.Fatal("dispatcher did not receive the shared LLM configuration while preserving unrelated settings")
+	}
+	if _, saved := env["HOTMOUSE_LLM_REASONING_EFFORT"]; saved {
+		t.Fatal("runtime reasoning effort was persisted with worker credentials")
+	}
+	if _, saved := dispatcher.Environment["HOTMOUSE_LLM_REASONING_EFFORT"]; saved {
+		t.Fatal("runtime reasoning effort was persisted with dispatcher credentials")
 	}
 	if runtime.ExecuteTimeoutSeconds != 120 || runtime.ConcludeTimeoutSeconds != 40 || runtime.ConcludeReserveSeconds != 10 || runtime.RecoveryAttempts != 2 || runtime.FormatRetries != 0 {
 		t.Fatalf("partial runtime update lost limits: %+v", runtime)
@@ -120,6 +128,7 @@ func TestServerEnvironmentNoopAndInvalidConfigurationAreAtomic(t *testing.T) {
 		{"HOTMOUSE_LLM_BASE_URL", "https://user:private-secret@example/v1"},
 		{"HOTMOUSE_LLM_API", "unsupported"}, {"HOTMOUSE_WORKER_DRIVER", "codex"},
 		{"HOTMOUSE_LLM_API_KEY", ""}, {"HOTMOUSE_LLM_MODEL", ""},
+		{"HOTMOUSE_LLM_REASONING_EFFORT", "xhigh"},
 	} {
 		t.Run(invalid.name, func(t *testing.T) {
 			clearServerEnvironment(t)
@@ -148,6 +157,16 @@ func TestServerEnvironmentNoopAndInvalidConfigurationAreAtomic(t *testing.T) {
 				t.Fatalf("failed/noop bootstrap changed saved configuration: driver=%s workers=%d", driver, count)
 			}
 		})
+	}
+}
+
+func TestLLMReasoningEffortValidation(t *testing.T) {
+	for _, effort := range []string{"", "low", "medium", "high", "off", "none", "minimal", "xhigh", "HIGH", " high "} {
+		err := ValidateLLMReasoningEffort(effort)
+		valid := effort == "" || effort == "low" || effort == "medium" || effort == "high"
+		if (err == nil) != valid {
+			t.Errorf("effort %q: %v", effort, err)
+		}
 	}
 }
 
