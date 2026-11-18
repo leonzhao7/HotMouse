@@ -3,6 +3,7 @@ package core
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 func addColumn(d *sql.DB, table, name, declaration string) error {
@@ -54,6 +55,12 @@ func migrateStrategy(d *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	if err := addColumn(d, "flags", "question_id", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := ensureFlagQuestionIdentity(d); err != nil {
+		return err
+	}
 	if err := addColumn(d, "routes", "budget_baseline_ms", `INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
 	}
@@ -68,8 +75,8 @@ func migrateStrategy(d *sql.DB) error {
  INSERT INTO route_investments(history_id,project_id,route_id,elapsed_ms) SELECT history_id,project_id,route_id,elapsed_ms FROM route_backfill;
  UPDATE routes SET invested_ms=invested_ms+COALESCE((SELECT SUM(elapsed_ms) FROM route_backfill i WHERE i.project_id=routes.project_id AND i.route_id=routes.id),0);
  DROP TABLE route_backfill;
- INSERT OR IGNORE INTO flags(project_id,challenge_id,value,fact_id,created_at)
- SELECT f.project_id,COALESCE(json_extract(f.data_json,'$.challenge_id'),''),COALESCE(json_extract(f.data_json,'$.flag'),json_extract(f.data_json,'$.value')),f.fact_id,f.created_at FROM findings f JOIN facts a ON a.project_id=f.project_id AND a.id=f.fact_id WHERE f.kind='flag' AND json_valid(f.data_json) AND typeof(COALESCE(json_extract(f.data_json,'$.flag'),json_extract(f.data_json,'$.value')))='text' AND length(trim(COALESCE(json_extract(f.data_json,'$.flag'),json_extract(f.data_json,'$.value'))))>0 AND a.result_type NOT IN ('environment_failure','no_information','needs_attention');`)
+	 INSERT OR IGNORE INTO flags(project_id,challenge_id,question_id,value,fact_id,created_at)
+	 SELECT f.project_id,COALESCE(json_extract(f.data_json,'$.challenge_id'),''),COALESCE(json_extract(f.data_json,'$.question_id'),''),COALESCE(json_extract(f.data_json,'$.flag'),json_extract(f.data_json,'$.value')),f.fact_id,f.created_at FROM findings f JOIN facts a ON a.project_id=f.project_id AND a.id=f.fact_id WHERE f.kind='flag' AND json_valid(f.data_json) AND typeof(COALESCE(json_extract(f.data_json,'$.flag'),json_extract(f.data_json,'$.value')))='text' AND length(trim(COALESCE(json_extract(f.data_json,'$.flag'),json_extract(f.data_json,'$.value'))))>0 AND a.result_type NOT IN ('environment_failure','no_information','needs_attention');`)
 	if err != nil {
 		t.Rollback()
 		return err
@@ -77,6 +84,48 @@ func migrateStrategy(d *sql.DB) error {
 	return t.Commit()
 }
 func requireValid(name, value string) error { return fmt.Errorf("invalid %s %q", name, value) }
+
+// Older flag rows were unique only by challenge and value. CTFy can have
+// independent questions with the same answer, so widen the identity while
+// retaining attempt IDs and their foreign-key relationship.
+func ensureFlagQuestionIdentity(d *sql.DB) error {
+	var definition string
+	if err := d.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='flags'`).Scan(&definition); err != nil {
+		return err
+	}
+	if !strings.Contains(strings.Join(strings.Fields(strings.ToLower(definition)), ""), "unique(project_id,challenge_id,value)") {
+		return nil
+	}
+	if _, err := d.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		return err
+	}
+	_, err := d.Exec(`BEGIN;
+ALTER TABLE flag_attempts RENAME TO flag_attempts_old;
+ALTER TABLE flags RENAME TO flags_old;
+CREATE TABLE flags (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+ challenge_id TEXT NOT NULL DEFAULT '', question_id TEXT NOT NULL DEFAULT '', value TEXT NOT NULL, fact_id TEXT NOT NULL,
+ status TEXT NOT NULL DEFAULT 'captured' CHECK(status IN ('captured','submission_pending','accepted','rejected','submission_unknown')),
+ created_at TEXT NOT NULL, UNIQUE(project_id,challenge_id,question_id,value), FOREIGN KEY(fact_id,project_id) REFERENCES facts(id,project_id));
+INSERT INTO flags(id,project_id,challenge_id,question_id,value,fact_id,status,created_at)
+ SELECT id,project_id,challenge_id,question_id,value,fact_id,status,created_at FROM flags_old;
+CREATE TABLE flag_attempts (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, flag_id INTEGER NOT NULL REFERENCES flags(id) ON DELETE CASCADE,
+ status TEXT NOT NULL DEFAULT 'submission_pending' CHECK(status IN ('submission_pending','accepted','rejected','submission_unknown')),
+ response TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, finished_at TEXT);
+INSERT INTO flag_attempts(id,flag_id,status,response,started_at,finished_at)
+ SELECT id,flag_id,status,response,started_at,finished_at FROM flag_attempts_old;
+DROP TABLE flag_attempts_old;
+DROP TABLE flags_old;
+COMMIT;`)
+	if err != nil {
+		_, _ = d.Exec(`ROLLBACK`)
+		_, _ = d.Exec(`PRAGMA foreign_keys=ON`)
+		return err
+	}
+	_, fkErr := d.Exec(`PRAGMA foreign_keys=ON`)
+	return fkErr
+}
 
 const strategySchema = `
 CREATE TABLE IF NOT EXISTS routes (
@@ -104,9 +153,9 @@ CREATE TABLE IF NOT EXISTS experiences (
  source_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL, source_step_id TEXT, source_fact_ids_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS flags (
  id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
- challenge_id TEXT NOT NULL DEFAULT '', value TEXT NOT NULL, fact_id TEXT NOT NULL,
+ challenge_id TEXT NOT NULL DEFAULT '', question_id TEXT NOT NULL DEFAULT '', value TEXT NOT NULL, fact_id TEXT NOT NULL,
  status TEXT NOT NULL DEFAULT 'captured' CHECK(status IN ('captured','submission_pending','accepted','rejected','submission_unknown')),
- created_at TEXT NOT NULL, UNIQUE(project_id,challenge_id,value), FOREIGN KEY(fact_id,project_id) REFERENCES facts(id,project_id));
+ created_at TEXT NOT NULL, UNIQUE(project_id,challenge_id,question_id,value), FOREIGN KEY(fact_id,project_id) REFERENCES facts(id,project_id));
 CREATE TABLE IF NOT EXISTS flag_attempts (
  id INTEGER PRIMARY KEY AUTOINCREMENT, flag_id INTEGER NOT NULL REFERENCES flags(id) ON DELETE CASCADE,
  status TEXT NOT NULL DEFAULT 'submission_pending' CHECK(status IN ('submission_pending','accepted','rejected','submission_unknown')),

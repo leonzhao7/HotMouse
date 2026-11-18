@@ -12,6 +12,7 @@ import (
 type FlagCheckpoint struct {
 	Value              string `json:"value"`
 	ChallengeID        string `json:"challenge_id"`
+	QuestionID         string `json:"question_id,omitempty"`
 	SourcePath         string `json:"source_path"`
 	OriginalSourcePath string `json:"original_source_path"`
 	SourceSHA256       string `json:"source_sha256"`
@@ -40,6 +41,7 @@ func (d *DB) CheckpointFlag(ctx context.Context, project, step, worker string, r
 		if req.Value != strings.TrimSpace(req.Value) {
 			return fmt.Errorf("preserve the exact flag without surrounding output whitespace")
 		}
+		req.QuestionID = clean(req.QuestionID)
 		binding, err := platformBinding(ctx, t, project)
 		if err != nil {
 			return err
@@ -52,12 +54,12 @@ func (d *DB) CheckpointFlag(ctx context.Context, project, step, worker string, r
 		}
 		// Replay after a timeout/restart never creates another fact or submission.
 		var existing int64
-		err = t.QueryRow(`SELECT id FROM flags WHERE project_id=? AND challenge_id=? AND value=?`, project, req.ChallengeID, req.Value).Scan(&existing)
+		err = t.QueryRow(`SELECT id FROM flags WHERE project_id=? AND challenge_id=? AND question_id=? AND value=?`, project, req.ChallengeID, req.QuestionID, req.Value).Scan(&existing)
 		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
 		if err == nil {
-			return t.QueryRow(`SELECT id,project_id,challenge_id,value,fact_id,status,created_at FROM flags WHERE id=?`, existing).Scan(&out.ID, &out.ProjectID, &out.ChallengeID, &out.Value, &out.FactID, &out.Status, &out.CreatedAt)
+			return t.QueryRow(`SELECT id,project_id,challenge_id,question_id,value,fact_id,status,created_at FROM flags WHERE id=?`, existing).Scan(&out.ID, &out.ProjectID, &out.ChallengeID, &out.QuestionID, &out.Value, &out.FactID, &out.Status, &out.CreatedAt)
 		}
 		fact, err := nextID(t, project, "fact", "f")
 		if err != nil {
@@ -67,7 +69,7 @@ func (d *DB) CheckpointFlag(ctx context.Context, project, step, worker string, r
 		if _, err := t.Exec(`INSERT INTO facts(id,project_id,description,title,detail,result_type) VALUES(?,?,?,'Flag checkpoint',?,'progress')`, fact, project, description, jsonData(req)); err != nil {
 			return err
 		}
-		out, err = captureFlagTx(t, project, CaptureFlag{Value: req.Value, ChallengeID: req.ChallengeID, FactID: fact})
+		out, err = captureFlagTx(t, project, CaptureFlag{Value: req.Value, ChallengeID: req.ChallengeID, QuestionID: req.QuestionID, FactID: fact})
 		// The coordinator polls the ledger. Avoid a planning event while the
 		// current execution is still validating/delivering the same result.
 		return err

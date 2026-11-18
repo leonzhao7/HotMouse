@@ -21,25 +21,26 @@ import (
 // External commands receive a graph snapshot and task contract in environment
 // variables and return one JSON contract on stdout.
 type Runner struct {
-	activeMu       sync.Mutex
-	activeProjects map[string]map[*context.CancelFunc]struct{}
-	flagNotifier   func()
-	DB             *core.DB
-	Interval       time.Duration
-	logger         *logging.Logger
-	taskLogsMu     sync.Mutex
-	taskLogs       map[int64]taskLogContext
-	locksMu        sync.Mutex
-	stepLock       map[string]*sync.Mutex
-	workspaceLock  map[string]*sync.Mutex
-	probeMu        sync.Mutex
-	targetStartups map[string]*targetMonitor
-	targetMonitors map[string]*targetMonitor
-	optchatMu      sync.Mutex
-	optchatOwners  map[string]*piOptchatOwner
-	lifecycleCtx   context.Context
-	probeInterval  time.Duration
-	probeDial      func(context.Context, core.TargetEndpoint) error
+	activeMu             sync.Mutex
+	activeProjects       map[string]map[*context.CancelFunc]struct{}
+	flagNotifier         func()
+	DB                   *core.DB
+	Interval             time.Duration
+	logger               *logging.Logger
+	taskLogsMu           sync.Mutex
+	taskLogs             map[int64]taskLogContext
+	locksMu              sync.Mutex
+	stepLock             map[string]*sync.Mutex
+	workspaceLock        map[string]*sync.Mutex
+	probeMu              sync.Mutex
+	targetStartups       map[string]*targetMonitor
+	targetMonitors       map[string]*targetMonitor
+	targetProbesDisabled bool
+	optchatMu            sync.Mutex
+	optchatOwners        map[string]*piOptchatOwner
+	lifecycleCtx         context.Context
+	probeInterval        time.Duration
+	probeDial            func(context.Context, core.TargetEndpoint) error
 }
 
 // Configure before starting the pool. Notification never performs a model call.
@@ -1706,6 +1707,9 @@ func (r *Runner) commandVars(ctx context.Context, project, step, description, gr
 		vars["HOTMOUSE_WORKER_PROMPT"] = executePrompt(graph, step, description)
 	} else {
 		vars["HOTMOUSE_WORKER_PROMPT"] = decidePrompt(graph)
+	}
+	if !r.targetProbesEnabled() {
+		vars["HOTMOUSE_WORKER_PROMPT"] += "\n\nRuntime startup policy: automatic target analysis, TCP liveness monitoring and homepage preprocessing are disabled. Use the delivered challenge scope and saved solving evidence directly. Saved target_probe state is historical; do not wait for it or treat it as a current health decision."
 	}
 	vars["HOTMOUSE_WORKER_PROMPT"] += vars["HOTMOUSE_WORKSPACE_ACCESS"]
 	if root, err := r.workspaceRoot(cfg); err == nil {

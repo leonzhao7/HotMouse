@@ -7,6 +7,7 @@ import (
 
 func (a *app) competitionCommands(root *cobra.Command) {
 	commands := group("competition", "比赛总调度、题目队列和自动提交")
+	commands.AddCommand(a.competitionRunCommand())
 	fields := []field{str("rules", true), number("concurrency"), number("max_workers"), number("challenge_timeout_seconds")}
 	start := a.leaf("start <PLATFORM>", "接收比赛规则并启动循环解题总调度", 1, 1, "none", func(c *cobra.Command, args []string) (any, error) {
 		body, err := a.body(c, fields)

@@ -65,7 +65,7 @@ func (a *app) strategyCommands(root *cobra.Command) {
 		}
 		return a.get(c, apiclient.Path("projects", p, "flags"))
 	}))
-	flags.AddCommand(a.graphWrite("capture", "引用事实保存 flag（重复值自动去重）", "flag", "POST", false, "", []field{str("value", true), alias("fact_id", "fact"), str("challenge_id", false)}, false))
+	flags.AddCommand(a.graphWrite("capture", "引用事实保存 flag / CTFy 答案（重复值自动去重）", "flag", "POST", false, "", []field{str("value", true), alias("fact_id", "fact"), str("challenge_id", false), str("question_id", false)}, false))
 	flags.AddCommand(a.leaf("begin <FLAG>", "先记录提交尝试；由外部适配器执行平台请求", 1, 1, "project", func(c *cobra.Command, args []string) (any, error) {
 		p, e := a.project(c, nil)
 		if e != nil {

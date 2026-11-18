@@ -119,9 +119,9 @@ docker load -i hotmouse-image.tar
 
 `HOTMOUSE_IMAGE` 对所有镜像类型生效，例如 `HOTMOUSE_IMAGE=hotmouse-tsec:v1 ./docker/build.sh tsec`。额外 Docker 参数仍会透传：`--target` 可覆盖默认构建阶段，`--tag` 可增加镜像标签。
 
-TSec 镜像启动工作台，在运行时接收 `BENCHMARK_BASE_URL` 和 `BENCHMARK_TOKEN`，通过 `hotmouse platform import` 导入题目。使用 Compose 时设置 `HOTMOUSE_IMAGE=hotmouse-tsec:latest`；平台配置和 VPN 访问要求见 [CTF 平台接入](../docs/ctf_platforms.md)。CTFy 镜像启动专用 Agent，平台负责下发任务，运行方式见 [CTFY.md](CTFY.md)。
+TSec 镜像默认启动无人值守参赛进程，接收 `BENCHMARK_BASE_URL`、`BENCHMARK_TOKEN` 和模型配置后，自动拉题、恢复实例、通过原有 Dispatcher / 多 Worker 解题、提交所有 flag 并回收靶机。无需服务登录或规则文件。运行环境已接入 VPN 时，使用 `docker/tsec.compose.yaml` 的宿主网络配置；完整步骤见 [TSEC.md](TSEC.md)。CTFy 镜像启动 TPCTF 整场参赛 Agent，自动拉题、接入 WireGuard 并提交答案；原单题托管模式可用 `./docker/build.sh ctfy-hosted` 构建。配置与启动命令见 [CTFY.md](CTFY.md)。
 
-TSec 整场比赛可挂载规则文件，并设置 `HOTMOUSE_COMPETITION_RULES_FILE` 为容器内路径，容器启动后总调度会自动管理全部题目。比赛默认采用 `HOTMOUSE_PROJECT_CONCURRENCY` 和 `HOTMOUSE_PROJECT_MAX_WORKERS`；`HOTMOUSE_COMPETITION_CONCURRENCY`（TSec 为 1..3）和 `HOTMOUSE_COMPETITION_MAX_WORKERS` 可分别覆盖比赛配置。`HOTMOUSE_COMPETITION_CHALLENGE_TIMEOUT` 默认 `20m`。启动入口恢复已有比赛时，也会更新其并发、每题 Worker 上限和总时限。也可使用 `hotmouse competition start tsec --rules-file ... --concurrency 2`；LLM 可由启动环境配置，完整示例见平台接入文档。
+TSec 参赛入口为 `hotmouse competition run tsec`。默认规则已包含无人值守要求，可通过 `HOTMOUSE_COMPETITION_RULES_FILE` 增补赛事规则。镜像默认同时处理 3 道题、每题最多 3 个执行 Worker，全局 Worker 池为 16；项目累计执行预算默认不限，每题实际时间上限为 `30m`，启动重试间隔为 `8s`。自动靶机探活默认关闭（`TSEC_TARGET_PROBE_ENABLED=0`），设置为 `1` 可开启。这些默认值都支持启动环境变量覆盖，完整变量表见 [TSEC.md](TSEC.md)。全部题目通关后自动退出，结果保存到 `/data/tsec-result.json`；保留数据卷重启会恢复原比赛，已完成的比赛不会重复解题。需要工作台入口时使用 `hotmouse:latest`，在“比赛”页面配置 TSec，或向其 autorun 服务调用 `hotmouse competition start tsec`。
 
 | 构建参数 | 默认值 | 用途 |
 | --- | --- | --- |

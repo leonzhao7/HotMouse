@@ -4,7 +4,9 @@ Local backend for HotMouse. It uses Go, Iris and SQLite. Each active project has
 
 The React workbench is in [frontend](../frontend/README.md). Start this backend, then run `npm ci` and `npm run dev` in `frontend/` and open `http://127.0.0.1:5173`. The frontend proxies both core and product API routes and supports browser registration/login.
 
-The command-line interface and examples are documented in [docs/cli.md](../docs/cli.md). The binary runs a service with `serve`; all business commands use its HTTP API. Running `hotmouse` without a subcommand prints help.
+The command-line interface and examples are documented in [docs/cli.md](../docs/cli.md). The binary runs a service with `serve`; service management and project commands use its HTTP API. `competition run tsec` runs an unattended participant locally, without a service or client login. Running `hotmouse` without a subcommand prints help.
+
+For unattended TSec participation, provide `BENCHMARK_BASE_URL`, `BENCHMARK_TOKEN` and the Pi model environment, then run `hotmouse competition run tsec --db ./data/tsec.db`. The runtime supplies the VPN network. This command uses the same Dispatcher, Worker pool, skills and shared memory, retries temporary startup failures, discovers new tasks and recovers interrupted duplicate-safe submissions. Automatic target analysis, TCP liveness monitoring and homepage preprocessing default to disabled; set `TSEC_TARGET_PROBE_ENABLED=1` to enable that background pipeline. It writes `tsec-result.json` and exits when the benchmark completes. No rules file or runtime input is required. See [TSec Docker participation](../docker/TSEC.md).
 
 Independent CTF platform adapters live in `internal/ctfplatform`. The first adapter supports TSec Benchmark challenge listing, instance delivery, paid hints, multi-flag submission and cleanup. Set `BENCHMARK_BASE_URL` and `BENCHMARK_TOKEN` in the service environment, then use `hotmouse platform import tsec CODE --use` and `hotmouse flag submit ID`. See [CTF platform integration](../docs/ctf_platforms.md) for configuration, API routes and task-isolated project bindings.
 

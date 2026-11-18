@@ -49,3 +49,24 @@ printf '%s\n' '{"type":"item.completed","item":{"type":"command_execution"}}' '{
 		t.Fatalf("response=%q usage=%+v", result.Response, result.Usage)
 	}
 }
+
+func TestHostedPiUsesGatewayEnvironmentReferenceAndNativeTools(t *testing.T) {
+	dir := t.TempDir()
+	args, err := hostedArgv(HostedAgent{Driver: "pi", Model: "zhipu-fixture", BaseURL: "https://session.example", API: "openai", WorkDir: dir, Environment: map[string]string{"LLM_API_KEY": "pk_must_not_persist"}}, "solve this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".hotmouse", "pi-agent", "models.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "pk_must_not_persist") || !strings.Contains(string(data), "openai-completions") || !strings.Contains(string(data), "https://session.example") {
+		t.Fatalf("unsafe gateway config: %s", data)
+	}
+	joined := strings.Join(args, " ")
+	for _, part := range []string{"--no-context-files", "--no-extensions", "read,write,edit,bash,grep,find,ls", "--provider hotmouse", "--model zhipu-fixture"} {
+		if !strings.Contains(joined, part) {
+			t.Errorf("missing %s", part)
+		}
+	}
+}

@@ -20,6 +20,23 @@ type targetMonitor struct {
 	done   chan struct{}
 }
 
+// Configure before starting the pool. Disabling also drains existing startup
+// tasks and monitors, while preserving their saved evidence for future runs.
+func (r *Runner) SetTargetProbesEnabled(enabled bool) {
+	r.probeMu.Lock()
+	r.targetProbesDisabled = !enabled
+	r.probeMu.Unlock()
+	if !enabled {
+		r.stopTargetMonitors()
+	}
+}
+
+func (r *Runner) targetProbesEnabled() bool {
+	r.probeMu.Lock()
+	defer r.probeMu.Unlock()
+	return !r.targetProbesDisabled
+}
+
 // The service supplies its lifetime even when execution is triggered by HTTP.
 func (r *Runner) SetLifecycleContext(ctx context.Context) {
 	r.probeMu.Lock()
@@ -92,6 +109,9 @@ func (r *Runner) ensureTargetProbe(ctx context.Context, project string) (bool, e
 }
 
 func (r *Runner) ensureTargetProbeWithMonitor(ctx, monitorParent context.Context, project string) (bool, error) {
+	if !r.targetProbesEnabled() {
+		return true, nil
+	}
 	state, err := r.DB.TargetProbe(ctx, project)
 	if err != nil {
 		return false, err
@@ -218,7 +238,7 @@ func (r *Runner) startTargetMonitor(parent context.Context, project string, stat
 func (r *Runner) startTargetMonitorWithContext(startupCtx, parent context.Context, project string, state core.TargetProbeState) {
 	r.probeMu.Lock()
 	defer r.probeMu.Unlock()
-	if startupCtx.Err() != nil || parent.Err() != nil {
+	if r.targetProbesDisabled || startupCtx.Err() != nil || parent.Err() != nil {
 		return
 	}
 	previous := r.targetMonitors[project]

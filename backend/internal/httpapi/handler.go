@@ -27,11 +27,13 @@ type Handler struct {
 	Competitions    *competition.Manager
 	Platforms       *ctfplatform.Registry
 	PlatformConfigs map[string]ctfplatform.Config
-	platformMu      sync.Mutex
-	DB              *core.DB
-	Runner          *worker.Runner
-	captchaMu       sync.Mutex
-	captchas        map[string]captchaChallenge
+	// Autonomous processes use their explicitly supplied task configuration.
+	PlatformOverrides map[string]ctfplatform.Config
+	platformMu        sync.Mutex
+	DB                *core.DB
+	Runner            *worker.Runner
+	captchaMu         sync.Mutex
+	captchas          map[string]captchaChallenge
 }
 
 type captchaChallenge struct {

@@ -12,13 +12,19 @@ import (
 	"time"
 )
 
-func TestPiReasoningEffortAppliesToAllPhases(t *testing.T) {
+func TestPiReasoningEffortAppliesToAllPhasesAndHostedAgents(t *testing.T) {
 	t.Setenv("HOTMOUSE_LLM_REASONING_EFFORT", "high")
-	for _, phase := range []string{"execute", "decide", "target_probe", "summary"} {
+	for _, phase := range []string{"execute", "decide", "target_probe", "summary", "hosted"} {
 		t.Run(phase, func(t *testing.T) {
 			dir := t.TempDir()
 			env := map[string]string{"PI_MODEL": "fixture", "PI_BASE_URL": "https://gateway.example/v1", "PI_API_KEY": "fixture-key", "PI_PROVIDER_API": "openai-completions"}
-			args, err := providerArgv(workerConfig{driver: "pi", env: env}, phase, "", dir, "fixture")
+			var args []string
+			var err error
+			if phase == "hosted" {
+				args, err = hostedArgv(HostedAgent{Driver: "pi", Model: "fixture", BaseURL: env["PI_BASE_URL"], API: env["PI_PROVIDER_API"], WorkDir: dir, Environment: map[string]string{"LLM_API_KEY": "fixture-key"}}, "fixture")
+			} else {
+				args, err = providerArgv(workerConfig{driver: "pi", env: env}, phase, "", dir, "fixture")
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

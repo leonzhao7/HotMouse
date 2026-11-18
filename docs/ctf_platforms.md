@@ -1,12 +1,26 @@
 # CTF 平台接入
 
-平台接入由独立的 Go 模块 `backend/internal/ctfplatform` 提供。第一版实现 TSec Benchmark 的五个接口，支持通过 HotMouse HTTP API 或 CLI 获取题目、启动容器、导入项目、获取提示、提交 flag 和关闭容器。TSec 原始协议见 [tsec_challenges_api.md](tsec_challenges_api.md)。
+## CTFy / TPCTF agent_play
+
+HotMouse 已注册 `ctfy` 平台适配器，对应 TPCTF 参赛接口中的 `agent_play` 令牌。Web 页面“比赛 → 配置平台”填写平台 API 根地址和令牌即可；服务启动前也可使用 `CTFY_BASE_URL`、`CTFY_TOKEN`，并在有多个可见赛道时用 `CTFY_COMPETITION_ID` 指定 `competition_id`。API 根地址格式为 `https://ctfy.example/api/v1`。比赛需已进入 running 阶段再从 HotMouse 启动调度。
+
+保存配置后，比赛页面会自动加载“题目列表”，可以查看题目名称、描述、分类、答题进度和当前靶机状态，并搜索或刷新题目；CTFy 实例状态每 15 秒自动更新。单题状态来自当前令牌可见的 `/instances` 列表。若该列表为空但 `/me` 报告队伍仍有运行中靶机，页面会显示队伍运行总数、将单题状态标为“待核实”并阻止自动启动，避免重复启动或误关已有靶机；此时需核对令牌所属队伍和实例读取权限。查看列表无需先启动比赛或启用自动调度。“已配置”表示凭据已保存，题目接口若返回未开赛、未报名、令牌无权访问或比赛编号错误，页面会显示对应原因和重试入口。CTFy 的“启动比赛”无需规则文件，直接按平台接口接管已启动靶机、启动其余题目、提交答案并关闭靶机。已经完成的题目不再加入队列。
+
+适配器使用以下生命周期：列出比赛并选择已报名赛道，列出题目，启动并轮询 `/instances` 至 `ready`，把 `entry_urls` / 服务地址和题面附件交给 Worker，按已保存的 `question_id` 调用 `/submissions`，完成后调用 `DELETE /instances/{instance_id}` 并等待状态变为 stopped。答案台账和实例 ID 会随项目保存，支持服务重启后继续提交和清理。Bearer 令牌只添加到平台域名请求，不会传给 Worker 或跨域下载地址。
+
+HotMouse 工作台适配器会将 `engagement` 实例的 VPN 配置地址提供给项目，但不会在工作台进程内建立隧道；这类题目需要先让 HotMouse Worker 所在主机接入对应 VPN。需要由参赛容器自动配置 WireGuard 时，使用下方独立的 CTFy Agent 镜像。
+
+需要直接运行完整的多问题智能体时，使用 `ctfy-agent` 参赛镜像。它还实现题目详情、WireGuard 配置下载、问题解锁后的刷新、错误次数保护、未知提交结果不重放、积分榜和可选自动出题接口；配置示例见 [docker/CTFY.md](../docker/CTFY.md)。
+
+平台接入由独立的 Go 模块 `backend/internal/ctfplatform` 提供。当前实现 TSec Benchmark 和 CTFy / TPCTF `agent_play`，支持通过 HotMouse HTTP API 或 CLI 获取题目、启动靶机、导入项目、提交 flag 和关闭靶机。TSec 原始协议见 [tsec-api.md](tsec-api.md)。
+
+TSec 镜像默认通过 `hotmouse competition run tsec` 自动参赛，启动后不需要工作台登录、规则上传或人工操作。它复用以下 Dispatcher / Worker 和提交台账，自动等待平台恢复、发现新题、补交未知结果并在结束后退出。运行环境已接入 VPN 时使用宿主网络，构建、模型配置和启动步骤见 [docker/TSEC.md](../docker/TSEC.md)。
 
 支持比赛总调度和单题操作两种入口。比赛总调度接收平台提供的规则提示词，解读规则、管理整场题目队列，并自动提交 flag、释放容器和开始下一题。每道题继续使用现有 Dispatcher / Worker 解题机制。
 
 ## 比赛总调度入口
 
-Web 入口：以 `--autorun` 启动后端，并使前端代理指向同一后端；登录后打开侧栏“比赛”，选择 TSec，在“配置平台”中保存平台地址和任务令牌，上传 `rules.md` 或粘贴规则，再设置题目并发、每题 Worker 上限和超时并启动。页面每 5 秒更新比赛与题目队列，可调整并发、停止比赛，也可进入题目项目查看步骤和 flag。服务数据库会保存任务令牌，Web 响应只返回是否已设置；保存时数据库及 SQLite WAL/SHM 文件会限制为当前用户可读写。已有比赛运行时不能更换任务凭据。当前仅接入 TSec，其他平台需先实现适配器。
+Web 入口：以 `--autorun` 启动后端，并使前端代理指向同一后端；登录后打开侧栏“比赛”。选择 TSec 时，在“配置平台”中保存平台地址和任务令牌，上传 `rules.md` 或粘贴规则，再设置题目并发、每题 Worker 上限和超时并启动。选择 CTFy 时，保存平台 API 地址、`agent_play` 令牌和比赛编号后直接点击“启动比赛”，使用系统默认的并发、Worker 上限和超时。页面每 5 秒更新比赛与题目队列，可调整并发、停止比赛，也可进入题目项目查看步骤和 flag。服务数据库会保存任务令牌，Web 响应只返回是否已设置；保存时数据库及 SQLite WAL/SHM 文件会限制为当前用户可读写。已有比赛运行时不能更换任务凭据。
 
 例如已有 `./hotmouse serve --db ./data/hotmouse.db --competition-rules-file ./rules.md` 启动的比赛，更新后端和前端后，保持前端代理到同一服务、同一数据库，即可在“比赛”中看到原有运行记录。Web 启动新比赛只要求后端以 `--autorun` 运行；无需在启动命令中指定规则文件。平台配置可通过 Web 保存，也可在启动后端前设置 `BENCHMARK_BASE_URL`、`BENCHMARK_TOKEN`；Web 保存的配置优先于环境变量。
 
@@ -55,7 +69,7 @@ queued → starting → running → closing → succeeded / failed
 
 `competition_runs / competition_items` 保存规则、配置、项目关联、队列状态和时间戳；`--autorun` 服务重启后恢复未结束的队列，复用已启动的项目和容器。同一任务只允许一个活跃比赛。规则文件入口是幂等的：同一任务、同一规则已有运行时直接使用已有记录，包括用户已停止或已完成的比赛；要主动开始新的运行，使用 `competition start`。恢复时保留已保存的并发设置；运行中用 `competition concurrency` 调整。
 
-环境变量入口适用于 TSec 镜像：
+工作台服务也支持规则文件环境变量入口：
 
 ```bash
 docker run --rm -p 127.0.0.1:9981:9981 \
@@ -65,7 +79,7 @@ docker run --rm -p 127.0.0.1:9981:9981 \
   -e HOTMOUSE_COMPETITION_RULES_FILE=/rules.md \
   -e HOTMOUSE_COMPETITION_CONCURRENCY=2 \
   -e HOTMOUSE_COMPETITION_CHALLENGE_TIMEOUT=20m \
-  hotmouse-tsec:latest
+  hotmouse:latest
 ```
 
 `HOTMOUSE_COMPETITION_PLATFORM` 默认 `tsec`，`HOTMOUSE_COMPETITION_MAX_WORKERS` 默认 1。Compose 也透传这些变量，规则文件路径须是容器内可读路径。保存的模型配置放在数据卷中，运行容器仍须能够通过 VPN 访问靶场。
@@ -134,7 +148,7 @@ printf '%s' 'flag{example}' | \
 | 其他明确的 4xx 拒绝 | `rejected`，API 保留平台错误 |
 | 网络中断、无法解析的响应、5xx | `submission_unknown` |
 
-已经 accepted、pending 或 unknown 的 flag 会阻止重新开始提交。未知结果需先查询平台进度并使用现有 `flag resolve` 台账命令核对；TSec 列表只提供正确 flag 数，无法凭该数字判断某个具体 flag 是否通过。所有写操作均不自动重试。
+工作台的显式 `flag submit` 会阻止重新提交 accepted、pending 或 unknown 的 flag，未知结果可通过 `flag resolve` 核对。TSec 无人值守入口先查询平台作答进度；若题目未完成，则在 5 秒间隔后使用其重复提交不重复计分的 API 补交 unknown flag，并保留原尝试记录。进程重启后将未保存判定的 pending 尝试恢复为 unknown。明确错误的答案不会自动重复提交，其他平台的未知结果保持各自的提交约束。
 
 TSec 同时最多允许 3 道活跃题目，上限由平台强制执行，`invalid_state` 和 `resource_unavailable` 会原样保留。`pending / available / stop_pending / stopped` 状态全部保留，只有 `available` 的列表条目携带地址。导入项目失败时会尝试关闭本次新启动的容器；已有容器不在该补偿操作范围内。
 
@@ -145,6 +159,12 @@ TSec 同时最多允许 3 道活跃题目，上限由平台强制执行，`inval
 | 方法 | 路径 | 参数 |
 | --- | --- | --- |
 | GET | `/api/platforms` | 返回平台能力及 configured 状态 |
+| GET | `/api/platforms/ctfy/config` | 查看 CTFy 平台地址及令牌是否已设置 |
+| PUT | `/api/platforms/ctfy/config` | JSON：`{"base_url":"https://…/api/v1","token":"pf_…","competition_id":"可选赛道编号"}` |
+| GET | `/api/platforms/ctfy/challenges` | 通过 `/competitions/{competition_id}/challenges` 获取题目，并通过 `/instances` 获取当前令牌可见的实例状态 |
+| POST | `/api/platforms/ctfy/start?challenge_id=ID` | 启动并轮询 `/instances` 到 ready |
+| POST | `/api/platforms/ctfy/close?competition_id=C&instance_id=I` | 关闭对应 CTFy 靶机实例；一般通过比赛调度自动处理 |
+| POST | `/api/platforms/ctfy/submit` | JSON：`{"challenge_id":"ID","question_id":"Q","instance_id":"I","competition_id":"C","flag":"..."}` |
 | GET | `/api/platforms/tsec/config` | 查看脱敏的平台配置 |
 | PUT | `/api/platforms/tsec/config` | 保存平台地址及任务令牌 |
 | GET | `/api/competitions/status` | 返回比赛调度是否已启用 |

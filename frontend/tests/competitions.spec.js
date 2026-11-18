@@ -78,6 +78,9 @@ test("TSec configuration, rules upload, competition progress and controls", asyn
   await page.route("**/api/competitions/status", (route) =>
     route.fulfill({ json: { scheduler_enabled: true } }),
   );
+  await page.route("**/api/platforms/tsec/challenges", (route) =>
+    route.fulfill({ json: [] }),
+  );
   await page.route("**/api/platforms/tsec/runs**", async (route) => {
     const url = new URL(route.request().url());
     if (route.request().method() === "GET")
@@ -127,6 +130,7 @@ test("TSec configuration, rules upload, competition progress and controls", asyn
   await expect(
     page.getByRole("heading", { name: "比赛", exact: true }),
   ).toBeVisible();
+  await page.getByLabel("平台", { exact: true }).selectOption("tsec");
   await expect(page.getByLabel("平台", { exact: true })).toHaveValue("tsec");
   await expect(
     page.getByText("competition_001", { exact: true }),
@@ -285,5 +289,299 @@ test("TSec configuration, rules upload, competition progress and controls", asyn
   await expect(page.getByRole("row").filter({ hasText: "e1-01" })).toHaveCount(
     0,
   );
+  expect(errors).toEqual([]);
+});
+
+test("CTFy loads challenges after configuration and reports platform errors before a run", async ({
+  page,
+}) => {
+  const errors = [];
+  const writes = [];
+  let requests = 0;
+  let failure = null;
+  let challenges = [
+    {
+      id: "CTFY-web-001",
+      title: "Document vault",
+      description:
+        "Find the vault secret.\n<script>plain challenge text</script>",
+      difficulty: "medium",
+      flag_count: 2,
+      correct_flag_count: 1,
+      completed: false,
+      instance_status: "ready",
+      metadata: { category: "web" },
+    },
+    {
+      id: "CTFY-crypto-002",
+      title: "Cipher notes",
+      description: "Recover the message",
+      flag_count: 1,
+      correct_flag_count: 1,
+      completed: true,
+      instance_status: "ready",
+      metadata: { category: "crypto" },
+    },
+  ];
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST" &&
+      new URL(request.url()).pathname.startsWith("/api/platforms/ctfy/")
+    )
+      writes.push(request.url());
+  });
+  await page.route("**/api/competitions/status", (route) =>
+    route.fulfill({ json: { scheduler_enabled: false } }),
+  );
+  await page.route("**/api/platforms/tsec/challenges", (route) =>
+    route.fulfill({ json: [] }),
+  );
+  await page.route("**/api/platforms/ctfy/challenges", (route) => {
+    requests++;
+    return route.fulfill(
+      failure
+        ? {
+            status: failure.status,
+            json: { code: failure.code, message: "upstream error" },
+          }
+        : { json: challenges },
+    );
+  });
+  await login(page);
+  await page.goto("/#/competitions?platform=ctfy");
+  await expect(page.getByLabel("平台", { exact: true })).toHaveValue("ctfy");
+  await expect(page.getByText("待配置", { exact: true })).toBeVisible();
+  expect(requests).toBe(0);
+  await page.getByRole("button", { name: "配置平台", exact: true }).click();
+  let dialog = page.getByRole("dialog", { name: "配置平台 · CTFy / TPCTF" });
+  await dialog.getByLabel("平台地址").fill("http://127.0.0.1:31337/api/v1");
+  await dialog
+    .getByLabel("agent_play 参赛令牌")
+    .fill("browser-test-ctfy-token");
+  await dialog.getByLabel("competition_id（可选）").fill("ctfy-browser-001");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const list = page.locator(".panel").filter({
+    has: page.getByRole("heading", { name: "题目列表", exact: true }),
+  });
+  await expect(list.getByText("共 2 道题", { exact: true })).toBeVisible();
+  await expect(
+    list.getByText("运行中靶机 2 个", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "启动比赛", exact: true }),
+  ).toBeDisabled();
+  await expect(page.getByText("还没有比赛记录", { exact: true })).toBeVisible();
+  const webRow = list.getByRole("row").filter({ hasText: "CTFY-web-001" });
+  await expect(
+    webRow.getByText("Document vault", { exact: true }),
+  ).toBeVisible();
+  await expect(webRow.getByText("部分完成", { exact: true })).toBeVisible();
+  await expect(webRow.getByText("运行中", { exact: true })).toBeVisible();
+  await expect(list.getByText("运行中", { exact: true })).toHaveCount(2);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: "test-results/ctfy-existing-instances-mobile.png",
+    fullPage: true,
+    animations: "disabled",
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await expect(webRow.getByText("1 / 2", { exact: true })).toBeVisible();
+  await webRow.locator("summary").click();
+  await expect(webRow.locator("pre")).toHaveText(challenges[0].description);
+  await expect(webRow.locator("script")).toHaveCount(0);
+  const search = list.getByPlaceholder("搜索题目编号、名称、描述或分类");
+  await search.fill("crypto");
+  await expect(webRow).toHaveCount(0);
+  await expect(list.getByText("Cipher notes", { exact: true })).toBeVisible();
+  await search.fill("");
+
+  const visibleChallenges = challenges;
+  challenges = visibleChallenges.map((challenge) => ({
+    ...challenge,
+    instance_status: "unknown",
+    metadata: {
+      ...challenge.metadata,
+      instance_visibility: "incomplete",
+      team_running_instances: 2,
+    },
+  }));
+  await list.getByRole("button", { name: "刷新题目", exact: true }).click();
+  await expect(
+    list.getByText("运行中靶机 2 个", { exact: true }),
+  ).toBeVisible();
+  await expect(list.getByText("待核实", { exact: true })).toHaveCount(2);
+  await expect(list.locator(".notice.amber")).toContainText(
+    "实例列表没有返回详情",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "test-results/ctfy-unlisted-instances-mobile.png",
+    fullPage: true,
+    animations: "disabled",
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  challenges = visibleChallenges;
+  await list.getByRole("button", { name: "刷新题目", exact: true }).click();
+  await expect(list.getByText("待核实", { exact: true })).toHaveCount(0);
+
+  const config = await page.request.get("/api/platforms/ctfy/config");
+  expect(await config.json()).toMatchObject({
+    base_url: "http://127.0.0.1:31337/api/v1",
+    token_set: true,
+    competition_id: "ctfy-browser-001",
+  });
+  expect(await config.text()).not.toContain("browser-test-ctfy-token");
+  failure = { status: 403, code: "competition_not_started" };
+  await list.getByRole("button", { name: "刷新题目", exact: true }).click();
+  await expect(list.getByRole("alert")).toContainText("比赛尚未开赛");
+  await expect(webRow).toHaveCount(0);
+  failure = null;
+  challenges = [];
+  await list.getByRole("button", { name: "重试", exact: true }).click();
+  await expect(
+    list.getByText("当前没有可解答的题目", { exact: true }),
+  ).toBeVisible();
+  await expect(list.getByRole("alert")).toHaveCount(0);
+
+  failure = { status: 401, code: "token_revoked" };
+  await list.getByRole("button", { name: "刷新题目", exact: true }).click();
+  await expect(list.getByRole("alert")).toContainText("平台令牌认证失败");
+  await expect(
+    page.getByRole("heading", { name: "比赛", exact: true }),
+  ).toBeVisible();
+  failure = null;
+  challenges = [
+    {
+      id: "CTFY-next-003",
+      title: "Next competition",
+      flag_count: 1,
+      correct_flag_count: 0,
+      completed: false,
+      metadata: { category: "web" },
+    },
+  ];
+  const beforeSave = requests;
+  await page.getByRole("button", { name: "配置平台", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "配置平台 · CTFy / TPCTF" });
+  await expect(dialog.getByLabel("agent_play 参赛令牌")).toHaveValue("");
+  await expect(dialog.getByLabel("competition_id（可选）")).toHaveValue(
+    "ctfy-browser-001",
+  );
+  await dialog.getByLabel("competition_id（可选）").fill("ctfy-browser-002");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    list.getByText("Next competition", { exact: true }),
+  ).toBeVisible();
+  expect(requests).toBeGreaterThan(beforeSave);
+  expect(
+    (await (await page.request.get("/api/platforms/ctfy/config")).json())
+      .competition_id,
+  ).toBe("ctfy-browser-002");
+
+  await page.getByLabel("平台", { exact: true }).selectOption("tsec");
+  await expect(list.getByText("Next competition", { exact: true })).toHaveCount(
+    0,
+  );
+  await page.getByLabel("平台", { exact: true }).selectOption("ctfy");
+  await expect(
+    list.getByText("Next competition", { exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(
+    list.getByText("Next competition", { exact: true }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "test-results/ctfy-challenges-mobile.png",
+    fullPage: true,
+    animations: "disabled",
+  });
+  expect(writes).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("CTFy starts directly with no rules modal or planning UI", async ({
+  page,
+}) => {
+  const errors = [];
+  let startBody = null;
+  const runs = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route("**/api/competitions/status", (route) =>
+    route.fulfill({ json: { scheduler_enabled: true } }),
+  );
+  await page.route("**/api/platforms/ctfy/challenges", (route) =>
+    route.fulfill({
+      json: [
+        {
+          id: "running-a",
+          title: "Already running",
+          instance_status: "ready",
+          flag_count: 1,
+          correct_flag_count: 0,
+        },
+      ],
+    }),
+  );
+  await page.route("**/api/platforms/ctfy/runs**", (route) => {
+    if (route.request().method() === "GET")
+      return route.fulfill({ json: runs });
+    if (route.request().method() !== "POST")
+      return route.fulfill({ status: 405 });
+    startBody = route.request().postDataJSON();
+    const run = {
+      id: "competition_ctfy_direct",
+      platform: "ctfy",
+      status: "running",
+      rules: "",
+      rules_summary: "",
+      concurrency: 1,
+      max_workers: 1,
+      challenge_timeout_seconds: 1200,
+      created_at: new Date().toISOString(),
+      finished_at: null,
+      items: [{ challenge_id: "running-a", ordinal: 0, status: "queued" }],
+    };
+    runs.push(run);
+    return route.fulfill({ json: run });
+  });
+  await login(page);
+  const config = await page.request.put("/api/platforms/ctfy/config", {
+    data: {
+      base_url: "http://127.0.0.1:31337/api/v1",
+      token: "browser-test-ctfy-token",
+      competition_id: "ctfy-browser-direct",
+    },
+  });
+  expect(config.ok()).toBe(true);
+  await page.goto("/#/competitions?platform=ctfy");
+  await expect(
+    page.getByRole("button", { name: "启动比赛", exact: true }),
+  ).toBeEnabled();
+  await expect(page.getByText("还没有比赛记录", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "启动比赛", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "启动比赛" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "比赛进度" })).toBeVisible();
+  await expect(page.locator(".competition-rules")).toHaveCount(0);
+  await expect(
+    page
+      .locator(".competition-detail")
+      .getByRole("row")
+      .filter({ hasText: "running-a" }),
+  ).toHaveCount(1);
+  expect(startBody).toEqual({});
   expect(errors).toEqual([]);
 });

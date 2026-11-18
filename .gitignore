@@ -18,6 +18,9 @@ coverage.*
 *.coverprofile
 profile.cov
 
+# Python bytecode cache
+__pycache__/
+
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
@@ -47,3 +50,8 @@ backend/data/
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# TPCTF gateway and participant credentials
+docker/.ctfy.env
+docker/.tsec.env
+docker/tsec.env

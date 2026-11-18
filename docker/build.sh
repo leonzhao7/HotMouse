@@ -4,18 +4,19 @@ set -Eeuo pipefail
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 image_kind=workbench
 case "${1:-}" in
-  workbench|tsec|ctfy) image_kind=$1; shift ;;
+  workbench|tsec|ctfy|ctfy-hosted) image_kind=$1; shift ;;
   ''|-*) ;;
-  *) printf '错误：未知镜像类型 %s，请使用 workbench、tsec 或 ctfy。\n' "$1" >&2; exit 2 ;;
+  *) printf '错误：未知镜像类型 %s，请使用 workbench、tsec、ctfy 或 ctfy-hosted。\n' "$1" >&2; exit 2 ;;
 esac
 if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
   cat <<'HELP'
-用法：./docker/build.sh [workbench|tsec|ctfy] [docker build 参数...]
+用法：./docker/build.sh [workbench|tsec|ctfy|ctfy-hosted] [docker build 参数...]
 
 单独构建指定镜像，省略类型时构建工作台。
   workbench  工作台及 Agent CLI，默认 hotmouse:latest
-  tsec       TSec 接入工作台，默认 hotmouse-tsec:latest
-  ctfy       CTFy 专用 Agent，默认 hotmouse-ctfy:latest
+  tsec       TSec 整场无人值守参赛（使用运行环境 VPN），默认 hotmouse-tsec:latest
+  ctfy       TPCTF 整场自动参赛 Agent（含 WireGuard），默认 hotmouse-ctfy:latest
+  ctfy-hosted  CTFY-0001 托管单题 Agent，默认 hotmouse-ctfy-hosted:latest
 HOTMOUSE_IMAGE 可覆盖当前镜像名称；额外参数原样传给 docker build。
 可从任意目录执行。需要 Docker Engine 和 BuildKit。
 
@@ -35,6 +36,7 @@ case "$image_kind" in
   workbench) build_target=default; default_image=hotmouse:latest ;;
   tsec) build_target=tsec; default_image=hotmouse-tsec:latest ;;
   ctfy) build_target=ctfy-agent; default_image=hotmouse-ctfy:latest ;;
+  ctfy-hosted) build_target=ctfy-hosted; default_image=hotmouse-ctfy-hosted:latest ;;
 esac
 command -v docker >/dev/null 2>&1 || { printf '错误：需要 Docker。\n' >&2; exit 1; }
 # Go expects uppercase proxies; apt uses lowercase. Forward existing proxy

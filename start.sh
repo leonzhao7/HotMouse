@@ -2,6 +2,11 @@
 set -Eeuo pipefail
 set +m
 
+export http_proxy=
+export https_proxy=
+export ALL_PROXY=
+
+
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 mode=dev
 usage() {

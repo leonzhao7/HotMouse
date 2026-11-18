@@ -9,8 +9,10 @@ import {
 } from "./api.js";
 
 const originalFetch = globalThis.fetch;
+const originalDispatchEvent = globalThis.dispatchEvent;
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  globalThis.dispatchEvent = originalDispatchEvent;
 });
 
 test("Worker PUT preserves configuration and secrets while removing deleted keys", () => {
@@ -130,4 +132,35 @@ test("API distinguishes service failure, JSON errors and empty responses", async
   assert.equal(await api("/projects", { method: "DELETE" }), null);
   globalThis.fetch = async () => new Response("<html>wrong proxy</html>");
   await assert.rejects(api("/projects"), /无效的 JSON/);
+});
+
+test("Platform token failures preserve the local session while session failures require login", async () => {
+  const events = [];
+  globalThis.dispatchEvent = (event) => events.push(event.type);
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        code: "token_revoked",
+        message: "platform token expired",
+      }),
+      { status: 401 },
+    );
+  await assert.rejects(
+    api("/api/platforms/ctfy/challenges"),
+    (error) => error.status === 401 && error.payload.code === "token_revoked",
+  );
+  assert.deepEqual(events, []);
+
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ detail: "authentication required" }), {
+      status: 401,
+    });
+  await assert.rejects(api("/api/platforms/ctfy/challenges"), /authentication/);
+  await assert.rejects(api("/projects"), /authentication/);
+  assert.deepEqual(events, ["hotmouse:unauthorized", "hotmouse:unauthorized"]);
+  await assert.rejects(
+    api("/api/auth/me", { session: false }),
+    /authentication/,
+  );
+  assert.equal(events.length, 2);
 });

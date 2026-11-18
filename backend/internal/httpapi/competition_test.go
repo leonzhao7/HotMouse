@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"hotmouse/backend/internal/competition"
 	"hotmouse/backend/internal/core"
+	"hotmouse/backend/internal/ctfplatform"
 )
 
 func TestCompetitionTSecPendingRecoveryAndQueueProgress(t *testing.T) {
@@ -245,5 +248,100 @@ func TestCompetitionTSecPendingRecoveryAndQueueProgress(t *testing.T) {
 	}
 	if submits["one"] != 1 || submits["two"] != 1 || submits["three"] != 1 {
 		t.Errorf("unexpected submissions: %v", submits)
+	}
+}
+
+func TestCTFyWebStartNeedsNoRulesAndPrioritizesExistingInstances(t *testing.T) {
+	t.Setenv("HOTMOUSE_AUTH_REQUIRED", "0")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer pf_play" {
+			t.Errorf("missing CTFy token")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/competitions":
+			fmt.Fprint(w, `{"items":[{"id":"event","phase":"running","is_registered":true,"max_instances_per_team_effective":2}],"total":1}`)
+		case "GET /api/v1/competitions/event/challenges":
+			fmt.Fprint(w, `{"items":[{"id":"new","name":"New challenge"},{"id":"solved","my_team_fully_solved":true},{"id":"live-two","name":"Running two"},{"id":"live-one","name":"Running one"}],"total":4}`)
+		case "GET /api/v1/instances":
+			if r.URL.Query().Get("competition_id") != "event" {
+				t.Errorf("wrong competition for instance list: %s", r.URL)
+			}
+			fmt.Fprint(w, `{"items":[{"id":"i2","competition_id":"event","challenge_id":"live-two","status":"ready"},{"id":"i1","competition_id":"event","challenge_id":"live-one","status":"ready"}],"total":2}`)
+		default:
+			t.Errorf("unexpected CTFy request %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("CTFY_BASE_URL", server.URL+"/api/v1")
+	t.Setenv("CTFY_TOKEN", "pf_play")
+	t.Setenv("CTFY_COMPETITION_ID", "event")
+	_, h, request := platformWebHarness(t, filepath.Join(t.TempDir(), "ctfy.db"))
+	planCalls := 0
+	h.Competitions.Backend.Plan = func(context.Context, core.CompetitionRun, []ctfplatform.Challenge) (competition.Plan, error) {
+		planCalls++
+		return competition.Plan{}, fmt.Errorf("CTFy must not interpret rules")
+	}
+	h.Competitions.Backend.Import = func(context.Context, core.CompetitionRun, string) (string, error) {
+		return "", fmt.Errorf("hold project creation in this start test")
+	}
+	h.Competitions.Interval = time.Hour
+	ctx, cancel := context.WithCancel(t.Context())
+	done := h.Competitions.Start(ctx)
+	t.Cleanup(func() { cancel(); <-done })
+	response := request("GET", "/api/platforms/ctfy/challenges", "")
+	if response.Code != 200 {
+		t.Fatalf("CTFy challenge list: %d %s", response.Code, response.Body)
+	}
+	var rows []ctfplatform.Challenge
+	if err := json.Unmarshal(response.Body.Bytes(), &rows); err != nil || len(rows) != 4 || rows[2].InstanceStatus != "ready" || rows[3].InstanceStatus != "ready" {
+		t.Fatalf("existing instances not exposed: %+v %v", rows, err)
+	}
+	response = request("POST", "/api/platforms/ctfy/runs", `{}`)
+	var run core.CompetitionRun
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &run) != nil {
+		t.Fatalf("CTFy start without rules: %d %s", response.Code, response.Body)
+	}
+	if run.Status != "running" || run.Rules != "" || run.Concurrency > 2 || len(run.Items) != 3 || planCalls != 0 {
+		t.Fatalf("CTFy should start without planning and skip solved challenges: %+v, plans=%d", run, planCalls)
+	}
+	for index, want := range []string{"live-two", "live-one", "new"} {
+		if run.Items[index].ChallengeID != want {
+			t.Fatalf("CTFy challenge %d: got %s, want %s", index, run.Items[index].ChallengeID, want)
+		}
+	}
+}
+
+func TestCTFyStartRejectsUnlistedRunningTeamInstances(t *testing.T) {
+	t.Setenv("HOTMOUSE_AUTH_REQUIRED", "0")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/competitions":
+			fmt.Fprint(w, `{"items":[{"id":"event","phase":"running","is_registered":true,"max_instances_per_team_effective":3}],"total":1}`)
+		case "GET /api/v1/competitions/event/challenges":
+			fmt.Fprint(w, `{"items":[{"id":"one","name":"One"}],"total":1}`)
+		case "GET /api/v1/instances":
+			fmt.Fprint(w, `{"items":[],"total":0}`)
+		case "GET /api/v1/me":
+			fmt.Fprint(w, `{"competition_teams":[{"competition_id":"event","running_instances":2}]}`)
+		default:
+			t.Errorf("unexpected platform request: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("CTFY_BASE_URL", server.URL+"/api/v1")
+	t.Setenv("CTFY_TOKEN", "pf_play")
+	t.Setenv("CTFY_COMPETITION_ID", "event")
+	_, h, request := platformWebHarness(t, filepath.Join(t.TempDir(), "ctfy-unlisted.db"))
+	h.Competitions.Interval = time.Hour
+	ctx, cancel := context.WithCancel(t.Context())
+	done := h.Competitions.Start(ctx)
+	t.Cleanup(func() { cancel(); <-done })
+	response := request("POST", "/api/platforms/ctfy/runs", `{}`)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"code":"instance_list_incomplete"`) {
+		t.Fatalf("start should refuse invisible running instances: %d %s", response.Code, response.Body.String())
 	}
 }

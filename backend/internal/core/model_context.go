@@ -34,6 +34,7 @@ type modelStep struct {
 type modelFlag struct {
 	ID           int64  `yaml:"id"`
 	ChallengeID  string `yaml:"challenge_id"`
+	QuestionID   string `yaml:"question_id,omitempty"`
 	Status       string `yaml:"status"`
 	FactID       string `yaml:"fact_id"`
 	LastResponse string `yaml:"last_platform_response,omitempty"`
@@ -275,7 +276,7 @@ func (d *DB) ModelContext(ctx context.Context, project, phase, stepID string) (s
 		return "", err
 	}
 	for _, flag := range flags {
-		view := modelFlag{ID: flag.ID, ChallengeID: flag.ChallengeID, Status: flag.Status, FactID: flag.FactID}
+		view := modelFlag{ID: flag.ID, ChallengeID: flag.ChallengeID, QuestionID: flag.QuestionID, Status: flag.Status, FactID: flag.FactID}
 		if len(flag.Attempts) > 0 {
 			view.LastResponse = brief(flag.Attempts[len(flag.Attempts)-1].Response, 1000)
 		}

@@ -190,7 +190,7 @@ func (a *app) prepare(c *cobra.Command, _ []string) error {
 		}
 	}
 	if c.Annotations["local"] == "true" {
-		return a.prepareKnowledge(c)
+		return a.prepareLocal(c)
 	}
 	path := a.configPath
 	if path == "" {

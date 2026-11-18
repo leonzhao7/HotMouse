@@ -70,6 +70,7 @@ RUN --mount=type=cache,id=hotmouse-apt-lists,target=/var/lib/apt/lists,sharing=l
 
 # Bookworm has no radare2 package. Use a verified upstream release rather than
 # mixing Debian distributions; the package supplies both radare2 and r2.
+ARG RADARE2_DOWNLOAD_BASE_URL=https://github.com/radareorg/radare2/releases/download
 RUN --mount=type=cache,id=hotmouse-apt-lists,target=/var/lib/apt/lists,sharing=locked \
     --mount=type=cache,id=hotmouse-apt-cache,target=/var/cache/apt,sharing=locked \
     radare2_version=6.2.6 \
@@ -81,7 +82,8 @@ RUN --mount=type=cache,id=hotmouse-apt-lists,target=/var/lib/apt/lists,sharing=l
          *) printf 'No pinned radare2 package for %s\n' "$radare2_arch" >&2; exit 1 ;; \
        esac \
     && curl --fail --silent --show-error --location --retry 3 --connect-timeout 30 \
-       "https://github.com/radareorg/radare2/releases/download/${radare2_version}/radare2_${radare2_version}_${radare2_arch}.deb" \
+       --max-time 900 --speed-limit 1024 --speed-time 30 \
+       "${RADARE2_DOWNLOAD_BASE_URL}/${radare2_version}/radare2_${radare2_version}_${radare2_arch}.deb" \
        -o /tmp/hotmouse-radare2.deb \
     && printf '%s  %s\n' "$radare2_sha256" /tmp/hotmouse-radare2.deb | sha256sum --check - \
     && apt-get -o Acquire::Retries=3 install -y --no-install-recommends /tmp/hotmouse-radare2.deb \
@@ -167,20 +169,52 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl --noproxy '*' --fail --silent --show-error --max-time 3 "http://127.0.0.1:${PORT}/healthz" >/dev/null || exit 1
 ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/hotmouse-entrypoint"]
 
-# TSec uses the workbench platform adapter and project/flag ledger. Supply
-# BENCHMARK_BASE_URL and BENCHMARK_TOKEN at runtime, after connecting the VPN.
+# TSec runs a whole benchmark autonomously through the workbench's Dispatcher,
+# Worker pool and flag ledger. Its host network already provides the VPN.
 FROM runtime AS tsec
 LABEL org.opencontainers.image.title="HotMouse TSec" \
-      org.opencontainers.image.description="HotMouse workbench with TSec Benchmark platform integration"
+      org.opencontainers.image.description="Autonomous TSec Benchmark participant with HotMouse Dispatcher and Agent Workers"
+COPY --chmod=755 docker/tsec-entrypoint.sh /usr/local/bin/tsec-entrypoint
+ENV HOTMOUSE_LLM_BASE_URL=http://127.0.0.1:8000/v1 \
+    HOTMOUSE_LLM_API=openai \
+    TSEC_VPN_MODE=external \
+    TSEC_NETWORK_CHECK_URL="" \
+    TSEC_TARGET_PROBE_ENABLED=0 \
+    HOTMOUSE_COMPETITION_CONCURRENCY=3 \
+    HOTMOUSE_COMPETITION_MAX_WORKERS=3 \
+    HOTMOUSE_PROJECT_CONCURRENCY=3 \
+    HOTMOUSE_PROJECT_MAX_WORKERS=3 \
+    HOTMOUSE_WORKER_COUNT=16 \
+    HOTMOUSE_PROJECT_BUDGET_SECONDS=0 \
+    HOTMOUSE_COMPETITION_CHALLENGE_TIMEOUT=30m \
+    TSEC_RETRY_INTERVAL=8s \
+    TSEC_SHUTDOWN_TIMEOUT=30s \
+    TSEC_RESULT_FILE=/data/tsec-result.json \
+    HOTMOUSE_LOG_LEVEL=info \
+    HOTMOUSE_LOG_ENV=0
+HEALTHCHECK NONE
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/tsec-entrypoint"]
 VOLUME ["/data", "/home/node"]
 
 # CTFy starts the container in /ctfy/work and gives it a briefing there. This
 # target keeps HotMouse's offline CTF knowledge and native CLI tools, but runs
 # one bounded platform task instead of starting the workbench service.
-FROM runtime AS ctfy-agent
+FROM runtime AS ctfy-hosted
 COPY --from=backend-build /out/ctfy-agent /usr/local/bin/ctfy-agent
 HEALTHCHECK NONE
 ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/ctfy-agent"]
+
+# TPCTF participant mode owns the WireGuard tunnel on the team's VPS.
+FROM ctfy-hosted AS ctfy-agent
+USER root
+RUN --mount=type=cache,id=hotmouse-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+    --mount=type=cache,id=hotmouse-apt-cache,target=/var/cache/apt,sharing=locked \
+    apt-get -o Acquire::Retries=3 update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+       iproute2 iptables ncat openresolv wireguard-tools wireguard-go
+COPY --chmod=755 docker/ctfy-entrypoint.sh /usr/local/bin/ctfy-entrypoint
+ENV HOTMOUSE_LOG_LEVEL=info HOTMOUSE_LOG_ENV=0
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/ctfy-entrypoint"]
 
 # Keep the historical workbench image as the default docker build target.
 FROM runtime AS default

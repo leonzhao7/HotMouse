@@ -62,20 +62,40 @@ async function request(action) {
   try {
     return await action();
   } catch (error) {
-    const messages = {
-      platform_not_configured: "请先配置所选平台的地址和任务令牌。",
-      platform_task_active:
-        "请先停止该平台的活跃比赛和项目，再更换地址或任务令牌。",
-      competition_scheduler_disabled:
-        "当前服务尚未启用自动调度，请在服务端启用后再启动比赛。",
-      platform_task_changed:
-        "当前平台配置与这场比赛的任务不一致，请恢复原配置。",
-      concurrency_limit: "题目并发数超过了该平台的上限。",
-    };
-    if (messages[error.payload?.code])
-      error.message = messages[error.payload.code];
+    error.message = competitionErrorMessage(error);
     throw error;
   }
+}
+
+function competitionErrorMessage(error) {
+  const messages = {
+    platform_not_configured: "请先配置所选平台的地址和任务令牌。",
+    platform_task_active:
+      "请先停止该平台的活跃比赛和项目，再更换地址或任务令牌。",
+    competition_scheduler_disabled:
+      "当前服务尚未启用自动调度，请在服务端启用后再启动比赛。",
+    platform_task_changed: "当前平台配置与这场比赛的任务不一致，请恢复原配置。",
+    concurrency_limit: "题目并发数超过了该平台的上限。",
+    competition_not_started: "比赛尚未开赛，开赛后刷新题目列表。",
+    competition_not_in_session: "比赛已结束，当前无法获取可解答的题目。",
+    competition_not_found:
+      "当前令牌看不到该比赛，请检查 competition_id 是否正确。",
+    competition_selection_required:
+      "无法自动确定赛道，请填写已报名比赛的 competition_id。",
+    not_registered: "当前账号尚未报名该比赛，请先在平台完成报名。",
+    token_competition_forbidden:
+      "当前令牌无权访问该比赛，请检查 competition_id 和令牌所属比赛。",
+    token_missing_scope: "令牌缺少参赛权限，CTFy 需要 agent_play 令牌。",
+    http_404:
+      "平台接口不存在，请检查 URL 是否为 API 根地址（CTFy 通常以 /api/v1 结尾）。",
+    platform_transport_error: "无法读取平台响应，请检查 API 根地址和网络连接。",
+    instance_list_incomplete:
+      "平台报告有运行中靶机，但当前令牌无法列出实例详情；请使用能查看该队伍实例的令牌后再启动比赛。",
+  };
+  if (messages[error.payload?.code]) return messages[error.payload.code];
+  if (error.status === 401 && error.payload?.code)
+    return "平台令牌认证失败，请检查 Token 是否正确、是否已过期。";
+  return error.message;
 }
 
 export default function Competitions() {
@@ -94,11 +114,17 @@ export default function Competitions() {
       interval: 5000,
     },
   );
+  const challenges = useResource(
+    platform?.configured ? `${platformPath(platformID)}/challenges` : null,
+    { interval: platformID === "ctfy" ? 15000 : 0 },
+  );
   const selectedID = route.params.get("run");
   const selectedRun = selectedID
     ? runs.data?.find((run) => run.id === selectedID)
     : runs.data?.at(-1);
   const [modal, setModal] = useState(null);
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState(null);
   const { notify, confirm } = useApp();
   const navigate = (id, run = "") => {
     const params = new URLSearchParams({ platform: id });
@@ -111,13 +137,33 @@ export default function Competitions() {
       runs.reload(true),
       scheduler.reload(true),
       workers.reload(true),
+      challenges.reload(),
     ]);
   };
   const hasActiveRun = runs.data?.some(activeRun);
+  const instanceListIncomplete =
+    platformID === "ctfy" &&
+    challenges.data?.some(
+      (challenge) => challenge.metadata?.instance_visibility === "incomplete",
+    );
   const dispatcher = workers.data?.dispatcher || workers.data;
   const mock =
     (workers.data?.driver === "mock" && !workers.data.command) ||
     (dispatcher?.driver === "mock" && !dispatcher.command);
+  const startCTFy = async () => {
+    setStarting(true);
+    setStartError(null);
+    try {
+      const run = await request(() => post(`${platformPath("ctfy")}/runs`, {}));
+      notify("CTFy 比赛已启动，正在接管运行中的题目并依次解题。");
+      navigate("ctfy", run.id);
+      await runs.reload(true);
+    } catch (error) {
+      setStartError(error);
+    } finally {
+      setStarting(false);
+    }
+  };
   const stop = (run) =>
     confirm({
       title: "停止比赛",
@@ -134,22 +180,35 @@ export default function Competitions() {
       <PageHeader
         eyebrow="COMPETITIONS / 比赛调度"
         title="比赛"
-        description="选择平台和规则，自动解题、提交 flag，并跟踪整场进度。"
+        description={
+          platformID === "ctfy"
+            ? "按 CTFy 平台接口接管题目、解题、提交答案并关闭靶机。"
+            : "选择平台和规则，自动解题、提交 flag，并跟踪整场进度。"
+        }
         actions={
           <>
-            <Button icon={RefreshCw} busy={runs.loading} onClick={refresh}>
+            <Button
+              icon={RefreshCw}
+              busy={runs.loading || challenges.loading}
+              onClick={refresh}
+            >
               刷新
             </Button>
             <Button
               icon={Play}
               tone="primary"
+              busy={starting}
               disabled={
+                starting ||
                 !platform?.configured ||
                 !scheduler.data?.scheduler_enabled ||
                 !runs.data ||
-                hasActiveRun
+                hasActiveRun ||
+                instanceListIncomplete
               }
-              onClick={() => setModal("start")}
+              onClick={
+                platformID === "ctfy" ? startCTFy : () => setModal("start")
+              }
             >
               启动比赛
             </Button>
@@ -165,7 +224,10 @@ export default function Competitions() {
               <SelectField
                 label="平台"
                 value={platformID}
-                onChange={(event) => navigate(event.target.value)}
+                onChange={(event) => {
+                  setStartError(null);
+                  navigate(event.target.value);
+                }}
               >
                 {!platform && <option value={platformID}>平台不存在</option>}
                 {platforms.data?.map((entry) => (
@@ -183,7 +245,9 @@ export default function Competitions() {
                     配置平台
                   </Button>
                   <span className="muted">
-                    题目并发上限 {maxConcurrency(platform)}
+                    {platform.id === "ctfy"
+                      ? "题目并发受赛道限制"
+                      : `题目并发上限 ${maxConcurrency(platform)}`}
                     {platform.capabilities.requires_vpn &&
                       " · 靶场访问需要 VPN"}
                   </span>
@@ -192,12 +256,18 @@ export default function Competitions() {
             </div>
             {platform && !platform.configured && (
               <div className="notice amber">
-                配置平台地址和任务令牌后，即可上传规则并启动比赛。
+                {platform.id === "ctfy"
+                  ? "配置平台 API 地址、agent_play 令牌和比赛编号后即可启动。"
+                  : "配置平台地址和任务令牌后，即可上传规则并启动比赛。"}
               </div>
             )}
           </Panel>
         )}
       </ResourceState>
+      <ErrorMessage error={startError} />
+      {platform?.configured && (
+        <ChallengeList key={platformID} resource={challenges} />
+      )}
       <ErrorMessage error={scheduler.error} onRetry={scheduler.reload} />
       {scheduler.data && !scheduler.data.scheduler_enabled && (
         <div className="notice amber">
@@ -258,7 +328,11 @@ export default function Competitions() {
             <Empty
               icon={Trophy}
               title="还没有比赛记录"
-              description="选择平台，配置任务凭据后，点击“启动比赛”填写规则。"
+              description={
+                platform.id === "ctfy"
+                  ? "点击“启动比赛”即可接管 CTFy 题目并查看解题进度。"
+                  : "点击“启动比赛”填写规则，启动后可在这里查看解题进度。"
+              }
             />
           )}
         </ResourceState>
@@ -269,12 +343,13 @@ export default function Competitions() {
           platform={platform}
           onClose={() => setModal(null)}
           onSaved={async () => {
-            notify("平台配置已保存。");
+            notify("平台配置已保存，正在加载题目。");
             await platforms.reload(true);
+            challenges.reload();
           }}
         />
       )}
-      {modal === "start" && platform && (
+      {modal === "start" && platform && platform.id !== "ctfy" && (
         <StartCompetition
           key={platformID}
           platform={platform}
@@ -298,6 +373,149 @@ export default function Competitions() {
         />
       )}
     </>
+  );
+}
+
+function ChallengeList({ resource }) {
+  const [query, setQuery] = useState("");
+  const visibleRunningCount = (resource.data || []).filter(
+    (challenge) =>
+      challenge.instance_status === "ready" ||
+      challenge.instance_status === "available",
+  ).length;
+  const incomplete = resource.data?.some(
+    (challenge) => challenge.metadata?.instance_visibility === "incomplete",
+  );
+  const runningCount = incomplete
+    ? resource.data.find(
+        (challenge) => challenge.metadata?.instance_visibility === "incomplete",
+      ).metadata.team_running_instances
+    : visibleRunningCount;
+  const rows = (resource.data || []).filter((challenge) =>
+    `${challenge.id} ${challenge.title || ""} ${challenge.description || ""} ${challenge.metadata?.category || ""} ${challenge.difficulty || ""}`
+      .toLowerCase()
+      .includes(query.toLowerCase()),
+  );
+  return (
+    <Panel
+      title="题目列表"
+      extra={
+        <Button
+          icon={RefreshCw}
+          busy={resource.loading}
+          onClick={() => resource.reload()}
+        >
+          刷新题目
+        </Button>
+      }
+    >
+      <ResourceState
+        resource={{
+          ...resource,
+          error: resource.error && {
+            message: competitionErrorMessage(resource.error),
+          },
+        }}
+      >
+        {!resource.error &&
+          (resource.data?.length > 0 ? (
+            <>
+              <div className="competition-toolbar">
+                <SearchInput
+                  value={query}
+                  onChange={setQuery}
+                  placeholder="搜索题目编号、名称、描述或分类"
+                />
+                <span className="muted">共 {resource.data.length} 道题</span>
+                <span className="muted">运行中靶机 {runningCount} 个</span>
+              </div>
+              {incomplete && (
+                <div className="notice amber">
+                  CTFy 报告当前队伍有 {runningCount}{" "}
+                  台运行中靶机，但此令牌的实例列表没有返回详情，暂时无法确定对应题目。请核对令牌所属队伍和实例读取权限。
+                </div>
+              )}
+              <DataTable
+                columns={["题目", "靶机", "分类", "难度", "答题进度", "状态"]}
+                count={rows.length}
+              >
+                {rows.map((challenge) => (
+                  <tr key={challenge.id}>
+                    <td>
+                      {challenge.title && <strong>{challenge.title}</strong>}
+                      <div>
+                        <code>{challenge.id}</code>
+                      </div>
+                      {challenge.description && (
+                        <details className="competition-description">
+                          <summary>题目描述</summary>
+                          <pre>{challenge.description}</pre>
+                        </details>
+                      )}
+                    </td>
+                    <td>
+                      <Badge
+                        tone={
+                          challenge.instance_status === "ready" ||
+                          challenge.instance_status === "available"
+                            ? "blue"
+                            : challenge.instance_status === "starting" ||
+                                challenge.instance_status === "pending" ||
+                                challenge.instance_status === "stopping"
+                              ? "amber"
+                              : "muted"
+                        }
+                      >
+                        {{
+                          ready: "运行中",
+                          available: "运行中",
+                          starting: "启动中",
+                          pending: "启动中",
+                          stopping: "关闭中",
+                          stopped: "未启动",
+                          unknown: "待核实",
+                        }[challenge.instance_status] ||
+                          challenge.instance_status ||
+                          "—"}
+                      </Badge>
+                    </td>
+                    <td>{challenge.metadata?.category || "—"}</td>
+                    <td>{challenge.difficulty || "—"}</td>
+                    <td>
+                      {challenge.flag_count > 0
+                        ? `${challenge.correct_flag_count || 0} / ${challenge.flag_count}`
+                        : "—"}
+                    </td>
+                    <td>
+                      <Badge
+                        tone={
+                          challenge.completed
+                            ? "green"
+                            : challenge.correct_flag_count > 0
+                              ? "amber"
+                              : "muted"
+                        }
+                      >
+                        {challenge.completed
+                          ? "已解出"
+                          : challenge.correct_flag_count > 0
+                            ? "部分完成"
+                            : "未解出"}
+                      </Badge>
+                    </td>
+                  </tr>
+                ))}
+              </DataTable>
+            </>
+          ) : (
+            <Empty
+              icon={Trophy}
+              title="当前没有可解答的题目"
+              description="确认平台已发布题目且当前账号有访问权限，再刷新题目列表。"
+            />
+          ))}
+      </ResourceState>
+    </Panel>
   );
 }
 
@@ -389,11 +607,13 @@ function RunDetail({ run, platform, onStop, onConcurrency }) {
           {run.last_error && (
             <div className="notice amber">{run.last_error}</div>
           )}
-          <details className="competition-rules">
-            <summary>比赛规则与解读</summary>
-            {run.rules_summary && <p>{run.rules_summary}</p>}
-            <pre>{run.rules}</pre>
-          </details>
+          {(run.rules || run.rules_summary) && (
+            <details className="competition-rules">
+              <summary>比赛规则与解读</summary>
+              {run.rules_summary && <p>{run.rules_summary}</p>}
+              <pre>{run.rules}</pre>
+            </details>
+          )}
         </div>
         <div className="competition-toolbar">
           <SearchInput
@@ -647,6 +867,9 @@ function PlatformConfig({ platform, onClose, onSaved }) {
 function PlatformConfigEditor({ initial, platform, onClose, onSaved }) {
   const [baseURL, setBaseURL] = useState(initial.base_url || "");
   const [token, setToken] = useState("");
+  const [competitionID, setCompetitionID] = useState(
+    initial.competition_id || "",
+  );
   return (
     <FormModal
       title={`配置平台 · ${platform.name}`}
@@ -657,6 +880,9 @@ function PlatformConfigEditor({ initial, platform, onClose, onSaved }) {
           put(`${platformPath(platform.id)}/config`, {
             base_url: baseURL,
             ...(token ? { token } : {}),
+            ...(platform.id === "ctfy"
+              ? { competition_id: competitionID.trim() }
+              : {}),
           }),
         );
         await onSaved();
@@ -669,10 +895,19 @@ function PlatformConfigEditor({ initial, platform, onClose, onSaved }) {
         maxLength={4096}
         value={baseURL}
         onChange={(event) => setBaseURL(event.target.value)}
-        placeholder="https://平台地址"
+        placeholder={
+          platform.id === "ctfy"
+            ? "https://ctfy.example/api/v1"
+            : "https://平台地址"
+        }
+        hint={
+          platform.id === "ctfy"
+            ? "填写 CTFy API 根地址；多个已报名赛道可在下方指定 competition_id。"
+            : undefined
+        }
       />
       <TextField
-        label="任务令牌"
+        label={platform.id === "ctfy" ? "agent_play 参赛令牌" : "任务令牌"}
         type="password"
         autoComplete="new-password"
         required={!initial.token_set}
@@ -682,10 +917,27 @@ function PlatformConfigEditor({ initial, platform, onClose, onSaved }) {
         placeholder={
           initial.token_set
             ? "已配置，留空保留原令牌"
-            : "输入平台下发的任务令牌"
+            : platform.id === "ctfy"
+              ? "输入 CTFy agent_play 令牌"
+              : "输入平台下发的任务令牌"
         }
-        hint="已有活跃比赛时，请先停止比赛再更换任务凭据。"
+        hint={
+          platform.id === "ctfy"
+            ? "令牌需包含 agent_play 权限。已有活跃比赛时，请先停止再更换凭据。"
+            : "已有活跃比赛时，请先停止比赛再更换任务凭据。"
+        }
       />
+      {platform.id === "ctfy" && (
+        <TextField
+          label="competition_id（可选）"
+          type="text"
+          maxLength={256}
+          value={competitionID}
+          onChange={(event) => setCompetitionID(event.target.value)}
+          placeholder="留空时自动选择唯一已报名赛道"
+          hint="有多个可见赛道时填写平台返回的比赛编号。修改已有比赛的赛道前，请先停止比赛。"
+        />
+      )}
     </FormModal>
   );
 }
@@ -712,7 +964,11 @@ function ConcurrencyEditor({ run, platform, onClose, onSaved }) {
         step={1}
         value={concurrency}
         onChange={(event) => setConcurrency(event.target.value)}
-        hint="减少并发会等待已有题目结束；正在执行的题目会继续。"
+        hint={
+          platform.id === "ctfy"
+            ? "减少并发会等待已有题目结束；赛道的实例上限由平台验证。"
+            : "减少并发会等待已有题目结束；正在执行的题目会继续。"
+        }
       />
     </FormModal>
   );

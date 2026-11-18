@@ -13,9 +13,16 @@ import (
 // The environment map remains immutable; background coordinators read saved
 // credentials from SQLite whenever they create a platform connection.
 func (h *Handler) platformConfig(id string) (ctfplatform.Config, string, error) {
+	if config, ok := h.PlatformOverrides[id]; ok {
+		return config, "environment", nil
+	}
 	var config ctfplatform.Config
-	err := h.DB.SQL.QueryRow(`SELECT base_url,token FROM platform_configs WHERE id=?`, id).Scan(&config.BaseURL, &config.Token)
+	var competitionID string
+	err := h.DB.SQL.QueryRow(`SELECT base_url,token,competition_id FROM platform_configs WHERE id=?`, id).Scan(&config.BaseURL, &config.Token, &competitionID)
 	if err == nil {
+		if id == "ctfy" {
+			config.Options = map[string]string{"competition_id": strings.TrimSpace(competitionID)}
+		}
 		return config, "saved", nil
 	}
 	if err != sql.ErrNoRows {
@@ -44,7 +51,11 @@ func (h *Handler) platformConfigResponse(id string) (iris.Map, error) {
 	if err != nil {
 		return nil, err
 	}
-	return iris.Map{"base_url": config.BaseURL, "token_set": config.Token != "", "configured": source != "none", "source": source}, nil
+	competitionID := ""
+	if id == "ctfy" && config.Options != nil {
+		competitionID = config.Options["competition_id"]
+	}
+	return iris.Map{"base_url": config.BaseURL, "token_set": config.Token != "", "configured": source != "none", "source": source, "competition_id": competitionID}, nil
 }
 
 func (h *Handler) registerPlatformConfig(app *iris.Application) {
@@ -63,8 +74,9 @@ func (h *Handler) registerPlatformConfig(app *iris.Application) {
 			return
 		}
 		var request struct {
-			BaseURL string  `json:"base_url"`
-			Token   *string `json:"token"`
+			BaseURL       string  `json:"base_url"`
+			Token         *string `json:"token"`
+			CompetitionID *string `json:"competition_id"`
 		}
 		if !read(ctx, &request) {
 			return
@@ -83,7 +95,14 @@ func (h *Handler) registerPlatformConfig(app *iris.Application) {
 		if request.Token != nil && *request.Token != "***" {
 			config.Token = *request.Token
 		}
-		if len(config.BaseURL) > 4096 || len(config.Token) > 8192 {
+		if id == "ctfy" && request.CompetitionID != nil {
+			config.Options = map[string]string{"competition_id": strings.TrimSpace(*request.CompetitionID)}
+		}
+		competitionID := ""
+		if config.Options != nil {
+			competitionID = strings.TrimSpace(config.Options["competition_id"])
+		}
+		if len(config.BaseURL) > 4096 || len(config.Token) > 8192 || len(competitionID) > 256 {
 			platformError(ctx, &ctfplatform.Error{HTTPStatus: 422, Code: "invalid_configuration", Message: "platform URL or token is too long"})
 			return
 		}
@@ -109,7 +128,7 @@ func (h *Handler) registerPlatformConfig(app *iris.Application) {
 				return
 			}
 		}
-		if _, err := h.DB.SQL.ExecContext(ctx.Request().Context(), `INSERT INTO platform_configs(id,base_url,token,updated_at) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET base_url=excluded.base_url,token=excluded.token,updated_at=excluded.updated_at`, id, config.BaseURL, config.Token, nowString()); err != nil {
+		if _, err := h.DB.SQL.ExecContext(ctx.Request().Context(), `INSERT INTO platform_configs(id,base_url,token,competition_id,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET base_url=excluded.base_url,token=excluded.token,competition_id=excluded.competition_id,updated_at=excluded.updated_at`, id, config.BaseURL, config.Token, competitionID, nowString()); err != nil {
 			platformError(ctx, err)
 			return
 		}

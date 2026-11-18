@@ -1,6 +1,8 @@
 # HotMouse 命令行接口设计
 
-状态：已实现。`backend/cmd/hotmouse` 提供下述命令树；`serve` 启动服务，其他业务命令调用 HTTP API。
+状态：已实现。`backend/cmd/hotmouse` 提供下述命令树；`serve` 启动服务，项目及服务管理命令调用 HTTP API。
+
+`competition run tsec --db ./data/tsec.db` 直接运行无人值守参赛进程，无需服务、客户端登录、规则文件或运行时输入。启动前配置平台令牌、Pi 模型和运行环境 VPN；程序自动拉题、解题、提交所有 flag、恢复未知提交、回收靶机并写入结果文件。镜像默认使用这一入口，见 [TSec 参赛镜像](../docker/TSEC.md)。
 
 `kb` 是离线参考命令，直接读取二进制内置的 CTF 知识和技能，无需服务或客户端 Profile。检索、全文、导出与自动召回见 [knowledge.md](knowledge.md)。
 

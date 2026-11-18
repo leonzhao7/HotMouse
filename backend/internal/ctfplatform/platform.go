@@ -60,18 +60,22 @@ type Delivery struct {
 }
 
 type Submission struct {
-	ChallengeID string `json:"challenge_id"`
-	Flag        string `json:"flag"`
+	ChallengeID   string `json:"challenge_id"`
+	QuestionID    string `json:"question_id,omitempty"`
+	InstanceID    string `json:"instance_id,omitempty"`
+	CompetitionID string `json:"competition_id,omitempty"`
+	Flag          string `json:"flag"`
 }
 
 type SubmissionResult struct {
-	Correct          bool           `json:"correct"`
-	Awarded          int            `json:"awarded"`
-	CumulativeScore  int            `json:"cumulative_score"`
-	CorrectFlagCount int            `json:"correct_flag_count"`
-	TotalFlagCount   int            `json:"total_flag_count"`
-	MatchedFlagIndex *int           `json:"matched_flag_index"`
-	Metadata         map[string]any `json:"metadata,omitempty"`
+	Correct           bool           `json:"correct"`
+	ChallengeComplete *bool          `json:"challenge_complete,omitempty"`
+	Awarded           int            `json:"awarded"`
+	CumulativeScore   int            `json:"cumulative_score"`
+	CorrectFlagCount  int            `json:"correct_flag_count"`
+	TotalFlagCount    int            `json:"total_flag_count"`
+	MatchedFlagIndex  *int           `json:"matched_flag_index"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
 }
 
 type Hint struct {
@@ -91,6 +95,12 @@ type Platform interface {
 	SubmitFlag(context.Context, Submission) (SubmissionResult, error)
 }
 
+// InstanceVisibilityLister can verify whether a platform's challenge listing
+// omits team-owned instances before an operator starts or imports a challenge.
+type InstanceVisibilityLister interface {
+	ListChallengesWithInstanceVisibility(context.Context) ([]Challenge, error)
+}
+
 // Optional capabilities avoid forcing file-based or push platforms to invent
 // container lifecycle and hint operations they do not support.
 type HintProvider interface {
@@ -98,6 +108,18 @@ type HintProvider interface {
 }
 type InstanceCloser interface {
 	Close(context.Context, string) (CloseResult, error)
+}
+
+// DeliverySubmitter and DeliveryCloser carry per-instance identifiers that
+// some platforms require in addition to the stable challenge ID.
+type DeliverySubmitter interface {
+	SubmitDelivery(context.Context, Delivery, Submission) (SubmissionResult, error)
+}
+type DeliveryCloser interface {
+	CloseDelivery(context.Context, Delivery) (CloseResult, error)
+}
+type InstanceCloserByID interface {
+	CloseInstance(context.Context, string, string) (CloseResult, error)
 }
 type SubmissionValidator interface {
 	ValidateSubmission(Submission) error

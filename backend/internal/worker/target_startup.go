@@ -9,6 +9,9 @@ import (
 // One background startup per project run owns analysis and web preprocessing.
 // Its provider workspace and lifetime are independent of the planning lease.
 func (r *Runner) startTargetStartup(parent context.Context, project string) {
+	if !r.targetProbesEnabled() {
+		return
+	}
 	meta, err := r.DB.GetProjectMeta(parent, project)
 	if err != nil || meta.Status != "active" {
 		return
@@ -19,6 +22,9 @@ func (r *Runner) startTargetStartup(parent context.Context, project string) {
 	}
 	r.probeMu.Lock()
 	defer r.probeMu.Unlock()
+	if r.targetProbesDisabled {
+		return
+	}
 	if r.lifecycleCtx != nil {
 		parent = r.lifecycleCtx
 	}

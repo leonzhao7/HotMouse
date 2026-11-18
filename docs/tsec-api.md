@@ -109,7 +109,7 @@ BENCHMARK_TOKEN: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 | **404** | `challenge_not_found` | `unique_code` 不存在于当前任务的用例集中 |
 | **409** | `invalid_state` | 任务已结束（超时过期或手动停止），不允许继续操作 |
 | **409** | `duplicate` | 同一个 flag（相同 flag_index）被重复正确提交，幂等保护 |
-| **503** | `resource_unavailable` | 靶场资源不可用（实例未就绪或已耗尽） |
+| **503** | `resource_unavailable` | 靶场资源无响应（网络超时或网络波动等问题，可稍后重试） |
 | **500** | `internal_error` | 未预期的系统内部错误 |
 
 ### 4.3 框架级验证错误
@@ -198,7 +198,7 @@ GET /openapi/v1/challenges
 
 ### 5.2 启动题目容器
 
-为指定题目启动靶场容器，返回容器直连地址。
+为指定题目启动靶场容器，返回容器直连地址。该接口幂等，若请求已启动状态的题目，不会异常，返回已启动的靶场地址。
 
 ```
 POST /openapi/v1/challenges/start?unique_code={unique_code}
@@ -230,7 +230,7 @@ POST /openapi/v1/challenges/start?unique_code={unique_code}
 |-------------|------|----------|
 | **404** | `challenge_not_found` | `unique_code` 不存在于当前任务的用例集中 |
 | **409** | `invalid_state` | 当前活跃的题目实例数已达到上限，需先关闭已有题目再启动新题目 |
-| **503** | `resource_unavailable` | 靶场资源不可用（实例未就绪或已耗尽） |
+| **503** | `resource_unavailable` | 靶场资源无响应（网络超时或网络波动等问题，可重试） |
 
 ---
 
@@ -328,7 +328,7 @@ Content-Type: application/json
 
 ### 5.5 关闭题目容器
 
-关闭并释放指定题目的靶场容器资源。
+关闭并释放指定题目的靶场容器资源。该接口幂等，若请求未启动状态的题目，不会异常，返回closed为true。
 
 ```
 POST /openapi/v1/challenges/close?unique_code={unique_code}
@@ -359,3 +359,4 @@ POST /openapi/v1/challenges/close?unique_code={unique_code}
 | HTTP 状态码 | code | 触发场景 |
 |-------------|------|----------|
 | **404** | `challenge_not_found` | `unique_code` 不存在于当前任务的用例集中 |
+| **503** | `resource_unavailable` | 靶场资源无响应（网络超时或网络波动等问题，可重试） |

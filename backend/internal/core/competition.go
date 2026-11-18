@@ -41,7 +41,15 @@ type CompetitionConfig struct {
 }
 
 func (c *CompetitionConfig) Normalize() error {
-	if !utf8.ValidString(c.Rules) || strings.TrimSpace(c.Rules) == "" || len(c.Rules) > 64<<10 {
+	return c.normalize(true)
+}
+
+func (c *CompetitionConfig) NormalizeForPlatform(platform string) error {
+	return c.normalize(platform != "ctfy")
+}
+
+func (c *CompetitionConfig) normalize(requireRules bool) error {
+	if !utf8.ValidString(c.Rules) || requireRules && strings.TrimSpace(c.Rules) == "" || len(c.Rules) > 64<<10 {
 		return fmt.Errorf("competition rules must contain 1..65536 bytes of text")
 	}
 	if c.Concurrency == 0 {
@@ -90,7 +98,7 @@ type CompetitionItem struct {
 const competitionColumns = `id,platform,scope_id,rules,rules_summary,concurrency,max_workers,challenge_timeout_seconds,status,last_error,planning_attempts,retry_after,created_at,finished_at`
 
 func (d *DB) CreateCompetitionRun(ctx context.Context, platform, scope string, config CompetitionConfig, challenges []string) (CompetitionRun, error) {
-	if err := config.Normalize(); err != nil {
+	if err := config.NormalizeForPlatform(platform); err != nil {
 		return CompetitionRun{}, err
 	}
 	if platform == "" || scope == "" {
@@ -109,7 +117,11 @@ func (d *DB) CreateCompetitionRun(ctx context.Context, platform, scope string, c
 			return err
 		}
 		id = fmt.Sprintf("competition_%03d", counter)
-		if _, err := t.Exec(`INSERT INTO competition_runs(id,platform,scope_id,rules,concurrency,max_workers,challenge_timeout_seconds,created_at) VALUES(?,?,?,?,?,?,?,?)`, id, platform, scope, config.Rules, config.Concurrency, config.MaxWorkers, config.ChallengeTimeoutSeconds, now()); err != nil {
+		status := "planning"
+		if platform == "ctfy" {
+			status = "running"
+		}
+		if _, err := t.Exec(`INSERT INTO competition_runs(id,platform,scope_id,rules,concurrency,max_workers,challenge_timeout_seconds,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, id, platform, scope, config.Rules, config.Concurrency, config.MaxWorkers, config.ChallengeTimeoutSeconds, status, now()); err != nil {
 			return err
 		}
 		seen := map[string]bool{}
@@ -235,7 +247,11 @@ func (d *DB) SetCompetitionConcurrency(ctx context.Context, id string, limit int
 
 // Startup settings also apply when the rules-file entry resumes an existing run.
 func (d *DB) ConfigureCompetitionRun(ctx context.Context, id string, config CompetitionConfig) error {
-	if err := config.Normalize(); err != nil {
+	var platform string
+	if err := d.SQL.QueryRowContext(ctx, `SELECT platform FROM competition_runs WHERE id=?`, id).Scan(&platform); err != nil {
+		return err
+	}
+	if err := config.NormalizeForPlatform(platform); err != nil {
 		return err
 	}
 	return tx(ctx, d, func(t *sql.Tx) error {

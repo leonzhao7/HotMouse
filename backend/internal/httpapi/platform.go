@@ -14,6 +14,7 @@ import (
 	"github.com/kataras/iris/v12"
 	"hotmouse/backend/internal/core"
 	"hotmouse/backend/internal/ctfplatform"
+	"hotmouse/backend/internal/ctfplatform/ctfy"
 	"hotmouse/backend/internal/ctfplatform/tsec"
 )
 
@@ -24,10 +25,20 @@ func configurePlatforms() (*ctfplatform.Registry, map[string]ctfplatform.Config)
 	if err := tsec.Register(registry); err != nil {
 		panic(err)
 	}
+	if err := ctfy.Register(registry); err != nil {
+		panic(err)
+	}
 	configs := map[string]ctfplatform.Config{}
 	base, token := os.Getenv("BENCHMARK_BASE_URL"), os.Getenv("BENCHMARK_TOKEN")
 	if base != "" || token != "" {
 		configs["tsec"] = ctfplatform.Config{BaseURL: strings.TrimRight(strings.TrimSpace(base), "/"), Token: token}
+	}
+	base, token = os.Getenv("CTFY_BASE_URL"), os.Getenv("CTFY_TOKEN")
+	if base != "" || token != "" {
+		configs["ctfy"] = ctfplatform.Config{
+			BaseURL: strings.TrimRight(strings.TrimSpace(base), "/"), Token: token,
+			Options: map[string]string{"competition_id": strings.TrimSpace(os.Getenv("CTFY_COMPETITION_ID"))},
+		}
 	}
 	return registry, configs
 }
@@ -47,6 +58,13 @@ func (h *Handler) platform(id string) (ctfplatform.Platform, string, error) {
 	}
 	platform, err := h.Platforms.Connect(id, config)
 	return platform, config.ScopeID(id), err
+}
+
+func listPlatformChallengesWithVisibility(ctx context.Context, platform ctfplatform.Platform) ([]ctfplatform.Challenge, error) {
+	if lister, ok := platform.(ctfplatform.InstanceVisibilityLister); ok {
+		return lister.ListChallengesWithInstanceVisibility(ctx)
+	}
+	return platform.ListChallenges(ctx)
 }
 
 func platformError(ctx iris.Context, err error) {
@@ -105,7 +123,7 @@ func (h *Handler) importPlatformChallenge(ctx context.Context, id string, reques
 		}
 		return h.DB.GetProject(ctx, existing)
 	}
-	challenges, err := platform.ListChallenges(ctx)
+	challenges, err := listPlatformChallengesWithVisibility(ctx, platform)
 	if err != nil {
 		return core.ProjectDetail{}, err
 	}
@@ -127,11 +145,21 @@ func (h *Handler) importPlatformChallenge(ctx context.Context, id string, reques
 		return core.ProjectDetail{}, err
 	}
 	started := challenge.InstanceStatus == "stopped" && delivery.Mode == "instance"
+	if id == "ctfy" {
+		started, _ = delivery.Metadata["started_by_hotmouse"].(bool)
+	}
 	defer func() {
 		if err == nil || !started {
 			return
 		}
-		if closer, ok := platform.(ctfplatform.InstanceCloser); ok {
+		if closer, ok := platform.(ctfplatform.DeliveryCloser); ok {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			result, closeErr := closer.CloseDelivery(cleanup, delivery)
+			if closeErr != nil || !result.Closed {
+				err = fmt.Errorf("project import failed: %w; container cleanup failed, close challenge %s explicitly", err, challenge.ID)
+			}
+		} else if closer, ok := platform.(ctfplatform.InstanceCloser); ok {
 			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 			result, closeErr := closer.Close(cleanup, challenge.ID)
@@ -176,6 +204,10 @@ type platformFlagOutcome struct {
 }
 
 func (h *Handler) submitPlatformFlag(ctx context.Context, project string, flagID int64) (platformFlagOutcome, error) {
+	return h.submitPlatformFlagAttempt(ctx, project, flagID, false)
+}
+
+func (h *Handler) submitPlatformFlagAttempt(ctx context.Context, project string, flagID int64, retryUnknown bool) (platformFlagOutcome, error) {
 	detail, err := h.DB.GetProject(ctx, project)
 	if err != nil {
 		return platformFlagOutcome{}, err
@@ -208,17 +240,32 @@ func (h *Handler) submitPlatformFlag(ctx context.Context, project string, flagID
 	if flag.ChallengeID != "" && flag.ChallengeID != binding.ChallengeID {
 		return platformFlagOutcome{}, &ctfplatform.Error{HTTPStatus: 422, Code: "challenge_mismatch", Message: "flag belongs to a different challenge"}
 	}
-	submission := ctfplatform.Submission{ChallengeID: binding.ChallengeID, Flag: flag.Value}
+	submission := ctfplatform.Submission{ChallengeID: binding.ChallengeID, QuestionID: flag.QuestionID, Flag: flag.Value}
 	if validator, ok := platform.(ctfplatform.SubmissionValidator); ok {
 		if err := validator.ValidateSubmission(submission); err != nil {
 			return platformFlagOutcome{}, err
 		}
 	}
-	attempt, err := h.DB.BeginFlagAttempt(ctx, project, flag.ID)
+	var attempt core.FlagAttempt
+	if retryUnknown && binding.Platform == "tsec" && flag.Status == "submission_unknown" {
+		attempt, err = h.DB.BeginIdempotentFlagAttempt(ctx, project, flag.ID)
+	} else {
+		attempt, err = h.DB.BeginFlagAttempt(ctx, project, flag.ID)
+	}
 	if err != nil {
 		return platformFlagOutcome{}, err
 	}
-	result, submitErr := platform.SubmitFlag(ctx, submission)
+	var result ctfplatform.SubmissionResult
+	var submitErr error
+	var delivery ctfplatform.Delivery
+	if err := json.Unmarshal(binding.Delivery, &delivery); err != nil {
+		return platformFlagOutcome{}, err
+	}
+	if submitter, ok := platform.(ctfplatform.DeliverySubmitter); ok {
+		result, submitErr = submitter.SubmitDelivery(ctx, delivery, submission)
+	} else {
+		result, submitErr = platform.SubmitFlag(ctx, submission)
+	}
 	out := platformFlagOutcome{Attempt: attempt}
 	status := "submission_unknown"
 	var response []byte
@@ -275,7 +322,7 @@ func (h *Handler) registerPlatforms(app *iris.Application) {
 			platformError(ctx, err)
 			return
 		}
-		value, err := platform.ListChallenges(ctx.Request().Context())
+		value, err := listPlatformChallengesWithVisibility(ctx.Request().Context(), platform)
 		if err != nil {
 			platformError(ctx, err)
 			return
@@ -338,7 +385,9 @@ func (h *Handler) registerPlatforms(app *iris.Application) {
 					err = unsupportedOperation(action)
 				}
 			case "close":
-				if closer, ok := platform.(ctfplatform.InstanceCloser); ok {
+				if closer, ok := platform.(ctfplatform.InstanceCloserByID); ok && ctx.URLParam("instance_id") != "" {
+					value, err = closer.CloseInstance(ctx.Request().Context(), ctx.URLParam("competition_id"), ctx.URLParam("instance_id"))
+				} else if closer, ok := platform.(ctfplatform.InstanceCloser); ok {
 					value, err = closer.Close(ctx.Request().Context(), id)
 				} else {
 					err = unsupportedOperation(action)

@@ -22,6 +22,7 @@ type HostedAgent struct {
 	Driver      string
 	Model       string
 	BaseURL     string
+	API         string // Pi: openai, openai-responses, or anthropic-messages.
 	PlatformURL string
 	MCPConfig   string
 	WorkDir     string
@@ -54,6 +55,19 @@ type HostedAgentResult struct {
 
 func hostedArgv(a HostedAgent, prompt string) ([]string, error) {
 	switch canonicalDriver(a.Driver) {
+	case "pi":
+		// Reuse Pi's native tools and timeout extension. The provider config is
+		// private (0600) and removed when the hosted invocation exits.
+		api := a.API
+		if api == "" {
+			api = "openai"
+		}
+		return providerArgv(workerConfig{driver: "pi", env: map[string]string{
+			"PI_MODEL": a.Model, "PI_BASE_URL": a.BaseURL,
+			"PI_API_KEY": a.Environment["LLM_API_KEY"], "PI_PROVIDER_API": api,
+			"PI_MODEL_CONTEXT_WINDOW":       a.Environment["PI_MODEL_CONTEXT_WINDOW"],
+			"HOTMOUSE_LLM_REASONING_EFFORT": configEnvironment(workerConfig{env: a.Environment}, "HOTMOUSE_LLM_REASONING_EFFORT"),
+		}}, "execute", "", a.WorkDir, prompt)
 	case "codex":
 		args := []string{"codex", "exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--model", a.Model}
 		// An env_key and requires_openai_auth=false keep the CLI on the run's
@@ -136,6 +150,9 @@ func RunHostedAgent(ctx context.Context, a HostedAgent) (HostedAgentResult, erro
 		logger.Error("agent.command_failed", "error", err)
 		return HostedAgentResult{}, err
 	}
+	if canonicalDriver(a.Driver) == "pi" {
+		vars["PI_CODING_AGENT_DIR"] = filepath.Join(a.WorkDir, ".hotmouse", "pi-agent")
+	}
 	var out HostedAgentResult
 	observe := func(line []byte) {
 		logProviderEvent(logger, a.Driver, line)
@@ -155,6 +172,19 @@ func RunHostedAgent(ctx context.Context, a HostedAgent) (HostedAgentResult, erro
 				switch item["type"] {
 				case "command_execution", "mcp_tool_call", "web_search", "file_change":
 					out.Usage.ToolCallsMade++
+				}
+			}
+		} else if canonicalDriver(a.Driver) == "pi" {
+			if event["type"] == "tool_execution_end" {
+				out.Usage.ToolCallsMade++
+			}
+			if event["type"] == "message_end" {
+				message, _ := event["message"].(map[string]any)
+				if message["role"] == "assistant" {
+					out.Usage.Turns++
+					usage, _ := message["usage"].(map[string]any)
+					out.Usage.InputTokens += integer(usage["input"]) + integer(usage["cacheRead"]) + integer(usage["cacheWrite"])
+					out.Usage.OutputTokens += integer(usage["output"])
 				}
 			}
 		} else {
@@ -178,6 +208,9 @@ func RunHostedAgent(ctx context.Context, a HostedAgent) (HostedAgentResult, erro
 		}
 	}
 	result := runProcess(ctx, argv, a.Environment, a.WorkDir, vars, 0, observe, logger)
+	if canonicalDriver(a.Driver) == "pi" {
+		_ = os.Remove(filepath.Join(a.WorkDir, ".hotmouse", "pi-agent", "models.json"))
+	}
 	out.Stderr = string(result.stderr)
 	out.Response, err = providerResponse(a.Driver, result.stdout)
 	logger.Info("agent.completed", "elapsed", time.Since(started), "response_bytes", len(out.Response),

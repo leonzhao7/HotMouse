@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/kataras/iris/v12"
@@ -28,7 +29,7 @@ func newCompetitionManager(h *Handler) *competition.Manager {
 			return project, err
 		},
 		Submit: func(ctx context.Context, project string, flag int64) (*ctfplatform.SubmissionResult, error) {
-			result, err := h.submitPlatformFlag(ctx, project, flag)
+			result, err := h.submitPlatformFlagAttempt(ctx, project, flag, h.Competitions.Unattended)
 			return result.Result, err
 		},
 		Plan:   h.Runner.PlanCompetition,
@@ -63,14 +64,33 @@ func platformChallengeOrigin(platformID string, requiresVPN bool, challenge ctfp
 	if challenge.Description != nil {
 		origin += "Description: " + *challenge.Description + "\n"
 	}
+	if len(challenge.Metadata) != 0 {
+		if metadata, err := json.MarshalIndent(challenge.Metadata, "", "  "); err == nil {
+			origin += "Platform challenge metadata (including answer question IDs and prompts where supplied):\n" + string(metadata) + "\n"
+		}
+	}
+	if len(delivery.Metadata) != 0 {
+		if metadata, err := json.MarshalIndent(delivery.Metadata, "", "  "); err == nil {
+			origin += "Instance delivery metadata:\n" + string(metadata) + "\n"
+		}
+	}
 	for _, address := range delivery.Addresses {
 		origin += "Target address: " + address + "\n"
 	}
 	for _, attachment := range delivery.Attachments {
 		origin += fmt.Sprintf("Attachment: %s %s %s\n", attachment.Name, attachment.URL, attachment.Path)
 	}
-	if requiresVPN {
+	topology, _ := delivery.Metadata["network_topology"].(string)
+	if topology == "engagement" {
+		origin += "This CTFy instance uses the engagement topology and requires its WireGuard VPN.\n"
+		if address, ok := delivery.Metadata["vpn_config_url"].(string); ok && address != "" {
+			origin += "VPN config URL: " + address + "\n"
+		}
+	} else if requiresVPN {
 		origin += "Target addresses require the platform VPN connection.\n"
+	}
+	if platformID == "ctfy" {
+		origin += "For CTFy answers, save each verified answer with both challenge_id and the exact question_id from the platform metadata. For multi-select questions, encode the selected string array as a JSON array in the value. The coordinator submits answers; do not call platform endpoints from a Worker.\n"
 	}
 	return origin
 }
@@ -120,7 +140,7 @@ func (h *Handler) StartCompetition(ctx context.Context, id string, config core.C
 			return core.CompetitionRun{}, err
 		}
 	}
-	if err := config.Normalize(); err != nil {
+	if err := config.NormalizeForPlatform(id); err != nil {
 		return core.CompetitionRun{}, &ctfplatform.Error{HTTPStatus: 422, Code: "invalid_input", Message: err.Error()}
 	}
 	h.platformMu.Lock()
@@ -129,6 +149,26 @@ func (h *Handler) StartCompetition(ctx context.Context, id string, config core.C
 	if err != nil {
 		return core.CompetitionRun{}, err
 	}
+	challenges, err := listPlatformChallengesWithVisibility(ctx, platform)
+	if err != nil {
+		return core.CompetitionRun{}, err
+	}
+	if h.Competitions.Unattended && len(challenges) == 0 {
+		return core.CompetitionRun{}, &ctfplatform.Error{HTTPStatus: 503, Code: "challenge_list_empty", Message: "no competition challenges are available yet"}
+	}
+	if id == "ctfy" {
+		for _, challenge := range challenges {
+			if challenge.Metadata["instance_visibility"] == "incomplete" {
+				return core.CompetitionRun{}, &ctfplatform.Error{HTTPStatus: 409, Code: "instance_list_incomplete", Message: "CTFy reports running team instances but does not expose their IDs to this token; use a token that can list the team's instances before starting the competition"}
+			}
+		}
+		sort.SliceStable(challenges, func(i, j int) bool {
+			active := func(challenge ctfplatform.Challenge) bool {
+				return challenge.InstanceStatus == "ready" || challenge.InstanceStatus == "starting" || challenge.InstanceStatus == "pending"
+			}
+			return active(challenges[i]) && !active(challenges[j])
+		})
+	}
 	if cap := platform.Descriptor().MaxActiveInstances; cap > 0 && config.Concurrency > cap {
 		if defaultConcurrency {
 			config.Concurrency = cap
@@ -136,12 +176,11 @@ func (h *Handler) StartCompetition(ctx context.Context, id string, config core.C
 			return core.CompetitionRun{}, &ctfplatform.Error{HTTPStatus: 422, Code: "concurrency_limit", Message: fmt.Sprintf("%s allows at most %d concurrent challenges", id, cap)}
 		}
 	}
-	challenges, err := platform.ListChallenges(ctx)
-	if err != nil {
-		return core.CompetitionRun{}, err
-	}
 	ids := []string{}
 	for _, challenge := range challenges {
+		if id == "ctfy" && challenge.Completed {
+			continue
+		}
 		ids = append(ids, challenge.ID)
 	}
 	run, err := h.DB.CreateCompetitionRun(ctx, id, scope, config, ids)
@@ -217,6 +256,9 @@ func (h *Handler) registerCompetitions(app *iris.Application) {
 		platform, scope, err := h.platform(run.Platform)
 		if err == nil && scope != run.ScopeID {
 			err = &ctfplatform.Error{HTTPStatus: 409, Code: "platform_task_changed", Message: "restore the original competition task credentials"}
+		}
+		if err == nil {
+			_, err = platform.ListChallenges(ctx.Request().Context())
 		}
 		if err == nil && (request.Concurrency < 1 || request.Concurrency > 32 || platform.Descriptor().MaxActiveInstances > 0 && request.Concurrency > platform.Descriptor().MaxActiveInstances) {
 			err = &ctfplatform.Error{HTTPStatus: 422, Code: "concurrency_limit", Message: "concurrency exceeds the platform limit"}

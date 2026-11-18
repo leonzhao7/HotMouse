@@ -27,6 +27,8 @@ frontend/**
 docker/**
 !docker/Dockerfile
 !docker/entrypoint.sh
+!docker/tsec-entrypoint.sh
+!docker/ctfy-entrypoint.sh
 !docker/toolkit-requirements.txt
 !docker/skill-tools.json
 !docker/verify-toolkit.py

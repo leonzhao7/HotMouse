@@ -65,6 +65,26 @@ func TestSubmissionCannotReduceKnownMultiFlagRequirement(t *testing.T) {
 	}
 }
 
+func TestPlatformIncompleteVerdictKeepsMultiQuestionChallengeOpen(t *testing.T) {
+	f := newFixture(t, 1, 1, 1)
+	f.manager.RunOnce(t.Context())
+	id := f.platform.ids[0]
+	f.capture(t, id, "flag{first-question}")
+	submit := f.manager.Backend.Submit
+	f.manager.Backend.Submit = func(ctx context.Context, project string, flag int64) (*ctfplatform.SubmissionResult, error) {
+		result, err := submit(ctx, project, flag)
+		if result != nil {
+			incomplete := false
+			result.ChallengeComplete = &incomplete
+		}
+		return result, err
+	}
+	f.manager.RunOnce(t.Context())
+	if f.run(t).Items[0].Status != "running" || len(f.platform.closes) != 0 {
+		t.Fatal("explicit incomplete verdict closed the CTFy instance")
+	}
+}
+
 func TestRejectedCandidateRequiresCorrectionAndActualAcceptance(t *testing.T) {
 	f := newFixture(t, 1, 1, 1)
 	f.manager.RunOnce(t.Context())

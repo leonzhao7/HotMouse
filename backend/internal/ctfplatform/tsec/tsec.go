@@ -1,4 +1,4 @@
-// Package tsec implements docs/tsec_challenges_api.md.
+// Package tsec implements docs/tsec-api.md.
 package tsec
 
 import (

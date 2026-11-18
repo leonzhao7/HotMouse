@@ -11,9 +11,9 @@ import (
 
 // Bundled reference commands need neither a client Profile nor credentials.
 // Preserve global output validation while avoiding service configuration IO.
-func (a *app) prepareKnowledge(c *cobra.Command) error {
+func (a *app) prepareLocal(c *cobra.Command) error {
 	if !oneOf(a.output, "table", "json", "yaml") {
-		return invalid("offline knowledge output must be table, json or yaml")
+		return invalid("local command output must be table, json or yaml")
 	}
 	if a.color == "" {
 		a.color = "auto"
@@ -25,7 +25,7 @@ func (a *app) prepareKnowledge(c *cobra.Command) error {
 		return invalid("--select conflicts with --output and --quiet")
 	}
 	if c.Flags().Changed("project") || c.Flags().Changed("yes") {
-		return invalid("--project and --yes are not applicable to offline knowledge")
+		return invalid("--project and --yes are not applicable to %s", c.CommandPath())
 	}
 	return nil
 }

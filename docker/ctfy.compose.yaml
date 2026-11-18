@@ -1,0 +1,24 @@
+services:
+  ctfy:
+    image: ${HOTMOUSE_IMAGE:-hotmouse-ctfy:latest}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: ctfy-agent
+    env_file:
+      - path: ${CTFY_ENV_FILE:-.ctfy.env}
+        required: true
+    environment:
+      CTFY_MODE: competition
+      CTFY_WORK_DIR: /data/ctfy
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ctfy-data:/data/ctfy
+    restart: "on-failure:3"
+    stop_grace_period: 45s
+
+volumes:
+  ctfy-data:

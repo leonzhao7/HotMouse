@@ -40,6 +40,20 @@ func TestCompetitionStartupConfigurationUpdatesRunAndCurrentWorkerLimits(t *test
 	}
 }
 
+func TestCTFyCompetitionStartsWithoutRulesButTSecStillRequiresThem(t *testing.T) {
+	db := testDB(t)
+	if _, err := db.CreateCompetitionRun(t.Context(), "tsec", "scope", CompetitionConfig{}, []string{"one"}); err == nil {
+		t.Fatal("TSec accepted empty competition rules")
+	}
+	run, err := db.CreateCompetitionRun(t.Context(), "ctfy", "event", CompetitionConfig{}, []string{"one", "two"})
+	if err != nil || run.Status != "running" || run.Rules != "" || len(run.Items) != 2 {
+		t.Fatalf("CTFy should start immediately without rules: %+v %v", run, err)
+	}
+	if err := db.ConfigureCompetitionRun(t.Context(), run.ID, CompetitionConfig{Concurrency: 2}); err != nil {
+		t.Fatalf("CTFy cannot update settings without rules: %v", err)
+	}
+}
+
 func TestCompetitionInitialDescriptionSurvivesRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "description.db")
 	db, err := Open(path)

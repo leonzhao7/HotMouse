@@ -93,6 +93,9 @@ func (r *Runner) ensureStartup(ctx context.Context, project string) (bool, error
 }
 
 func (r *Runner) ensureStartupWithMonitor(ctx, monitorParent context.Context, project string) (bool, error) {
+	if !r.targetProbesEnabled() {
+		return true, nil
+	}
 	if ready, err := r.ensureTargetProbeWithMonitor(ctx, monitorParent, project); err != nil || !ready {
 		return false, err
 	}

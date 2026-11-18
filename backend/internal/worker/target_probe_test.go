@@ -7,7 +7,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +29,75 @@ func startupWorker(t *testing.T) (*Runner, string) {
 		t.Fatal(err)
 	}
 	return r, p.Project.ID
+}
+
+func TestTargetProbesCanBeDisabledForPendingAndSavedPlans(t *testing.T) {
+	for _, saved := range []bool{false, true} {
+		t.Run(fmt.Sprintf("saved=%v", saved), func(t *testing.T) {
+			r, project := startupWorker(t)
+			r.probeInterval = 30 * time.Millisecond
+			var dialCalls atomic.Int32
+			r.probeDial = func(context.Context, core.TargetEndpoint) error {
+				dialCalls.Add(1)
+				return fmt.Errorf("connection refused")
+			}
+			state, err := r.DB.TargetProbe(t.Context(), project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if saved {
+				analysis := core.TargetProbeAnalysis{Required: true, Reason: "remote CTF", Targets: []core.TargetEndpoint{{Host: "127.0.0.1", Port: 31337}}}
+				if err := r.DB.SaveTargetProbeAnalysis(t.Context(), project, state.RunID, analysis); err != nil {
+					t.Fatal(err)
+				}
+				for i := 0; i < 2; i++ {
+					if failed, err := r.DB.RecordTargetProbe(t.Context(), project, state.RunID, []string{"connection refused"}); err != nil || failed {
+						t.Fatalf("prepare saved probe failures: failed=%v err=%v", failed, err)
+					}
+				}
+			}
+			before, err := r.DB.TargetProbe(t.Context(), project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.SetTargetProbesEnabled(false)
+			if ready, err := r.ensureStartup(t.Context(), project); !ready || err != nil {
+				t.Fatalf("disabled startup blocked work: ready=%v err=%v", ready, err)
+			}
+			if saved {
+				r.startTargetMonitor(t.Context(), project, before)
+			}
+			step := workerStep(t, r, project, "inspect the delivered challenge")
+			directory := t.TempDir()
+			probeMarker, promptMarker := filepath.Join(directory, "probe"), filepath.Join(directory, "prompt")
+			environment, _ := json.Marshal(map[string]string{"PROBE_MARKER": probeMarker, "PROMPT_MARKER": promptMarker})
+			command := `case "$HOTMOUSE_TASK_TYPE" in
+ target_probe) printf started > "$PROBE_MARKER"; exit 1;;
+ execute) printf '%s' "$HOTMOUSE_WORKER_PROMPT" > "$PROMPT_MARKER"; sleep 0.2; printf '%s' '{"accepted":true,"data":{"description":"retrieved evidence","result":{"type":"progress"}}}';;
+ esac`
+			if _, err := r.DB.SQL.Exec(`UPDATE worker_config SET driver='command',command=?,environment_json=?`, command, string(environment)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.ExecuteNow(t.Context(), project, step.ID); err != nil {
+				t.Fatalf("solving was terminated by disabled probing: %v", err)
+			}
+			if _, err := os.Stat(probeMarker); !os.IsNotExist(err) || dialCalls.Load() != 0 {
+				t.Fatalf("disabled probing still ran: marker=%v TCP calls=%d", err, dialCalls.Load())
+			}
+			meta, err := r.DB.GetProjectMeta(t.Context(), project)
+			if err != nil || meta.Status != "active" {
+				t.Fatalf("unreachable target terminated the project: %+v err=%v", meta, err)
+			}
+			after, err := r.DB.TargetProbe(t.Context(), project)
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatalf("disabled probing changed saved evidence: before=%+v after=%+v err=%v", before, after, err)
+			}
+			prompt, err := os.ReadFile(promptMarker)
+			if err != nil || !strings.Contains(string(prompt), "Saved target_probe state is historical") {
+				t.Fatalf("worker did not receive the disabled probing policy: err=%v", err)
+			}
+		})
+	}
 }
 
 func TestBackgroundAnalysisDoesNotDelayPlanningOrExecution(t *testing.T) {

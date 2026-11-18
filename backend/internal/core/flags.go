@@ -8,6 +8,7 @@ import (
 
 type CaptureFlag struct {
 	ChallengeID string `json:"challenge_id" yaml:"challenge_id"`
+	QuestionID  string `json:"question_id,omitempty" yaml:"question_id,omitempty"`
 	Value       string `json:"value" yaml:"value"`
 	FactID      string `json:"fact_id" yaml:"fact_id"`
 }
@@ -35,6 +36,7 @@ type ResolveFlagAttempt struct {
 func captureFlagTx(t *sql.Tx, project string, req CaptureFlag) (Flag, error) {
 	req.Value = clean(req.Value)
 	req.ChallengeID = clean(req.ChallengeID)
+	req.QuestionID = clean(req.QuestionID)
 	req.FactID = clean(req.FactID)
 	if req.ChallengeID == "" {
 		// A final Finding may omit challenge_id after an early checkpoint used
@@ -57,12 +59,12 @@ func captureFlagTx(t *sql.Tx, project string, req CaptureFlag) (Flag, error) {
 	if kind == "environment_failure" || kind == "needs_attention" || kind == "no_information" {
 		return Flag{}, fmt.Errorf("flag source must be target evidence")
 	}
-	if _, err := t.Exec(`INSERT OR IGNORE INTO flags(project_id,challenge_id,value,fact_id,created_at) VALUES(?,?,?,?,?)`, project, req.ChallengeID, req.Value, req.FactID, now()); err != nil {
+	if _, err := t.Exec(`INSERT OR IGNORE INTO flags(project_id,challenge_id,question_id,value,fact_id,created_at) VALUES(?,?,?,?,?,?)`, project, req.ChallengeID, req.QuestionID, req.Value, req.FactID, now()); err != nil {
 		return Flag{}, err
 	}
 	var f Flag
 	f.Attempts = []FlagAttempt{}
-	err := t.QueryRow(`SELECT id,project_id,challenge_id,value,fact_id,status,created_at FROM flags WHERE project_id=? AND challenge_id=? AND value=?`, project, req.ChallengeID, req.Value).Scan(&f.ID, &f.ProjectID, &f.ChallengeID, &f.Value, &f.FactID, &f.Status, &f.CreatedAt)
+	err := t.QueryRow(`SELECT id,project_id,challenge_id,question_id,value,fact_id,status,created_at FROM flags WHERE project_id=? AND challenge_id=? AND question_id=? AND value=?`, project, req.ChallengeID, req.QuestionID, req.Value).Scan(&f.ID, &f.ProjectID, &f.ChallengeID, &f.QuestionID, &f.Value, &f.FactID, &f.Status, &f.CreatedAt)
 	return f, err
 }
 func (d *DB) CaptureFlag(ctx context.Context, project string, req CaptureFlag) (Flag, error) {
@@ -90,14 +92,15 @@ func syncFlagTx(t *sql.Tx, project string, f Finding) error {
 		return nil
 	}
 	challenge, _ := f.Data["challenge_id"].(string)
-	_, err := captureFlagTx(t, project, CaptureFlag{ChallengeID: challenge, Value: value, FactID: *f.FactID})
+	question, _ := f.Data["question_id"].(string)
+	_, err := captureFlagTx(t, project, CaptureFlag{ChallengeID: challenge, QuestionID: question, Value: value, FactID: *f.FactID})
 	return err
 }
 func (d *DB) ListFlags(ctx context.Context, project string) ([]Flag, error) {
 	if _, err := queryProject(ctx, d.SQL, project); err != nil {
 		return nil, err
 	}
-	rows, err := d.SQL.QueryContext(ctx, `SELECT id,project_id,challenge_id,value,fact_id,status,created_at FROM flags WHERE project_id=? ORDER BY id`, project)
+	rows, err := d.SQL.QueryContext(ctx, `SELECT id,project_id,challenge_id,question_id,value,fact_id,status,created_at FROM flags WHERE project_id=? ORDER BY id`, project)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +108,7 @@ func (d *DB) ListFlags(ctx context.Context, project string) ([]Flag, error) {
 	for rows.Next() {
 		var f Flag
 		f.Attempts = []FlagAttempt{}
-		if err := rows.Scan(&f.ID, &f.ProjectID, &f.ChallengeID, &f.Value, &f.FactID, &f.Status, &f.CreatedAt); err != nil {
+		if err := rows.Scan(&f.ID, &f.ProjectID, &f.ChallengeID, &f.QuestionID, &f.Value, &f.FactID, &f.Status, &f.CreatedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -145,13 +148,24 @@ func scanFlagAttempt(row interface{ Scan(...any) error }) (FlagAttempt, error) {
 	return a, err
 }
 func (d *DB) BeginFlagAttempt(ctx context.Context, project string, flagID int64) (FlagAttempt, error) {
+	return d.beginFlagAttempt(ctx, project, flagID, false)
+}
+
+// BeginIdempotentFlagAttempt preserves unknown attempts while retrying an API
+// that explicitly guarantees duplicate submissions cannot change the score.
+// Pending attempts still require process-restart recovery before retrying.
+func (d *DB) BeginIdempotentFlagAttempt(ctx context.Context, project string, flagID int64) (FlagAttempt, error) {
+	return d.beginFlagAttempt(ctx, project, flagID, true)
+}
+
+func (d *DB) beginFlagAttempt(ctx context.Context, project string, flagID int64, retryUnknown bool) (FlagAttempt, error) {
 	var out FlagAttempt
 	err := tx(ctx, d, func(t *sql.Tx) error {
 		var status string
 		if err := t.QueryRow(`SELECT status FROM flags WHERE project_id=? AND id=?`, project, flagID).Scan(&status); err != nil {
 			return err
 		}
-		if status == "accepted" || status == "submission_pending" || status == "submission_unknown" {
+		if status == "accepted" || status == "submission_pending" || status == "submission_unknown" && !retryUnknown {
 			return fmt.Errorf("flag already %s; reconcile the existing attempt before submitting", status)
 		}
 		stamp := now()

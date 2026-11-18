@@ -38,11 +38,15 @@ type Manager struct {
 	Interval time.Duration
 	Now      func() time.Time
 	Logger   *logging.Logger
-	started  atomic.Bool
-	wake     chan struct{}
-	stepMu   sync.Mutex
-	cancelMu sync.Mutex
-	current  map[string]context.CancelFunc
+	// Configure these before Start. Scope filters keep other saved runs idle.
+	Unattended bool
+	Platform   string
+	ScopeID    string
+	started    atomic.Bool
+	wake       chan struct{}
+	stepMu     sync.Mutex
+	cancelMu   sync.Mutex
+	current    map[string]context.CancelFunc
 }
 
 func New(db *core.DB, backend Backend) *Manager {
@@ -112,6 +116,16 @@ func (m *Manager) RunOnce(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		if m.Platform != "" || m.ScopeID != "" {
+			run, err := m.DB.GetCompetitionRun(ctx, id)
+			if err != nil {
+				m.warn("competition.read_failed", "run", id, "error", err)
+				continue
+			}
+			if m.Platform != "" && run.Platform != m.Platform || m.ScopeID != "" && run.ScopeID != m.ScopeID {
+				continue
+			}
+		}
 		runCtx, cancel := context.WithCancel(ctx)
 		m.cancelMu.Lock()
 		m.current[id] = cancel
@@ -168,29 +182,43 @@ func (m *Manager) advance(ctx context.Context, id string) error {
 			return nil
 		}
 		m.log("competition.planning.start", "run", id, "attempt", run.PlanningAttempts+1, "challenges", len(run.Items))
-		challenges, err := platform.ListChallenges(ctx)
-		if err == nil {
-			plan := Plan{Summary: "Use the supplied competition rules for every challenge", ChallengeIDs: []string{}}
+		var plan Plan
+		if run.Platform == "ctfy" {
+			// Older CTFy runs may still be in planning; they need no rule interpreter.
 			for _, item := range run.Items {
 				plan.ChallengeIDs = append(plan.ChallengeIDs, item.ChallengeID)
 			}
-			if m.Backend.Plan != nil {
-				plan, err = m.Backend.Plan(ctx, run, challenges)
-			}
+			err = m.DB.SaveCompetitionPlan(ctx, id, "", plan.ChallengeIDs)
+		} else {
+			var challenges []ctfplatform.Challenge
+			challenges, err = platform.ListChallenges(ctx)
 			if err == nil {
-				err = m.DB.SaveCompetitionPlan(ctx, id, plan.Summary, plan.ChallengeIDs)
+				plan = Plan{Summary: "Use the supplied competition rules for every challenge", ChallengeIDs: []string{}}
+				for _, item := range run.Items {
+					plan.ChallengeIDs = append(plan.ChallengeIDs, item.ChallengeID)
+				}
+				if m.Backend.Plan != nil {
+					plan, err = m.Backend.Plan(ctx, run, challenges)
+				}
+				if err == nil {
+					err = m.DB.SaveCompetitionPlan(ctx, id, plan.Summary, plan.ChallengeIDs)
+				}
 			}
 		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			var failure *ctfplatform.Error
+			if m.Unattended && errors.As(err, &failure) && (failure.Code == "invalid_state" || failure.Code == "task_not_found") {
+				return m.abort(ctx, run, failure.Error())
+			}
 			attempts := run.PlanningAttempts + 1
 			_, saveErr := m.DB.SQL.ExecContext(ctx, `UPDATE competition_runs SET planning_attempts=?,last_error=?,retry_after=? WHERE id=? AND status='planning'`, attempts, err.Error(), m.Now().Add(5*time.Second).UTC().Format(time.RFC3339Nano), id)
 			if saveErr != nil {
 				return saveErr
 			}
-			if attempts >= 3 {
+			if attempts >= 3 && !m.Unattended {
 				m.warn("competition.planning.failed", "run", id, "attempts", attempts, "error", err)
 				return m.DB.FinishCompetitionRun(ctx, id, "failed", "competition rule planning failed: "+err.Error())
 			}
@@ -225,6 +253,28 @@ func (m *Manager) advance(ctx context.Context, id string) error {
 			}
 		} else {
 			listed = true
+			if m.Unattended && run.Status == "running" {
+				known := make(map[string]bool, len(run.Items))
+				for _, item := range run.Items {
+					known[item.ChallengeID] = true
+				}
+				ids := make([]string, 0, len(challenges))
+				for _, challenge := range challenges {
+					if !known[challenge.ID] {
+						ids = append(ids, challenge.ID)
+					}
+				}
+				if len(ids) > 0 {
+					if err := m.DB.AppendCompetitionChallenges(ctx, id, ids); err != nil {
+						return err
+					}
+					run, err = m.DB.GetCompetitionRun(ctx, id)
+					if err != nil {
+						return err
+					}
+					m.log("competition.challenges.discovered", "run", id, "challenges", ids)
+				}
+			}
 			for _, challenge := range challenges {
 				remote[challenge.ID] = challenge
 			}
@@ -369,6 +419,22 @@ func terminal(status string) bool {
 	return status == "succeeded" || status == "failed" || status == "skipped"
 }
 
+func submissionReady(flag core.Flag, now time.Time, retryUnknown bool) bool {
+	if flag.Status == "captured" {
+		return true
+	}
+	if !retryUnknown || flag.Status != "submission_unknown" || len(flag.Attempts) == 0 {
+		return false
+	}
+	attempt := flag.Attempts[len(flag.Attempts)-1]
+	stamp := attempt.StartedAt
+	if attempt.FinishedAt != nil {
+		stamp = *attempt.FinishedAt
+	}
+	finished, err := time.Parse(time.RFC3339Nano, stamp)
+	return err == nil && !now.Before(finished.Add(5*time.Second))
+}
+
 func (m *Manager) advanceItem(ctx context.Context, run core.CompetitionRun, platform ctfplatform.Platform, remote map[string]ctfplatform.Challenge, item *core.CompetitionItem) error {
 	now := m.Now()
 	previousStatus := item.Status
@@ -452,7 +518,7 @@ func (m *Manager) advanceItem(ctx context.Context, run core.CompetitionRun, plat
 				return err
 			}
 			for _, flag := range flags {
-				if solved || flag.Status != "captured" {
+				if solved || !submissionReady(flag, now, m.Unattended && run.Platform == "tsec") {
 					continue
 				}
 				m.log("competition.flag.submit", "run", run.ID, "challenge", item.ChallengeID, "project", *item.ProjectID, "flag_id", flag.ID)
@@ -471,11 +537,16 @@ func (m *Manager) advanceItem(ctx context.Context, run core.CompetitionRun, plat
 						m.warn("competition.flag.rejected", fields...)
 					}
 					expected := max(result.TotalFlagCount, remote[item.ChallengeID].FlagCount)
-					if result.Correct && expected > 0 && result.CorrectFlagCount >= expected {
+					completed := expected > 0 && result.CorrectFlagCount >= expected
+					if result.ChallengeComplete != nil {
+						completed = *result.ChallengeComplete
+					}
+					if result.Correct && completed {
 						solved = true
 						confirmation := remote[item.ChallengeID]
 						confirmation.ID, confirmation.Completed = item.ChallengeID, true
-						confirmation.FlagCount, confirmation.CorrectFlagCount = expected, result.CorrectFlagCount
+						confirmation.FlagCount = max(expected, result.CorrectFlagCount)
+						confirmation.CorrectFlagCount = result.CorrectFlagCount
 						remote[item.ChallengeID] = confirmation
 					}
 				}
@@ -531,7 +602,34 @@ func (m *Manager) advanceItem(ctx context.Context, run core.CompetitionRun, plat
 	if !due(item.RetryAfter, now) {
 		return nil
 	}
-	if closer, ok := platform.(ctfplatform.InstanceCloser); ok {
+	if closer, ok := platform.(ctfplatform.DeliveryCloser); ok && item.ProjectID != nil {
+		project, err := m.DB.GetProject(ctx, *item.ProjectID)
+		if err != nil && err != core.ErrNotFound {
+			return err
+		}
+		if err == nil && project.Platform != nil {
+			var delivery ctfplatform.Delivery
+			if err = json.Unmarshal(project.Platform.Delivery, &delivery); err != nil {
+				return err
+			}
+			m.log("competition.cleanup.start", "run", run.ID, "challenge", item.ChallengeID)
+			closed, closeErr := closer.CloseDelivery(ctx, delivery)
+			if closeErr != nil || !closed.Closed {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if closeErr != nil {
+					item.LastError = "container cleanup: " + closeErr.Error()
+				} else {
+					item.LastError = "container cleanup not confirmed"
+				}
+				item.RetryAfter = now.Add(5 * time.Second).UTC().Format(time.RFC3339Nano)
+				m.warn("competition.cleanup.retry", "run", run.ID, "challenge", item.ChallengeID, "retry_after", item.RetryAfter, "error", item.LastError)
+				return m.DB.SaveCompetitionItem(ctx, *item)
+			}
+			m.log("competition.cleanup.completed", "run", run.ID, "challenge", item.ChallengeID)
+		}
+	} else if closer, ok := platform.(ctfplatform.InstanceCloser); ok {
 		m.log("competition.cleanup.start", "run", run.ID, "challenge", item.ChallengeID)
 		closed, err := closer.Close(ctx, item.ChallengeID)
 		if err != nil || !closed.Closed {

@@ -48,9 +48,14 @@ export async function api(
     );
   }
   if (!response.ok) {
-    if (response.status === 401 && session)
+    const error = await responseError(response);
+    // Platform authentication errors concern the task token. Local session
+    // failures have no platform error code and still return to the login page.
+    const platformAuthError =
+      path.startsWith("/api/platforms/") && error.payload?.code;
+    if (response.status === 401 && session && !platformAuthError)
       globalThis.dispatchEvent?.(new Event("hotmouse:unauthorized"));
-    throw await responseError(response);
+    throw error;
   }
   if (response.status === 204) return null;
   const raw = await response.text();
